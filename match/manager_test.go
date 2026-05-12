@@ -156,14 +156,16 @@ func TestMovePlaysThroughEnd(t *testing.T) {
 }
 
 type captureSub struct {
-	states []core.State
-	chats  []ChatMessage
-	pid    string
+	states     []core.State
+	chats      []ChatMessage
+	matchDatas [][]storage.Player
+	pid        string
 }
 
-func (c *captureSub) Send(s core.State)        { c.states = append(c.states, s) }
-func (c *captureSub) SendChat(msg ChatMessage) { c.chats = append(c.chats, msg) }
-func (c *captureSub) PlayerID() string         { return c.pid }
+func (c *captureSub) Send(s core.State)                { c.states = append(c.states, s) }
+func (c *captureSub) SendChat(msg ChatMessage)         { c.chats = append(c.chats, msg) }
+func (c *captureSub) SendMatchData(p []storage.Player) { c.matchDatas = append(c.matchDatas, p) }
+func (c *captureSub) PlayerID() string                 { return c.pid }
 
 func TestSubscribersReceiveBroadcasts(t *testing.T) {
 	m, id := newTestManager(t)

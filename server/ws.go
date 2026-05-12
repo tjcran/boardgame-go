@@ -8,9 +8,11 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/wI2L/jsondiff"
 
 	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/match"
+	"github.com/tjcran/boardgame-go/storage"
 )
 
 // wsClient is one connected browser tab. The match.Manager pushes state
@@ -20,16 +22,28 @@ type wsClient struct {
 	conn     *websocket.Conn
 	ctx      context.Context
 	playerID string // "" for spectators
+
+	// prev is the last redacted state we sent this client. Used by
+	// SendPatch to compute JSON Patch diffs when Game.DeltaState=true.
+	prev *core.State
 }
 
 // Send implements match.Subscriber. The mutex matters because the manager
 // fans out to subscribers without coordinating with the read loop.
+//
+// The wire frame is BGIO's `update` shape: { type: "update", state, matchID }.
+// The initial state push at connect time uses `sync` (see handleWS).
 func (c *wsClient) Send(state core.State) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	cp := state
+	c.prev = &cp
 	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
 	defer cancel()
-	_ = wsjson.Write(ctx, c.conn, map[string]any{"type": "state", "state": state})
+	_ = wsjson.Write(ctx, c.conn, map[string]any{
+		"type":  "update",
+		"state": state,
+	})
 }
 
 // PlayerID identifies which seat this subscriber represents so the manager
@@ -44,6 +58,60 @@ func (c *wsClient) SendChat(msg match.ChatMessage) {
 	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
 	defer cancel()
 	_ = wsjson.Write(ctx, c.conn, map[string]any{"type": "chat", "chat": msg})
+}
+
+// SendPatch implements match.PatchSubscriber. Diffs against the connection's
+// last sent state and sends a JSON Patch (RFC 6902) `patch` frame. If we
+// don't have a previous state cached (e.g. the connection just opened
+// before the first update), falls back to a full state push so clients
+// don't desync.
+func (c *wsClient) SendPatch(next core.State) {
+	c.mu.Lock()
+	prev := c.prev
+	c.mu.Unlock()
+	if prev == nil {
+		c.Send(next)
+		return
+	}
+	patch, err := jsondiff.Compare(*prev, next)
+	if err != nil {
+		c.Send(next)
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cp := next
+	c.prev = &cp
+	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+	defer cancel()
+	_ = wsjson.Write(ctx, c.conn, map[string]any{
+		"type":    "patch",
+		"patch":   patch,
+		"prevID":  prev.StateID,
+		"stateID": next.StateID,
+	})
+}
+
+// SendMatchData implements match.Subscriber; pushes a matchData frame
+// when the seated player list changes (BGIO's `matchData` frame).
+func (c *wsClient) SendMatchData(players []storage.Player) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+	defer cancel()
+	out := make([]map[string]any, 0, len(players))
+	for _, p := range players {
+		out = append(out, map[string]any{
+			"id":          p.ID,
+			"name":        p.Name,
+			"seat":        p.Seat,
+			"isConnected": p.IsConnected,
+		})
+	}
+	_ = wsjson.Write(ctx, c.conn, map[string]any{
+		"type":      "matchData",
+		"matchData": out,
+	})
 }
 
 // inbound is the envelope clients send. Today: "move" (submit a move) and
@@ -75,11 +143,32 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 	playerID := r.URL.Query().Get("playerID")
 	client := &wsClient{conn: conn, ctx: ctx, playerID: playerID}
 
-	// Push the current state on connect so the client can render immediately,
-	// redacted for the connecting seat.
+	// Push the initial sync frame on connect (BGIO's `sync` payload: full
+	// state + matchData). Client.Send is used for subsequent updates.
 	if m, err := s.Manager.State(matchID); err == nil {
 		if g := s.Manager.Game(m.GameName); g != nil {
-			client.Send(core.PlayerView(g, m.State, playerID))
+			view := core.PlayerView(g, m.State, playerID)
+			players := make([]map[string]any, 0, len(m.Players))
+			for _, p := range m.Players {
+				players = append(players, map[string]any{
+					"id":          p.ID,
+					"name":        p.Name,
+					"seat":        p.Seat,
+					"isConnected": p.IsConnected,
+				})
+			}
+			client.mu.Lock()
+			cp := view
+			client.prev = &cp // seed for subsequent SendPatch diffs
+			ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
+			_ = wsjson.Write(ctx2, conn, map[string]any{
+				"type":      "sync",
+				"state":     view,
+				"matchData": players,
+				"matchID":   matchID,
+			})
+			cancel()
+			client.mu.Unlock()
 		}
 	}
 

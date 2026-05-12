@@ -14,8 +14,21 @@ const RandomPluginName = "random"
 // plugins/random); the plugin hands the engine a *Random pointing at its
 // data on every move. Mutations flow back through the pointer — no Flush
 // needed.
+//
+// The *Override fields let testing helpers (MockRandom) replace specific
+// methods without changing the type, so `mc.Random.D6()` keeps working
+// whether the real or mock plugin is registered.
 type Random struct {
 	state *uint64
+
+	// MockNumber overrides Number().
+	MockNumber func() float64
+	// MockDie overrides Die(args...).
+	MockDie func(args ...int) any
+	// MockD6 overrides D6(count...). (D4/D8/D10/D12/D20 still use Die.)
+	MockD6 func(count ...int) any
+	// MockShuffle overrides Shuffle (consumed by the free Shuffle[T] func).
+	MockShuffle func(in []any) []any
 }
 
 // NewRandomFromState wraps an existing state cell. Used by the Random
@@ -43,6 +56,9 @@ func (r *Random) next() uint64 {
 
 // Number returns a float in [0, 1). Mirrors BGIO's `random.Number()`.
 func (r *Random) Number() float64 {
+	if r.MockNumber != nil {
+		return r.MockNumber()
+	}
 	return float64(r.next()>>11) / (1 << 53)
 }
 
@@ -54,6 +70,9 @@ func (r *Random) Number() float64 {
 //	r.Die(6, 3)      // three d6 as []int
 //	r.Die()          // single d6 (default sides)
 func (r *Random) Die(args ...int) any {
+	if r.MockDie != nil {
+		return r.MockDie(args...)
+	}
 	sides := 6
 	if len(args) >= 1 {
 		sides = args[0]
@@ -84,7 +103,12 @@ func (r *Random) die(sides int) int {
 func (r *Random) D4(count ...int) any { return r.dWrap(4, count) }
 
 // D6 rolls one or more 6-sided dice.
-func (r *Random) D6(count ...int) any { return r.dWrap(6, count) }
+func (r *Random) D6(count ...int) any {
+	if r.MockD6 != nil {
+		return r.MockD6(count...)
+	}
+	return r.dWrap(6, count)
+}
 
 // D8 rolls one or more 8-sided dice.
 func (r *Random) D8(count ...int) any { return r.dWrap(8, count) }

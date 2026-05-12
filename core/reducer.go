@@ -6,22 +6,26 @@ import (
 )
 
 // MoveRequest names a move to apply and supplies its arguments + the player
-// claiming to make it.
+// claiming to make it. StateID is the client's last-seen state ID; the
+// reducer rejects with ErrStaleState when it doesn't match (unless the
+// move opted in via IgnoreStaleStateID). StateID=0 disables the check.
 type MoveRequest struct {
 	PlayerID string `json:"playerID"`
 	Move     string `json:"move"`
 	Args     []any  `json:"args"`
+	StateID  int    `json:"stateID,omitempty"`
 }
 
 // Public sentinel errors. They're surfaced through the transport with
 // matching HTTP statuses.
 var (
-	ErrInvalidMove   = errors.New("invalid move")
-	ErrWrongPlayer   = errors.New("not your turn")
-	ErrUnknownMove   = errors.New("unknown move")
-	ErrGameOver      = errors.New("game is over")
-	ErrMinMoves      = errors.New("minimum moves not reached")
+	ErrInvalidMove    = errors.New("invalid move")
+	ErrWrongPlayer    = errors.New("not your turn")
+	ErrUnknownMove    = errors.New("unknown move")
+	ErrGameOver       = errors.New("game is over")
+	ErrMinMoves       = errors.New("minimum moves not reached")
 	ErrInactivePlayer = errors.New("player is not active")
+	ErrStaleState     = errors.New("client state is stale")
 )
 
 // Apply runs a move through the full reducer pipeline:
@@ -71,6 +75,15 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 		mc.Random = r
 	}
 
+	// Stale-state guard. Opt-in: req.StateID=0 means "don't check"
+	// (server-internal callers pass 0 because they always have the latest
+	// state). Real clients send the StateID they last received; if it
+	// doesn't match the authoritative one, the move is rejected unless
+	// the move sets IgnoreStaleStateID.
+	if req.StateID > 0 && req.StateID != state.StateID && !move.IgnoreStaleStateID {
+		return state, ErrStaleState
+	}
+
 	// Snapshot pre-move state for undo. Only meaningful when the game
 	// hasn't disabled undo and the specific move is undoable. We resolve
 	// Undoable now so undo decisions reflect the state at move time.
@@ -88,6 +101,7 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 
 	next := state
 	next.G = nextG
+	next.StateID = state.StateID + 1
 	mc.G = next.G // hooks see the post-move G
 
 	// Append to the log. Args are kept; PlayerView redacts to other seats.

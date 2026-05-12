@@ -45,6 +45,9 @@ type Subscriber interface {
 	Send(state core.State)
 	// SendChat is called for every chat message broadcast on the match.
 	SendChat(msg ChatMessage)
+	// SendMatchData is called when the seated-player list changes (join/
+	// leave/update). The slice mirrors BGIO's matchData shape.
+	SendMatchData(players []storage.Player)
 	// PlayerID identifies which seat (if any) this subscriber represents.
 	// Returning "" makes the subscriber a spectator and receives the
 	// spectator-redacted view from Game.PlayerView. The match manager
@@ -243,6 +246,7 @@ func (m *Manager) Join(matchID, name string, opts JoinOptions) (JoinResult, erro
 	if err := m.store.Update(match); err != nil {
 		return JoinResult{}, err
 	}
+	m.broadcastMatchData(matchID)
 	return JoinResult{
 		PlayerID: playerID, Seat: seat, PlayerCredentials: creds,
 	}, nil
@@ -264,7 +268,11 @@ func (m *Manager) Leave(matchID, playerID, credentials string) error {
 			return ErrBadCredentials
 		}
 		match.Players = append(match.Players[:i], match.Players[i+1:]...)
-		return m.store.Update(match)
+		if err := m.store.Update(match); err != nil {
+			return err
+		}
+		m.broadcastMatchData(matchID)
+		return nil
 	}
 	return ErrUnknownSeat
 }
@@ -299,7 +307,11 @@ func (m *Manager) UpdatePlayer(matchID, playerID, credentials string, opts Updat
 		if opts.HasData {
 			match.Players[i].Data = opts.Data
 		}
-		return m.store.Update(match)
+		if err := m.store.Update(match); err != nil {
+			return err
+		}
+		m.broadcastMatchData(matchID)
+		return nil
 	}
 	return ErrUnknownSeat
 }
@@ -467,6 +479,24 @@ func (m *Manager) Subscribe(matchID string, s Subscriber) func() {
 	}
 }
 
+// broadcastMatchData notifies every subscriber that the seated-player list
+// changed. Called after Join/Leave/UpdatePlayer.
+func (m *Manager) broadcastMatchData(matchID string) {
+	match, err := m.store.Get(matchID)
+	if err != nil {
+		return
+	}
+	m.subsMu.Lock()
+	subs := make([]Subscriber, 0, len(m.subs[matchID]))
+	for s := range m.subs[matchID] {
+		subs = append(subs, s)
+	}
+	m.subsMu.Unlock()
+	for _, s := range subs {
+		s.SendMatchData(match.Players)
+	}
+}
+
 // Chat broadcasts a chat message to every subscriber of the match. Chat is
 // not persisted; subscribers that connect later won't see prior messages.
 // Mirrors BGIO's behaviour.
@@ -509,8 +539,28 @@ func (m *Manager) broadcast(matchID string, state core.State) {
 			v = core.PlayerView(game, state, pid)
 			views[pid] = v
 		}
+		// When the game opted into deltaState transport and the subscriber
+		// supports SendPatch, send the diff against whatever the subscriber
+		// has cached as its previous state. The subscriber owns the cache
+		// because per-seat views and per-connection sync timing make a
+		// single global prev unworkable.
+		if game.DeltaState {
+			if patched, ok := s.(PatchSubscriber); ok {
+				patched.SendPatch(v)
+				continue
+			}
+		}
 		s.Send(v)
 	}
+}
+
+// PatchSubscriber is implemented by subscribers that can accept JSON Patch
+// updates when Game.DeltaState is true. The match manager prefers SendPatch
+// over Send for those subscribers — the subscriber owns the prev/next
+// diffing logic (and tracks its own previous state).
+type PatchSubscriber interface {
+	Subscriber
+	SendPatch(next core.State)
 }
 
 // lockMatch returns a per-match exclusive lock. We do this so two concurrent

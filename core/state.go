@@ -9,6 +9,12 @@ type State struct {
 	// Ctx is the engine-managed metadata.
 	Ctx Ctx `json:"ctx"`
 
+	// StateID is a monotonic counter incremented on every accepted move.
+	// Clients echo back the StateID they last saw so the server can detect
+	// stale moves and reject them (unless Move.IgnoreStaleStateID = true).
+	// Mirrors BGIO's `_stateID`.
+	StateID int `json:"_stateID"`
+
 	// Plugins is per-plugin private data, keyed by Plugin.Name. Hidden from
 	// JSON when empty.
 	Plugins map[string]any `json:"plugins,omitempty"`

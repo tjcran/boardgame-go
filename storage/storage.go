@@ -37,10 +37,14 @@ type Match struct {
 // Storage is the persistence interface the match manager depends on.
 //
 // All methods must be safe for concurrent use; the manager fans out HTTP and
-// WebSocket requests without serialising at the call site.
+// WebSocket requests without serialising at the call site. The shape
+// mirrors BGIO's StorageAPI.Async surface (createMatch / setState /
+// setMetadata / fetch / wipe / listMatches) collapsed into Go-idiomatic
+// sync methods.
 type Storage interface {
 	Create(m *Match) error
 	Get(id string) (*Match, error)
 	Update(m *Match) error
 	List(gameName string) ([]*Match, error)
+	Wipe(id string) error
 }

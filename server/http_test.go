@@ -250,16 +250,16 @@ func TestWebSocketReceivesStateUpdate(t *testing.T) {
 	}
 	defer conn.CloseNow()
 
-	// First frame is the current state on connect.
+	// First frame is the BGIO `sync` payload: full state + matchData.
 	var initial map[string]any
 	if err := wsjson.Read(ctx, conn, &initial); err != nil {
 		t.Fatalf("initial read: %v", err)
 	}
-	if initial["type"] != "state" {
-		t.Fatalf("expected state frame, got %v", initial)
+	if initial["type"] != "sync" {
+		t.Fatalf("expected sync frame, got %v", initial)
 	}
 
-	// Submit a move through HTTP and expect the WS to push the new state.
+	// Submit a move through HTTP and expect the WS to push an `update`.
 	resp := postJSON(t, srv.URL+"/games/tic-tac-toe/"+created.MatchID+"/move",
 		map[string]any{
 			"playerID":    alice.PlayerID,
@@ -275,8 +275,8 @@ func TestWebSocketReceivesStateUpdate(t *testing.T) {
 	if err := wsjson.Read(ctx, conn, &pushed); err != nil {
 		t.Fatalf("ws read: %v", err)
 	}
-	if pushed["type"] != "state" {
-		t.Fatalf("expected state push, got %v", pushed)
+	if pushed["type"] != "update" {
+		t.Fatalf("expected update frame, got %v", pushed)
 	}
 }
 

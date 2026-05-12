@@ -54,6 +54,18 @@ func (m *Memory) List(gameName string) ([]*Match, error) {
 	return out, nil
 }
 
+// Wipe removes a match from the store. Returns ErrNotFound if the match
+// doesn't exist (matching BGIO's behaviour).
+func (m *Memory) Wipe(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.matches[id]; !ok {
+		return ErrNotFound
+	}
+	delete(m.matches, id)
+	return nil
+}
+
 // cloneMatch isolates callers from internal mutation. We share the State.G
 // pointer because Apply produces fresh values; the slice of players is copied.
 func cloneMatch(m *Match) *Match {

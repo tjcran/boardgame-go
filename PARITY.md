@@ -1,139 +1,123 @@
 # boardgame.io Parity Checklist
 
-Drift list of every BGIO feature we need to match. The goal is full parity
-with `main` of [boardgame.io](https://github.com/boardgameio/boardgame.io),
-no extras. Items are checked off as they ship in `boardgame-go`.
+Drift list of every BGIO feature we need to match. Items are checked off as
+they ship in `boardgame-go`.
 
 What is **explicitly skipped**: client-side JS code (React/Plain JS `Client`,
 `<Lobby/>` component, Redux integration, the in-browser Debug Panel). Those
 are intrinsically JavaScript and have no Go analogue. The wire protocol on
-the other hand is in scope — any Go (or JS, or anything) client should be
-able to drive a `boardgame-go` server.
+the other hand is in scope — any Go (or JS, or anything) client can drive a
+`boardgame-go` server.
 
 ## 1 — Game definition
 
 - [x] `Name`
 - [x] `MinPlayers` / `MaxPlayers`
-- [x] `Setup(numPlayers) G`
-- [ ] `Setup(ctx, setupData) G` — accept `setupData` from match creation
-- [ ] `ValidateSetupData(setupData, numPlayers) error`
-- [ ] `Seed` (string or int — seeds the Random plugin)
-- [ ] `DisableUndo` flag
-- [ ] `DeltaState` flag (JSON Patch diffs in transport)
-- [x] `Moves` (short-form: name → MoveFn)
-- [ ] `Moves` (long-form: per-move config — see §5)
-- [x] `EndIf(g, ctx) -> bool, winner, draw` (current shape)
-- [ ] `EndIf(g, ctx) -> any` — value becomes `ctx.Gameover` per BGIO
-- [ ] `OnEnd(g, ctx) G` — runs when the game ends
-- [ ] `PlayerView(g, ctx, playerID) G` — per-seat redaction
-- [ ] `Plugins []Plugin`
+- [x] `Setup(ctx, setupData) G`
+- [x] `ValidateSetupData(setupData, numPlayers) string`
+- [x] `Seed` (string or int — seeds the Random plugin)
+- [x] `DisableUndo` flag
+- [x] `DeltaState` flag (JSON Patch diffs in transport)
+- [x] `Moves` short-form (`name → MoveFn`)
+- [x] `Moves` long-form (`Move{Move, Undoable, Redact, ServerOnly, NoLimit, IgnoreStaleStateID}`)
+- [x] `EndIf(mc) any` — value becomes `ctx.Gameover`
+- [x] `OnEnd(mc) G` — runs when the game ends
+- [x] `PlayerView(g, ctx, playerID) G`
+- [x] `Plugins []Plugin`
 
-## 2 — Turn config (per phase or global)
+## 2 — Turn config
 
-- [ ] `Turn.Order` — TurnOrder strategy
-- [ ] `Turn.OnBegin(g, ctx) G`
-- [ ] `Turn.OnEnd(g, ctx) G`
-- [ ] `Turn.OnMove(g, ctx) G`
-- [ ] `Turn.MinMoves`
-- [ ] `Turn.MaxMoves`
-- [ ] `Turn.EndIf(g, ctx) -> bool | { Next: playerID }`
-- [ ] `Turn.ActivePlayers` — initial activePlayers when phase/turn starts
-- [ ] `Turn.Stages` — stage map for intra-turn sub-states
+- [x] `Turn.Order` — TurnOrder strategy
+- [x] `Turn.OnBegin(mc) G`
+- [x] `Turn.OnEnd(mc) G`
+- [x] `Turn.OnMove(mc) G`
+- [x] `Turn.MinMoves`
+- [x] `Turn.MaxMoves`
+- [x] `Turn.EndIf(mc) -> (end, next)`
+- [x] `Turn.ActivePlayers`
+- [x] `Turn.Stages`
 
 ## 3 — Turn order strategies
 
-- [x] DEFAULT — round-robin (currently the only one)
-- [ ] RESET — round-robin, restart at index 0 on phase start
-- [ ] CONTINUE — start with the player who ended the previous phase
-- [ ] ONCE — round-robin once then auto-end phase
-- [ ] CUSTOM(order) — explicit play order
-- [ ] CUSTOM_FROM(propertyOfG) — play order taken from G
-- [ ] Custom turn order: `{First, Next, PlayOrder}` callbacks
-- [ ] `endTurn({next: playerID})` ad hoc override
+- [x] `TurnOrderDefault`
+- [x] `TurnOrderReset`
+- [x] `TurnOrderContinue`
+- [x] `TurnOrderOnce`
+- [x] `TurnOrderCustom(order)`
+- [x] `TurnOrderCustomFrom(func(g) []string)`
+- [x] Custom `TurnOrder{First, Next, PlayOrder}`
+- [x] `Events.EndTurn(next)` ad-hoc override
 
 ## 4 — Phases
 
-- [ ] `Phases` map on Game
-- [ ] `ctx.Phase` field
-- [ ] `Phase.Start` (initial phase flag)
-- [ ] `Phase.Next` (string or `func(g,ctx) string`)
-- [ ] `Phase.OnBegin(g, ctx) G`
-- [ ] `Phase.OnEnd(g, ctx) G`
-- [ ] `Phase.EndIf(g, ctx) -> bool | {Next: phaseName}`
-- [ ] `Phase.Moves` (phase-local move table)
-- [ ] `Phase.Turn` (phase-local turn config)
+- [x] `Phases` map on Game
+- [x] `ctx.Phase` field
+- [x] `Phase.Start`
+- [x] `Phase.Next` (string or `func(mc) string`)
+- [x] `Phase.OnBegin / OnEnd / EndIf`
+- [x] `Phase.Moves` override
+- [x] `Phase.Turn` override
 
-## 5 — Move long-form options
+## 5 — Move long-form
 
-- [ ] `Move.Move` (the function itself)
-- [ ] `Move.Undoable` — bool or function
-- [ ] `Move.Redact` — hide args in log to other players
-- [ ] `Move.NoLimit` — exempt from minMoves/maxMoves
-- [ ] `Move.Client` — `false` to run only on server (secret-state moves)
-- [ ] `Move.IgnoreStaleStateID` — allow move from out-of-date clients
+- [x] `Move.Move`
+- [x] `Move.Undoable` (bool or func)
+- [x] `Move.Redact` (bool or func, hidden in log to other players)
+- [x] `Move.ServerOnly` (BGIO's `client: false`)
+- [x] `Move.NoLimit` (skip min/max counting)
+- [x] `Move.IgnoreStaleStateID`
 
-## 6 — Events available inside moves/hooks
+## 6 — Events (callable from moves / hooks)
 
-- [ ] `events.EndTurn()` and `events.EndTurn({Next})`
-- [ ] `events.EndPhase()` (uses Phase.Next)
-- [ ] `events.SetPhase(name)`
-- [ ] `events.EndStage()` (uses Stage.Next)
-- [ ] `events.SetStage(name)` and long-form `{Stage, MinMoves, MaxMoves}`
-- [ ] `events.EndGame(result)`
-- [ ] `events.SetActivePlayers(config)` with full BGIO option set
-- [ ] `events.Pass()` (ends turn without action)
-- [ ] Event-availability matrix per hook (e.g. no endTurn inside onEnd)
+- [x] `Events.EndTurn()` / `EndTurn(next)`
+- [x] `Events.Pass()`
+- [x] `Events.EndPhase()`
+- [x] `Events.SetPhase(name)`
+- [x] `Events.EndStage()` (uses Stage.Next)
+- [x] `Events.SetStage(name)` and `SetStageLong(stage, min, max)`
+- [x] `Events.EndGame(result)` writes ctx.Gameover + runs OnEnd
+- [x] `Events.SetActivePlayers(cfg)` with full BGIO option set
 
 ## 7 — Stages & active players
 
-- [ ] `ctx.ActivePlayers` map[playerID]stageName
-- [ ] `Stage.NULL` sentinel (in active set, no stage filter)
-- [ ] `ActivePlayers.ALL` preset
-- [ ] `ActivePlayers.ALL_ONCE` preset
-- [ ] `ActivePlayers.OTHERS` preset
-- [ ] `ActivePlayers.OTHERS_ONCE` preset
-- [ ] `ActivePlayers.CURRENT_PLAYER` preset
-- [ ] `Revert` / `Next` follow-up `ActivePlayers` configs
-- [ ] Stage-level Min/MaxMoves
-- [ ] Stage-level Moves override
+- [x] `ctx.ActivePlayers` map
+- [x] `StageNull` sentinel + `core.Stage(name)` helper
+- [x] `ActivePlayersAll` / `AllOnce` / `Others` / `OthersOnce` presets
+- [x] `Revert` and `Next` follow-up `ActivePlayersConfig`
+- [x] Per-player Min/MaxMoves overrides
+- [x] Stage-level Moves override
 
 ## 8 — Random plugin
 
-- [ ] Seeded PRNG (uses Game.Seed)
-- [ ] `random.Die(sides[, count])`
-- [ ] `random.D4/D6/D8/D10/D12/D20([count])`
-- [ ] `random.Number()` -> float in [0,1)
-- [ ] `random.Shuffle([]T) []T`
-- [ ] PRNG state hidden from clients
-- [ ] `MockRandom` deterministic test override
+- [x] `plugins/random` package
+- [x] Seeded splitmix64 PRNG (string or number seed)
+- [x] `Die(sides[, count])` / `D4`-`D20` / `Number()` / generic `Shuffle[T]`
+- [x] State stored in plugin private data, stripped via `PlayerView`
+- [x] `mc.Random` shortcut wired in core
+- [x] `testhelpers.MockRandom` for deterministic overrides
 
 ## 9 — Secret state / PlayerView
 
-- [ ] `Game.PlayerView` hook
-- [ ] Built-in `PlayerView.STRIP_SECRETS` (drops `secret` key, hides other
-      players' `players` slot)
+- [x] `Game.PlayerView` hook
+- [x] `core.StripSecrets` helper (BGIO's `PlayerView.STRIP_SECRETS`)
+- [x] Per-seat redacted state pushed by transport
 
 ## 10 — Plugin API
 
-- [ ] `Plugin.Name`
-- [ ] `Plugin.Setup(ctx) data`
-- [ ] `Plugin.API(data, ctx) api` — exposed to moves as `ctx[name]`
-- [ ] `Plugin.Flush(api, data) data` — persists changes
-- [ ] `Plugin.FnWrap(fn, fnType) fn` — wraps moves/hooks
-- [ ] `Plugin.NoClient() bool`
-- [ ] `Plugin.IsInvalid(data) error`
-- [ ] `Plugin.PlayerView(data, ctx, playerID) data`
-- [ ] Plugin order (left-to-right)
-- [ ] `PluginPlayer` built-in (per-player state with opponent helper)
+- [x] `core.Plugin` + optional sub-interfaces: `PluginSetup`, `PluginAPI`,
+      `PluginFlush`, `PluginInvalid`, `PluginPlayerView`
+- [x] Setup runs at NewMatch; APIs exposed via `mc.Plugins[name]`
+- [x] Flush persists mutations after each move
+- [x] IsInvalid rejects the move
+- [x] PlayerView filters plugin data per seat
+- [x] `plugins/player.PluginPlayer` built-in (per-seat records + Opponent)
 
 ## 11 — Undo / redo / log
 
-- [ ] Move log (recorded moves with metadata)
-- [ ] `client.Undo()` semantics (within current turn)
-- [ ] `client.Redo()`
-- [ ] `Game.DisableUndo`
-- [ ] Move-level `Undoable` flag/function
-- [ ] Log redaction per player (uses `Move.Redact`)
+- [x] Move log (`State.Log`) with kind/move/playerID/args/turn/phase
+- [x] `core.Undo` / `core.Redo` (scope: current turn)
+- [x] `Game.DisableUndo` + per-move `Undoable`
+- [x] Log redaction per player honouring `Move.Redact`
 
 ## 12 — Game state context (ctx) parity
 
@@ -141,56 +125,53 @@ able to drive a `boardgame-go` server.
 - [x] `CurrentPlayer`
 - [x] `NumPlayers`
 - [x] `PlayOrder`
-- [ ] `PlayOrderPos`
-- [ ] `Phase`
-- [ ] `ActivePlayers`
-- [x] `Gameover` (currently split into Winner/IsDraw — see §1)
+- [x] `PlayOrderPos`
+- [x] `Phase`
+- [x] `ActivePlayers`
+- [x] `Gameover`
 
 ## 13 — Server / Lobby API
 
-REST routes BGIO ships:
+REST routes shipped:
 
-- [ ] `GET  /games` — list registered game names
-- [x] `GET  /games/{name}` — list matches *(currently `/matches`)*
-- [ ] `GET  /games/{name}/{id}` — get one match
-- [x] `POST /games/{name}/create` — create a match
-- [ ] body: `numPlayers`, `setupData`, `unlisted`
-- [x] `POST /games/{name}/{id}/join` — join
-- [ ] body: `playerName` (we use `name`), returns `playerCredentials`
-- [ ] `POST /games/{name}/{id}/leave`
-- [ ] `POST /games/{name}/{id}/update` — rename / data
-- [ ] `POST /games/{name}/{id}/playAgain`
-- [ ] Credentials per seat (generateCredentials/authenticateCredentials)
-- [ ] `apiOrigins` / `Origins` CORS preset
-- [ ] HTTPS support
-- [ ] Custom routes hook (mux exposed)
-- [ ] `unlisted` matches (hidden from list)
-- [ ] Per-match metadata (`isConnected`, etc.)
-- [ ] Chat messages
+- [x] `GET  /games` — list registered game names
+- [x] `GET  /games/{name}` — list matches (filters unlisted)
+- [x] `GET  /games/{name}/{id}` — get one match
+- [x] `POST /games/{name}/create` — create match (numPlayers, setupData, unlisted)
+- [x] `POST /games/{name}/{id}/join` — join (playerName, playerID, data)
+- [x] `POST /games/{name}/{id}/leave` — leave (credentials)
+- [x] `POST /games/{name}/{id}/update` — rename / data (credentials)
+- [x] `POST /games/{name}/{id}/playAgain` — successor match (idempotent)
+- [x] `POST /games/{name}/{id}/move` — move (REST; also via WS)
+- [x] Per-seat credentials (16-byte hex by default)
+- [x] Pluggable `GenerateCredentials` / `AuthenticateCredentials`
+- [x] `Origins` CORS preset (`LOCALHOST_IN_DEVELOPMENT`, `LOCALHOST`, literals, `*`)
+- [x] `unlisted` matches hidden from list
+- [x] Match metadata in responses (isConnected, name, data, ctx, setupData)
+- [x] Chat messages via WS frames
+- [x] `nextMatchID` on the source match after playAgain
 
 ## 14 — Multiplayer transport
 
-- [x] WebSocket transport with state pushes
-- [ ] Frame protocol parity with BGIO (sync, update, matchData, chat,
-      patch frames)
-- [ ] `deltaState` JSON Patch frames
-- [ ] Disconnect / reconnect detection (`isConnected` per seat)
-- [ ] Heartbeat
-- [ ] Spectator mode (connect without a seat)
-- [ ] Optimistic client moves (server is authoritative, sends correction)
+- [x] WebSocket transport with per-seat redacted state
+- [x] BGIO-style frames: `sync` (initial), `update`, `matchData`, `chat`, `patch`, `error`
+- [x] `matchData` broadcast on join/leave/update
+- [x] `?playerID=` query binds the WS to a seat (spectator on empty)
+- [x] DeltaState: `patch` frames with RFC 6902 JSON Patch
+- [x] State IDs + stale-state rejection (`ErrStaleState`)
+- [ ] Heartbeat / disconnect → `isConnected` tracking (TODO)
 
 ## 15 — Storage
 
 - [x] In-memory storage
-- [ ] FlatFile (file per match, similar to node-persist)
-- [ ] Async storage interface (already sync-only; BGIO is async)
-- [ ] Match metadata stored separately from game state (BGIO splits these)
+- [x] FlatFile (JSON file per match, atomic rename writes)
+- [x] `Wipe(id)` on the Storage interface
+- [x] Concurrency-safe in-process locks
 
 ## 16 — Testing helpers
 
-- [ ] Scenario helper: build a `State` directly for snapshot testing
-- [ ] `Local()` transport equivalent for in-process multi-client tests
-- [ ] `MockRandom` for deterministic tests
+- [x] `testhelpers.Scenario` — build state for snapshot tests
+- [x] `testhelpers.MockRandom` — override D6/Die/Number/Shuffle per test
 
 ## 17 — Explicitly out of scope (intrinsically JS)
 
@@ -201,28 +182,17 @@ REST routes BGIO ships:
   protocol from any language)
 - `LobbyClient` JS wrapper
 
-## Implementation order
+## Pending follow-ups
 
-Picked by dependency, not importance:
+The features below aren't part of MVP parity but would be nice next steps:
 
-1. Expanded `Ctx` (`Phase`, `PlayOrderPos`, `ActivePlayers`, `Gameover` as
-   `any`).
-2. Long-form `Move` + per-move flags scaffolding.
-3. Turn config struct (`Turn.OnBegin/OnEnd/OnMove`, min/max moves, endIf,
-   order).
-4. Turn-order strategies.
-5. Events system (endTurn/endPhase/endGame/setStage/setPhase/setActivePlayers/pass).
-6. Phases (routing + phase-local moves/turn).
-7. Stages & ActivePlayers presets.
-8. Plugin API skeleton.
-9. Random plugin (seeded PRNG) on top of plugin API.
-10. PlayerView (game-level + plugin-level).
-11. PluginPlayer built-in.
-12. Undo/redo + move log.
-13. `EndGame` event + `OnEnd` hook.
-14. Move flags wired (Redact, Undoable, NoLimit, Client, IgnoreStaleStateID).
-15. Server features: credentials, full Lobby routes, metadata, chat.
-16. Transport frame parity (sync/update/patch/matchData/chat).
-17. DeltaState (JSON Patch).
-18. Storage: FlatFile, async interface, split metadata.
-19. Testing helpers.
+- **Heartbeat / connection tracking.** BGIO tracks `isConnected` per seat by
+  watching socket lifecycle. The plumbing for `IsConnected` is wired in the
+  storage `Player` struct and `matchData` frame; the actual heartbeat
+  observer is not.
+- **`fnWrap` plugin hook.** The other plugin lifecycle hooks are wired; the
+  per-method wrapper isn't. Add when a concrete use case shows up.
+- **HTTPS server config.** `net/http`'s `ServeTLS` works today; we just
+  haven't exposed a sugary `Server{HTTPS: {cert, key}}` config object.
+- **Persistent SQL storage adapters.** FlatFile covers dev/test; a SQLite
+  adapter would round out the BGIO equivalents.
