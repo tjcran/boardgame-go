@@ -56,11 +56,19 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 	}
 
 	events := &Events{}
+	plugins := buildPluginAPIs(game, state, req.PlayerID)
 	mc := &MoveContext{
 		G:        state.G,
 		Ctx:      state.Ctx,
 		PlayerID: req.PlayerID,
 		Events:   events,
+		Plugins:  plugins,
+	}
+	// Ergonomic shortcut: if the Random plugin is registered, expose its
+	// API as mc.Random so moves can write `mc.Random.D6()` instead of
+	// `mc.Plugins["random"].(*core.Random).D6()`.
+	if r, ok := plugins[RandomPluginName].(*Random); ok {
+		mc.Random = r
 	}
 
 	nextG, err := move.Move(mc, req.Args...)
@@ -71,6 +79,14 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 	next := state
 	next.G = nextG
 	mc.G = next.G // hooks see the post-move G
+
+	// Persist plugin mutations into State.Plugins.
+	next = flushPlugins(game, next, mc)
+
+	// Reject the move if any plugin signals invalidity (BGIO's isInvalid).
+	if err := validatePlugins(game, next); err != nil {
+		return state, err
+	}
 
 	// Run turn.OnMove with the updated G.
 	if turn := game.scopeTurn(next.Ctx.Phase); turn != nil && turn.OnMove != nil {

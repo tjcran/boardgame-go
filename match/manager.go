@@ -33,6 +33,11 @@ type Subscriber interface {
 	// Send is called with the new state after every successful move. Send
 	// must not block — the manager calls it under the match lock.
 	Send(state core.State)
+	// PlayerID identifies which seat (if any) this subscriber represents.
+	// Returning "" makes the subscriber a spectator and receives the
+	// spectator-redacted view from Game.PlayerView. The match manager
+	// calls this once per push to compute the right redacted state.
+	PlayerID() string
 }
 
 // Manager owns the live registry of games and the lock that serialises
@@ -257,8 +262,26 @@ func (m *Manager) broadcast(matchID string, state core.State) {
 		subs = append(subs, s)
 	}
 	m.subsMu.Unlock()
+
+	match, err := m.store.Get(matchID)
+	if err != nil {
+		return
+	}
+	game := m.Game(match.GameName)
+	if game == nil {
+		return
+	}
+	// Cache per-seat views so concurrent subscribers for the same seat
+	// share one redacted state object.
+	views := map[string]core.State{}
 	for _, s := range subs {
-		s.Send(state)
+		pid := s.PlayerID()
+		v, ok := views[pid]
+		if !ok {
+			v = core.PlayerView(game, state, pid)
+			views[pid] = v
+		}
+		s.Send(v)
 	}
 }
 

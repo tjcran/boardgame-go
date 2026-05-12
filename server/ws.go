@@ -15,9 +15,10 @@ import (
 // wsClient is one connected browser tab. The match.Manager pushes state
 // snapshots through Send; the connection's read loop receives moves.
 type wsClient struct {
-	mu   sync.Mutex
-	conn *websocket.Conn
-	ctx  context.Context
+	mu       sync.Mutex
+	conn     *websocket.Conn
+	ctx      context.Context
+	playerID string // "" for spectators
 }
 
 // Send implements match.Subscriber. The mutex matters because the manager
@@ -30,6 +31,10 @@ func (c *wsClient) Send(state core.State) {
 	_ = wsjson.Write(ctx, c.conn, map[string]any{"type": "state", "state": state})
 }
 
+// PlayerID identifies which seat this subscriber represents so the manager
+// can compute the right per-seat state.
+func (c *wsClient) PlayerID() string { return c.playerID }
+
 // inbound is the envelope clients send. Only "move" is handled today; future
 // versions can extend (chat, leave, etc).
 type inbound struct {
@@ -40,7 +45,8 @@ type inbound struct {
 }
 
 // handleWS upgrades the connection, sends the current state immediately, and
-// then loops on incoming move messages.
+// then loops on incoming move messages. The connection's seat is taken
+// from the ?playerID= query parameter (empty = spectator).
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matchID string) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// MVP: accept any origin. Tighten when we add auth.
@@ -52,11 +58,15 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 	defer conn.CloseNow()
 
 	ctx := r.Context()
-	client := &wsClient{conn: conn, ctx: ctx}
+	playerID := r.URL.Query().Get("playerID")
+	client := &wsClient{conn: conn, ctx: ctx, playerID: playerID}
 
-	// Push the current state on connect so the client can render immediately.
+	// Push the current state on connect so the client can render immediately,
+	// redacted for the connecting seat.
 	if m, err := s.Manager.State(matchID); err == nil {
-		client.Send(m.State)
+		if g := s.Manager.Game(m.GameName); g != nil {
+			client.Send(core.PlayerView(g, m.State, playerID))
+		}
 	}
 
 	unsub := s.Manager.Subscribe(matchID, client)

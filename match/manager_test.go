@@ -121,9 +121,13 @@ func TestMovePlaysThroughEnd(t *testing.T) {
 	}
 }
 
-type captureSub struct{ states []core.State }
+type captureSub struct {
+	states []core.State
+	pid    string
+}
 
-func (c *captureSub) Send(s core.State) { c.states = append(c.states, s) }
+func (c *captureSub) Send(s core.State)  { c.states = append(c.states, s) }
+func (c *captureSub) PlayerID() string   { return c.pid }
 
 func TestSubscribersReceiveBroadcasts(t *testing.T) {
 	m, id := newTestManager(t)

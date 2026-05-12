@@ -63,6 +63,10 @@ func NewMatch(game *Game, numPlayers int, setupData any) State {
 
 	st := State{G: g, Ctx: ctx}
 
+	// Plugin private state must exist before any hook fires — hooks can
+	// reach into mc.Plugins via the API path.
+	st = runPluginSetup(game, st)
+
 	// Apply the active scope's TurnOrder.PlayOrder override and starting
 	// position. Same code path is used to enter a phase mid-game.
 	mc := &MoveContext{G: st.G, Ctx: st.Ctx}
@@ -75,4 +79,23 @@ func NewMatch(game *Game, numPlayers int, setupData any) State {
 	st = runPhaseOnBegin(game, st)
 	st = runTurnOnBegin(game, st)
 	return st
+}
+
+// PlayerView returns a copy of the state with G and plugin private data
+// redacted for the given seat. playerID="" produces the spectator view.
+//
+// The transport calls this immediately before pushing state to a client.
+func PlayerView(game *Game, state State, playerID string) State {
+	view := state
+	if game.PlayerView != nil {
+		view.G = game.PlayerView(state.G, state.Ctx, playerID)
+	}
+	view.Plugins = redactPluginData(game, state, playerID)
+	// Engine-private bookkeeping that should never leave the server.
+	view.ActiveStack = nil
+	view.PendingNext = nil
+	view.MoveCounts = nil
+	view.StageMinMoves = nil
+	view.StageMaxMoves = nil
+	return view
 }
