@@ -14,20 +14,24 @@ var ErrNotFound = errors.New("match not found")
 
 // Player is a seated participant in a match.
 type Player struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Seat string `json:"seat"` // seat index as string, matches ctx.PlayOrder
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Seat        string `json:"seat"`        // seat index as string, matches ctx.PlayOrder
+	Credentials string `json:"-"`           // never serialise to client output
+	Data        any    `json:"data,omitempty"`
+	IsConnected bool   `json:"isConnected,omitempty"`
 }
 
 // Match is the persisted shape of one in-progress (or finished) game.
 type Match struct {
-	ID        string     `json:"id"`
-	GameName  string     `json:"gameName"`
-	State     core.State `json:"state"`
-	Players   []Player   `json:"players"` // indexed by seat
-	SetupData any        `json:"setupData,omitempty"`
-	Unlisted  bool       `json:"unlisted,omitempty"`
-	CreatedAt int64      `json:"createdAt"`
+	ID          string     `json:"id"`
+	GameName    string     `json:"gameName"`
+	State       core.State `json:"state"`
+	Players     []Player   `json:"players"` // indexed by seat
+	SetupData   any        `json:"setupData,omitempty"`
+	Unlisted    bool       `json:"unlisted,omitempty"`
+	CreatedAt   int64      `json:"createdAt"`
+	NextMatchID string     `json:"nextMatchID,omitempty"`
 }
 
 // Storage is the persistence interface the match manager depends on.

@@ -10,6 +10,7 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"github.com/tjcran/boardgame-go/core"
+	"github.com/tjcran/boardgame-go/match"
 )
 
 // wsClient is one connected browser tab. The match.Manager pushes state
@@ -35,13 +36,26 @@ func (c *wsClient) Send(state core.State) {
 // can compute the right per-seat state.
 func (c *wsClient) PlayerID() string { return c.playerID }
 
-// inbound is the envelope clients send. Only "move" is handled today; future
-// versions can extend (chat, leave, etc).
+// SendChat implements match.Subscriber; pushes a chat frame to the
+// connection.
+func (c *wsClient) SendChat(msg match.ChatMessage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+	defer cancel()
+	_ = wsjson.Write(ctx, c.conn, map[string]any{"type": "chat", "chat": msg})
+}
+
+// inbound is the envelope clients send. Today: "move" (submit a move) and
+// "chat" (broadcast a chat message). The "leave" wire form is handled by
+// the REST API.
 type inbound struct {
-	Type     string `json:"type"`
-	PlayerID string `json:"playerID"`
-	Move     string `json:"move"`
-	Args     []any  `json:"args"`
+	Type        string `json:"type"`
+	PlayerID    string `json:"playerID"`
+	Credentials string `json:"credentials"`
+	Move        string `json:"move"`
+	Args        []any  `json:"args"`
+	Payload     any    `json:"payload"` // chat body
 }
 
 // handleWS upgrades the connection, sends the current state immediately, and
@@ -77,16 +91,23 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 		if err := wsjson.Read(ctx, conn, &msg); err != nil {
 			return
 		}
-		if msg.Type != "move" {
-			continue
-		}
-		if _, err := s.Manager.Move(matchID, msg.PlayerID, msg.Move, msg.Args); err != nil {
-			// Surface as an error frame; don't tear down the connection.
-			client.mu.Lock()
-			ec, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_ = wsjson.Write(ec, conn, map[string]string{"type": "error", "error": err.Error()})
-			cancel()
-			client.mu.Unlock()
+		switch msg.Type {
+		case "move":
+			if _, err := s.Manager.Move(matchID, msg.PlayerID, msg.Credentials, msg.Move, msg.Args); err != nil {
+				client.sendError(err)
+			}
+		case "chat":
+			s.Manager.Chat(matchID, msg.PlayerID, msg.Payload)
 		}
 	}
+}
+
+// sendError pushes a {"type":"error","error":...} frame to the connection
+// without tearing it down. The match's authoritative state remains valid.
+func (c *wsClient) sendError(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ec, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+	defer cancel()
+	_ = wsjson.Write(ec, c.conn, map[string]string{"type": "error", "error": err.Error()})
 }
