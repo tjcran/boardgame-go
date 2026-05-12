@@ -11,7 +11,7 @@ import (
 func play(t *testing.T, moves [][2]int) core.State {
 	t.Helper()
 	g := New()
-	s := core.NewMatch(g, 0)
+	s := core.NewMatch(g, 0, nil)
 	for i, mv := range moves {
 		req := core.MoveRequest{
 			PlayerID: itoa(mv[0]),
@@ -34,13 +34,23 @@ func itoa(n int) string {
 	return "1"
 }
 
+func gameoverMap(t *testing.T, s core.State) map[string]any {
+	t.Helper()
+	m, ok := s.Ctx.Gameover.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map gameover, got %T %+v", s.Ctx.Gameover, s.Ctx.Gameover)
+	}
+	return m
+}
+
 func TestXWinsTopRow(t *testing.T) {
 	// X: 0, 1, 2 ; O: 3, 4
 	s := play(t, [][2]int{
 		{0, 0}, {1, 3}, {0, 1}, {1, 4}, {0, 2},
 	})
-	if !s.Ctx.GameOver || s.Ctx.Winner != "0" {
-		t.Fatalf("expected X (seat 0) to win, got %+v", s.Ctx)
+	go_ := gameoverMap(t, s)
+	if go_["winner"] != "0" {
+		t.Fatalf("expected winner=0, got %+v", s.Ctx.Gameover)
 	}
 }
 
@@ -53,17 +63,15 @@ func TestDraw(t *testing.T) {
 		{0, 0}, {1, 2}, {0, 1}, {1, 4}, {0, 5},
 		{1, 3}, {0, 6}, {1, 7}, {0, 8},
 	})
-	if !s.Ctx.GameOver {
-		t.Fatalf("expected game over, got %+v", s.Ctx)
-	}
-	if !s.Ctx.IsDraw {
-		t.Fatalf("expected draw, got winner=%q", s.Ctx.Winner)
+	go_ := gameoverMap(t, s)
+	if go_["draw"] != true {
+		t.Fatalf("expected draw=true, got %+v", s.Ctx.Gameover)
 	}
 }
 
 func TestRejectTakenCell(t *testing.T) {
 	g := New()
-	s := core.NewMatch(g, 0)
+	s := core.NewMatch(g, 0, nil)
 	s, err := core.Apply(g, s, core.MoveRequest{
 		PlayerID: "0", Move: "clickCell", Args: []any{0},
 	})
@@ -80,7 +88,7 @@ func TestRejectTakenCell(t *testing.T) {
 
 func TestRejectOutOfRange(t *testing.T) {
 	g := New()
-	s := core.NewMatch(g, 0)
+	s := core.NewMatch(g, 0, nil)
 	_, err := core.Apply(g, s, core.MoveRequest{
 		PlayerID: "0", Move: "clickCell", Args: []any{99},
 	})

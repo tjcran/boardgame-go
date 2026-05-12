@@ -65,7 +65,9 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 }
 
 type createReq struct {
-	NumPlayers int `json:"numPlayers"`
+	NumPlayers int  `json:"numPlayers"`
+	SetupData  any  `json:"setupData,omitempty"`
+	Unlisted   bool `json:"unlisted,omitempty"`
 }
 type createResp struct {
 	MatchID string `json:"matchID"`
@@ -74,7 +76,7 @@ type createResp struct {
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request, gameName string) {
 	var req createReq
 	_ = json.NewDecoder(r.Body).Decode(&req) // body optional
-	id, err := s.Manager.Create(gameName, req.NumPlayers)
+	id, err := s.Manager.Create(gameName, req.NumPlayers, req.SetupData)
 	if err != nil {
 		writeErr(w, err)
 		return

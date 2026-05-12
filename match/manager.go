@@ -81,17 +81,24 @@ func (m *Manager) Game(name string) *core.Game {
 }
 
 // Create starts a fresh match. numPlayers may be 0 to use the game's
-// default. Returns the new match ID.
-func (m *Manager) Create(gameName string, numPlayers int) (string, error) {
+// default. setupData is the optional game-specific payload (see
+// Game.Setup). Returns the new match ID.
+func (m *Manager) Create(gameName string, numPlayers int, setupData any) (string, error) {
 	g := m.Game(gameName)
 	if g == nil {
 		return "", fmt.Errorf("%w: %s", ErrUnknownGame, gameName)
+	}
+	if g.ValidateSetupData != nil {
+		if msg := g.ValidateSetupData(setupData, g.PlayerCount(numPlayers)); msg != "" {
+			return "", fmt.Errorf("invalid setupData: %s", msg)
+		}
 	}
 	id := newID()
 	match := &storage.Match{
 		ID:        id,
 		GameName:  gameName,
-		State:     core.NewMatch(g, numPlayers),
+		State:     core.NewMatch(g, numPlayers, setupData),
+		SetupData: setupData,
 		CreatedAt: m.now().Unix(),
 	}
 	if err := m.store.Create(match); err != nil {

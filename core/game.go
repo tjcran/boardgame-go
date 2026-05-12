@@ -1,80 +1,140 @@
 // Package core defines the pure game engine: types and a reducer that, given
 // a Game definition and a current State, produces the next State in response
-// to a Move. Nothing in this package touches I/O, time, or randomness — that
+// to a Move. Nothing in this package touches I/O or wall-clock time, which
 // keeps games deterministic and trivially testable.
+//
+// The shape closely mirrors boardgame.io's `Game` object so games translate
+// across the two frameworks with mechanical changes.
 package core
 
-import "errors"
-
-// G is the user-defined game state. Games store whatever they want here
-// (board, scores, etc). Treat it as an opaque payload from the engine's
-// perspective; the engine never inspects it.
+// G is the user-defined game state. The engine never inspects it; it's an
+// opaque payload that the move functions own.
 type G = any
 
-// Ctx is the engine-managed metadata that lives alongside G. It tells you
-// whose turn it is, how many turns have happened, who's playing, and whether
-// the game is over. Moves see Ctx but never mutate it directly — the reducer
-// is responsible for advancing it.
-type Ctx struct {
-	NumPlayers    int      `json:"numPlayers"`
-	CurrentPlayer string   `json:"currentPlayer"`
-	PlayOrder     []string `json:"playOrder"`
-	Turn          int      `json:"turn"`
-	GameOver      bool     `json:"gameOver"`
-	Winner        string   `json:"winner,omitempty"`
-	IsDraw        bool     `json:"isDraw,omitempty"`
-}
+// SetupFn builds the initial G for a new match. ctx is fully populated by
+// the engine; setupData is whatever was passed through the Lobby's
+// `create({setupData})` call (typed game-by-game).
+type SetupFn func(ctx Ctx, setupData any) G
 
-// State is the complete authoritative state of a match.
-type State struct {
-	G   G   `json:"G"`
-	Ctx Ctx `json:"ctx"`
-}
+// ValidateSetupDataFn pre-validates a setupData payload at match-creation
+// time. Returning a non-empty string aborts the create with that message.
+type ValidateSetupDataFn func(setupData any, numPlayers int) string
 
-// MoveFn is the signature every move handler implements. It receives the
-// current G and Ctx plus the move arguments and returns the next G. If the
-// move is illegal it returns ErrInvalidMove (or any error) and G is unchanged.
-//
-// MoveFn must be deterministic for a given (G, Ctx, args). Convention: treat
-// G as immutable — return a new value rather than mutating in place. The
-// engine does not deep-copy for you.
-type MoveFn func(g G, ctx Ctx, args ...any) (G, error)
+// PlayerViewFn redacts G before it leaves the server for a particular seat.
+// playerID is empty for spectators.
+type PlayerViewFn func(g G, ctx Ctx, playerID string) G
 
-// ErrInvalidMove is the conventional error a MoveFn returns when the move is
-// disallowed by the rules. The reducer surfaces it without advancing state.
-var ErrInvalidMove = errors.New("invalid move")
+// EndIfFn is checked after every move. Returning a non-nil value ends the
+// game and writes the value to ctx.Gameover.
+type EndIfFn func(mc *MoveContext) any
 
 // Game is a declarative definition. The framework consumes one of these and
 // runs matches against it.
+//
+// Mirrors boardgame.io's `Game` object — see PARITY.md for field-by-field
+// mapping.
 type Game struct {
-	// Name is the registration key used by transports (e.g. URL segment).
+	// Identification.
 	Name string
 
-	// MinPlayers/MaxPlayers bracket how many seats a match can have. If both
-	// are zero, the engine treats the game as 2-player.
+	// Player count bounds. Enforced by the Lobby. MinPlayers=0 means "no
+	// minimum"; MaxPlayers=0 means "no maximum"; if both are zero, the
+	// engine defaults to 2-player on Setup.
 	MinPlayers int
 	MaxPlayers int
 
-	// Setup builds the initial G for a new match given the player count.
-	Setup func(numPlayers int) G
+	// Setup constructs the initial G.
+	Setup SetupFn
 
-	// Moves is the registry of legal move names -> handlers.
-	Moves map[string]MoveFn
+	// ValidateSetupData optionally rejects malformed setupData.
+	ValidateSetupData ValidateSetupDataFn
 
-	// EndIf, if set, is called after each successful move. It can return a
-	// winner string (one of ctx.PlayOrder) or signal a draw. Returning
-	// (false, "", false) means the game continues.
-	EndIf func(g G, ctx Ctx) (over bool, winner string, draw bool)
+	// Moves is the global move table. Values must be either a MoveFn (or a
+	// function with that signature) for short-form, or a Move struct for
+	// long-form. Per-phase moves override these.
+	Moves map[string]any
+
+	// Turn is the global TurnConfig. Per-phase Turn configs override fields
+	// individually (the engine merges).
+	Turn *TurnConfig
+
+	// Phases is the map of named phases. Exactly zero or one phase may set
+	// Start: true.
+	Phases map[string]*PhaseConfig
+
+	// EndIf, if set, is checked after every successful move. Returning a
+	// non-nil value ends the game.
+	EndIf EndIfFn
+
+	// OnEnd is called after EndIf fires. Useful for final scoring/cleanup.
+	OnEnd HookFn
+
+	// PlayerView, if set, is called before pushing state to a client to
+	// redact G per-seat.
+	PlayerView PlayerViewFn
+
+	// Seed seeds the Random plugin. Accepts a string or int. If zero the
+	// engine generates a per-match seed.
+	Seed any
+
+	// DisableUndo turns off undo for every move in this game (parity with
+	// BGIO's top-level `disableUndo: true`).
+	DisableUndo bool
+
+	// DeltaState, when true, makes the transport send JSON Patch diffs
+	// instead of full state on update (BGIO's `deltaState`).
+	DeltaState bool
+
+	// Plugins are applied in order. See core/plugin.go.
+	Plugins []Plugin
 }
 
-// playerCount returns the configured player count, defaulting to 2 if the
-// game didn't specify. Used for Setup and for building the initial PlayOrder.
-func (g *Game) playerCount(requested int) int {
+// PlayerCount returns the configured player count for a fresh match,
+// defaulting to 2 when neither MinPlayers nor MaxPlayers gives a usable
+// upper bound. requested, when non-zero, overrides the default.
+func (g *Game) PlayerCount(requested int) int {
 	if requested > 0 {
 		return requested
 	}
 	if g.MaxPlayers > 0 {
 		return g.MaxPlayers
 	}
+	if g.MinPlayers > 0 {
+		return g.MinPlayers
+	}
 	return 2
+}
+
+// startPhase returns the phase marked Start: true, or "" if no phase is
+// initial.
+func (g *Game) startPhase() string {
+	for name, p := range g.Phases {
+		if p.Start {
+			return name
+		}
+	}
+	return ""
+}
+
+// scopeMoves returns the active move table for a given phase. A nil
+// phase-level Moves means "fall back to global". A phase that explicitly
+// sets Moves overrides the global table entirely (parity with BGIO).
+func (g *Game) scopeMoves(phase string) map[string]any {
+	if phase != "" {
+		if p, ok := g.Phases[phase]; ok && p.Moves != nil {
+			return p.Moves
+		}
+	}
+	return g.Moves
+}
+
+// scopeTurn returns the active TurnConfig for a given phase, merging phase
+// override over the global. A nil result means "use defaults".
+func (g *Game) scopeTurn(phase string) *TurnConfig {
+	if phase != "" {
+		if p, ok := g.Phases[phase]; ok && p.Turn != nil {
+			return p.Turn
+		}
+	}
+	return g.Turn
 }

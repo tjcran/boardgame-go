@@ -25,6 +25,8 @@ type Match struct {
 	GameName  string     `json:"gameName"`
 	State     core.State `json:"state"`
 	Players   []Player   `json:"players"` // indexed by seat
+	SetupData any        `json:"setupData,omitempty"`
+	Unlisted  bool       `json:"unlisted,omitempty"`
 	CreatedAt int64      `json:"createdAt"`
 }
 

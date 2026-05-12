@@ -1,29 +1,78 @@
 package core
 
-import "strconv"
+// State is the complete authoritative state of a match. The transport sends
+// (a redacted view of) this object to clients.
+type State struct {
+	// G is the user-defined game state.
+	G G `json:"G"`
 
-// NewMatch builds the starting State for a fresh match of the given Game with
-// numPlayers seats. It calls the Game's Setup to produce G and initialises Ctx
-// with a default 0..N-1 PlayOrder, current player "0", turn 1.
-func NewMatch(game *Game, numPlayers int) State {
-	n := game.playerCount(numPlayers)
-	order := make([]string, n)
-	for i := 0; i < n; i++ {
-		order[i] = strconv.Itoa(i)
+	// Ctx is the engine-managed metadata.
+	Ctx Ctx `json:"ctx"`
+
+	// Plugins is per-plugin private data, keyed by Plugin.Name. Hidden from
+	// JSON when empty.
+	Plugins map[string]any `json:"plugins,omitempty"`
+
+	// activeStack supports BGIO's `revert: true` on ActivePlayersConfig.
+	// When SetActivePlayers is called with Revert=true, the previous
+	// ActivePlayers map is pushed here; when the new set drains the engine
+	// pops it back.
+	ActiveStack []activeFrame `json:"_activeStack,omitempty"`
+
+	// PendingNext is BGIO's "use this config after current active set
+	// drains" support (the `next:` option on setActivePlayers).
+	PendingNext *ActivePlayersConfig `json:"_pendingNext,omitempty"`
+
+	// MoveCounts tracks per-active-player counting moves for MinMoves /
+	// MaxMoves at the stage level.
+	MoveCounts map[string]int `json:"_moveCounts,omitempty"`
+
+	// StageMin/Max overrides per active player. Nil maps mean "no override
+	// for this player".
+	StageMinMoves map[string]int `json:"_stageMin,omitempty"`
+	StageMaxMoves map[string]int `json:"_stageMax,omitempty"`
+}
+
+// activeFrame snapshots the active-players bookkeeping for Revert support.
+type activeFrame struct {
+	ActivePlayers map[string]string `json:"a"`
+	MoveCounts    map[string]int    `json:"c"`
+	StageMin      map[string]int    `json:"mi"`
+	StageMax      map[string]int    `json:"ma"`
+}
+
+// NewMatch builds the starting State for a fresh match. setupData is passed
+// through to Game.Setup; pass nil if the game doesn't use one.
+func NewMatch(game *Game, numPlayers int, setupData any) State {
+	n := game.PlayerCount(numPlayers)
+	order := defaultPlayOrder(n)
+
+	ctx := Ctx{
+		NumPlayers:    n,
+		CurrentPlayer: order[0],
+		PlayOrder:     order,
+		PlayOrderPos:  0,
+		Turn:          1,
+		Phase:         game.startPhase(),
 	}
 
 	var g G
 	if game.Setup != nil {
-		g = game.Setup(n)
+		g = game.Setup(ctx, setupData)
 	}
 
-	return State{
-		G: g,
-		Ctx: Ctx{
-			NumPlayers:    n,
-			CurrentPlayer: order[0],
-			PlayOrder:     order,
-			Turn:          1,
-		},
-	}
+	st := State{G: g, Ctx: ctx}
+
+	// Apply the active scope's TurnOrder.PlayOrder override and starting
+	// position. Same code path is used to enter a phase mid-game.
+	mc := &MoveContext{G: st.G, Ctx: st.Ctx}
+	st = applyTurnOrderFirst(game, st, mc)
+
+	// Apply Turn.ActivePlayers, if configured for the start scope.
+	st = applyActivePlayersFromTurn(game, st)
+
+	// Run the starting phase's OnBegin hook, then the active Turn.OnBegin.
+	st = runPhaseOnBegin(game, st)
+	st = runTurnOnBegin(game, st)
+	return st
 }

@@ -17,19 +17,20 @@ func pingPongGame() *core.Game {
 		Name:       "pp",
 		MinPlayers: 2,
 		MaxPlayers: 2,
-		Setup:      func(n int) core.G { return &state{} },
-		Moves: map[string]core.MoveFn{
-			"ping": func(g core.G, _ core.Ctx, _ ...any) (core.G, error) {
-				s := g.(*state)
+		Setup:      func(_ core.Ctx, _ any) core.G { return &state{} },
+		Moves: map[string]any{
+			"ping": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+				s := mc.G.(*state)
 				return &state{Pings: s.Pings + 1}, nil
-			},
+			}),
 		},
-		EndIf: func(g core.G, ctx core.Ctx) (bool, string, bool) {
-			if g.(*state).Pings >= 4 {
-				return true, "0", false
+		EndIf: func(mc *core.MoveContext) any {
+			if mc.G.(*state).Pings >= 4 {
+				return map[string]any{"winner": "0"}
 			}
-			return false, "", false
+			return nil
 		},
+		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
 	}
 }
 
@@ -37,7 +38,7 @@ func newTestManager(t *testing.T) (*Manager, string) {
 	t.Helper()
 	m := NewManager(storage.NewMemory())
 	m.Register(pingPongGame())
-	id, err := m.Create("pp", 0)
+	id, err := m.Create("pp", 0, nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -46,7 +47,7 @@ func newTestManager(t *testing.T) (*Manager, string) {
 
 func TestCreateRejectsUnknownGame(t *testing.T) {
 	m := NewManager(storage.NewMemory())
-	_, err := m.Create("nope", 0)
+	_, err := m.Create("nope", 0, nil)
 	if !errors.Is(err, ErrUnknownGame) {
 		t.Fatalf("expected ErrUnknownGame, got %v", err)
 	}
@@ -112,8 +113,11 @@ func TestMovePlaysThroughEnd(t *testing.T) {
 		}
 		last = st
 	}
-	if !last.Ctx.GameOver || last.Ctx.Winner != "0" {
-		t.Fatalf("expected game over winner=0, got %+v", last.Ctx)
+	if last.Ctx.Gameover == nil {
+		t.Fatalf("expected gameover, got %+v", last.Ctx)
+	}
+	if m, _ := last.Ctx.Gameover.(map[string]any); m["winner"] != "0" {
+		t.Fatalf("expected winner=0, got %v", last.Ctx.Gameover)
 	}
 }
 
