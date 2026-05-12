@@ -71,7 +71,8 @@ func endTurn(game *Game, state State, nextPlayer string) State {
 		// by the caller-level event drain that wraps this turn-end.
 	}
 
-	// Clear per-turn counters.
+	// Clear per-turn counters and the undo scratch space — undo is
+	// per-turn only (parity with BGIO).
 	state.Ctx.NumMoves = 0
 	state.Ctx.ActivePlayers = nil
 	state.MoveCounts = nil
@@ -79,6 +80,8 @@ func endTurn(game *Game, state State, nextPlayer string) State {
 	state.StageMaxMoves = nil
 	state.ActiveStack = nil
 	state.PendingNext = nil
+	state.TurnSnapshots = nil
+	state.Undone = nil
 
 	// Advance current player.
 	if nextPlayer != "" {

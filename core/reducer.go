@@ -71,6 +71,16 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 		mc.Random = r
 	}
 
+	// Snapshot pre-move state for undo. Only meaningful when the game
+	// hasn't disabled undo and the specific move is undoable. We resolve
+	// Undoable now so undo decisions reflect the state at move time.
+	undoable := move.IsUndoable(mc) && !game.DisableUndo
+	var snapshot State
+	if undoable {
+		snapshot = cloneStateForSnapshot(state)
+	}
+	redact := move.IsRedacted(mc)
+
 	nextG, err := move.Move(mc, req.Args...)
 	if err != nil {
 		return state, err
@@ -79,6 +89,23 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 	next := state
 	next.G = nextG
 	mc.G = next.G // hooks see the post-move G
+
+	// Append to the log. Args are kept; PlayerView redacts to other seats.
+	next.Log = append(next.Log, LogEntry{
+		Kind:     "move",
+		Move:     req.Move,
+		PlayerID: req.PlayerID,
+		Args:     append([]any(nil), req.Args...),
+		Turn:     state.Ctx.Turn,
+		Phase:    state.Ctx.Phase,
+		Redact:   redact,
+		Undoable: undoable,
+	})
+	// Any successful move invalidates the redo stack.
+	next.Undone = nil
+	if undoable {
+		next.TurnSnapshots = append(next.TurnSnapshots, snapshot)
+	}
 
 	// Persist plugin mutations into State.Plugins.
 	next = flushPlugins(game, next, mc)

@@ -13,6 +13,21 @@ type State struct {
 	// JSON when empty.
 	Plugins map[string]any `json:"plugins,omitempty"`
 
+	// Log is the ordered list of applied moves (and event transitions).
+	// Used for undo/redo and replay. Reset at turn boundaries — entries
+	// older than the current turn are pruned, matching BGIO's
+	// per-turn undo scope.
+	Log []LogEntry `json:"log,omitempty"`
+
+	// Undone holds entries popped by Undo so Redo can replay them. Cleared
+	// when a fresh move overwrites the redo stack (parity with BGIO).
+	Undone []LogEntry `json:"_undone,omitempty"`
+
+	// TurnSnapshots holds the State at the start of each pending move in
+	// the current turn. Undo pops the latest snapshot and reinstates it.
+	// Snapshots are private — never sent to clients.
+	TurnSnapshots []State `json:"-"`
+
 	// activeStack supports BGIO's `revert: true` on ActivePlayersConfig.
 	// When SetActivePlayers is called with Revert=true, the previous
 	// ActivePlayers map is pushed here; when the new set drains the engine
