@@ -1,0 +1,119 @@
+// Package tictactoe is the reference game built on the boardgame-go engine.
+// Two players alternate placing X / O on a 3x3 board; first row/col/diagonal
+// of three wins, full board with no winner is a draw.
+//
+// It exists to (a) validate the engine API end-to-end and (b) give clients
+// something to talk to.
+package tictactoe
+
+import (
+	"fmt"
+
+	"github.com/tjcran/boardgame-go/core"
+)
+
+// State is the game-specific G payload for a tic-tac-toe match. Cells holds
+// each square's mark as "X", "O", or "" (empty). Index 0 is top-left,
+// 8 is bottom-right.
+type State struct {
+	Cells [9]string `json:"cells"`
+}
+
+// New returns the registered Game definition. Pass to manager.Register.
+func New() *core.Game {
+	return &core.Game{
+		Name:       "tic-tac-toe",
+		MinPlayers: 2,
+		MaxPlayers: 2,
+		Setup:      func(_ int) core.G { return &State{} },
+		Moves: map[string]core.MoveFn{
+			"clickCell": clickCell,
+		},
+		EndIf: endIf,
+	}
+}
+
+// clickCell expects one int argument: the cell index (0..8). The current
+// player's mark is X if seat 0, O if seat 1.
+func clickCell(g core.G, ctx core.Ctx, args ...any) (core.G, error) {
+	if len(args) < 1 {
+		return g, fmt.Errorf("%w: missing cell index", core.ErrInvalidMove)
+	}
+	idx, err := toInt(args[0])
+	if err != nil {
+		return g, fmt.Errorf("%w: %v", core.ErrInvalidMove, err)
+	}
+	if idx < 0 || idx > 8 {
+		return g, fmt.Errorf("%w: cell %d out of range", core.ErrInvalidMove, idx)
+	}
+	s := g.(*State)
+	if s.Cells[idx] != "" {
+		return g, fmt.Errorf("%w: cell %d already taken", core.ErrInvalidMove, idx)
+	}
+	mark := "X"
+	if ctx.CurrentPlayer == "1" {
+		mark = "O"
+	}
+	next := *s
+	next.Cells[idx] = mark
+	return &next, nil
+}
+
+func endIf(g core.G, ctx core.Ctx) (bool, string, bool) {
+	s := g.(*State)
+	if w := winner(s.Cells); w != "" {
+		// the player who just moved is ctx.CurrentPlayer (reducer runs EndIf
+		// before advancing the turn).
+		return true, ctx.CurrentPlayer, false
+	}
+	full := true
+	for _, c := range s.Cells {
+		if c == "" {
+			full = false
+			break
+		}
+	}
+	if full {
+		return true, "", true
+	}
+	return false, "", false
+}
+
+// winningLines enumerates the 8 possible 3-in-a-row paths on a 3x3 board.
+var winningLines = [...][3]int{
+	{0, 1, 2}, {3, 4, 5}, {6, 7, 8}, // rows
+	{0, 3, 6}, {1, 4, 7}, {2, 5, 8}, // cols
+	{0, 4, 8}, {2, 4, 6}, // diagonals
+}
+
+// winner returns "X", "O", or "" depending on whether either mark has
+// completed a line.
+func winner(cells [9]string) string {
+	for _, line := range winningLines {
+		a, b, c := cells[line[0]], cells[line[1]], cells[line[2]]
+		if a != "" && a == b && b == c {
+			return a
+		}
+	}
+	return ""
+}
+
+// toInt accepts the loose JSON-decoded forms (float64, int, json.Number) and
+// returns a plain int. Args come over the wire as floats because encoding/json
+// decodes numbers into float64 by default.
+func toInt(v any) (int, error) {
+	switch n := v.(type) {
+	case int:
+		return n, nil
+	case int32:
+		return int(n), nil
+	case int64:
+		return int(n), nil
+	case float64:
+		return int(n), nil
+	case float32:
+		return int(n), nil
+	default:
+		return 0, fmt.Errorf("not an int: %T", v)
+	}
+}

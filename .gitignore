@@ -1,0 +1,14 @@
+# Binaries
+boardgame-server
+/bin/
+/dist/
+
+# Test artifacts
+*.test
+*.out
+coverage.txt
+
+# Editor
+.vscode/
+.idea/
+*.swp
