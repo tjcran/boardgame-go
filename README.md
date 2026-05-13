@@ -365,12 +365,16 @@ go vet -vettool=$(which boardgame-go-vet) ./...
 [`ccg/`](ccg/) — entities, zones, layered modifiers, sync event bus,
 target queries, plus an optional `Catalog` of `CardDef` templates so
 games can stamp instances with `State.Instantiate(catalog, defID, owner)`,
-and a `DeckList` + composable validators (`MinSize` / `MaxSize` /
+a `DeckList` + composable validators (`MinSize` / `MaxSize` /
 `MaxCopies` / `RequireDefsExist` / `NonNegativeCounts` / `Compose`)
 materialised into a zone via `State.LoadDeckList` in deterministic
-DefID order. Bookkeeping only; no game semantics. Composes with the
-action queue + Random + Replay. Engine never imports it; importers pay
-nothing if their game isn't card-shaped.
+DefID order, and per-entity `Visibility` (`Public` / `OwnerOnly` /
+`Hidden`) plus `State.RedactForViewer(viewer)` that returns a deep-copied
+state with hidden entities, their modifiers, and events that reference
+them stripped — drop it into your game's `PlayerView` instead of
+hand-rolling the strip-opponent-hand dance. Bookkeeping only; no game
+semantics. Composes with the action queue + Random + Replay. Engine
+never imports it; importers pay nothing if their game isn't card-shaped.
 
 ## Comparison vs boardgame.io
 

@@ -753,6 +753,199 @@ func TestLoadDeckListNilCatalog(t *testing.T) {
 	}
 }
 
+func TestVisibilityIsVisibleTo(t *testing.T) {
+	pub := ccg.Entity{Visibility: ccg.Public, Owner: "0"}
+	if !pub.IsVisibleTo("0") || !pub.IsVisibleTo("1") || !pub.IsVisibleTo("") {
+		t.Fatalf("Public should be visible to everyone")
+	}
+	own := ccg.Entity{Visibility: ccg.OwnerOnly, Owner: "0"}
+	if !own.IsVisibleTo("0") {
+		t.Fatalf("OwnerOnly visible to owner: want true")
+	}
+	if own.IsVisibleTo("1") || own.IsVisibleTo("") {
+		t.Fatalf("OwnerOnly visible to non-owner: want false")
+	}
+	hidden := ccg.Entity{Visibility: ccg.Hidden, Owner: "0"}
+	if hidden.IsVisibleTo("0") || hidden.IsVisibleTo("1") {
+		t.Fatalf("Hidden visible: want false for everyone")
+	}
+}
+
+func TestSetVisibilityPersists(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", nil)
+	s.SetVisibility(id, ccg.OwnerOnly)
+	got, _ := s.Get(id)
+	if got.Visibility != ccg.OwnerOnly {
+		t.Fatalf("SetVisibility did not persist: %+v", got)
+	}
+	// Unknown entity is a no-op (does not panic).
+	s.SetVisibility(ccg.EntityID(9999), ccg.Hidden)
+}
+
+func TestRedactForViewerCopiesPublic(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	id := s.NewEntity("creature", "0", map[string]any{"power": 3})
+	_ = s.Add("battlefield", id)
+
+	view := s.RedactForViewer("1") // not the owner
+	got := view.Entities[id]
+	if got.Type != "creature" || got.Owner != "0" || got.AttrInt("power", 0) != 3 {
+		t.Fatalf("public entity should be copied verbatim: %+v", got)
+	}
+}
+
+func TestRedactForViewerHidesOwnerOnlyForNonOwner(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("hand:0", false)
+	id := s.NewEntity("creature", "0", map[string]any{"power": 3})
+	s.SetVisibility(id, ccg.OwnerOnly)
+	_ = s.Add("hand:0", id)
+
+	owner := s.RedactForViewer("0")
+	if owner.Entities[id].Type != "creature" {
+		t.Fatalf("owner should see their own card: %+v", owner.Entities[id])
+	}
+	if owner.Entities[id].AttrInt("power", 0) != 3 {
+		t.Fatalf("owner should see their own attrs")
+	}
+
+	other := s.RedactForViewer("1")
+	stub := other.Entities[id]
+	if stub.Type != "" || stub.Owner != "" || len(stub.Attrs) != 0 || stub.DefID != "" {
+		t.Fatalf("non-owner should see redacted stub: %+v", stub)
+	}
+	if stub.Zone != "hand:0" {
+		t.Fatalf("zone position should leak even when entity is redacted, got %q", stub.Zone)
+	}
+	// Zone membership is preserved by ID.
+	if !other.Contains("hand:0", id) {
+		t.Fatalf("redacted entity should still appear in its zone Members")
+	}
+}
+
+func TestRedactForViewerHidesHiddenFromOwnerToo(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("deck:0", true)
+	id := s.NewEntity("creature", "0", map[string]any{"power": 3})
+	s.SetVisibility(id, ccg.Hidden)
+	_ = s.Add("deck:0", id)
+
+	// Even the owner sees a stub for Hidden.
+	owner := s.RedactForViewer("0")
+	stub := owner.Entities[id]
+	if stub.Type != "" || stub.Owner != "" || len(stub.Attrs) != 0 {
+		t.Fatalf("owner should see redacted stub for Hidden: %+v", stub)
+	}
+}
+
+func TestRedactForViewerStubsModifiersOnHiddenEntities(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("hand:0", false)
+	id := s.NewEntity("creature", "0", map[string]any{"power": 3})
+	s.SetVisibility(id, ccg.OwnerOnly)
+	_ = s.Add("hand:0", id)
+	modID := s.AddModifier(ccg.Modifier{
+		Target: id, Attribute: "power", Op: ccg.OpAdd, Value: 99, Layer: 7, Note: "buff",
+	})
+
+	view := s.RedactForViewer("1") // non-owner
+	m, ok := view.Modifiers[modID]
+	if !ok {
+		t.Fatalf("modifier missing from view")
+	}
+	if m.Attribute != "" || m.Value != nil || m.Note != "" || m.Op != "" {
+		t.Fatalf("modifier should be stubbed for non-owner: %+v", m)
+	}
+	if m.Layer != 7 {
+		t.Fatalf("modifier Layer should be preserved for ordering: got %d", m.Layer)
+	}
+	// Owner should still see the full modifier.
+	ownerView := s.RedactForViewer("0")
+	mFull := ownerView.Modifiers[modID]
+	if mFull.Attribute != "power" || mFull.Value != 99 {
+		t.Fatalf("owner should see full modifier: %+v", mFull)
+	}
+}
+
+func TestRedactForViewerDropsEventsForRedactedEntities(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("hand:0", false)
+	visible := s.NewEntity("creature", "0", nil)
+	hidden := s.NewEntity("creature", "0", nil)
+	s.SetVisibility(hidden, ccg.OwnerOnly)
+
+	s.Publish(ccg.Event{Type: "ping", Source: visible})
+	s.Publish(ccg.Event{Type: "secret_draw", Source: hidden})
+	s.Publish(ccg.Event{Type: "secret_target", Target: hidden})
+
+	view := s.RedactForViewer("1") // non-owner
+	if len(view.Events) != 1 {
+		t.Fatalf("non-owner should see exactly 1 event, got %d: %+v", len(view.Events), view.Events)
+	}
+	if view.Events[0].Type != "ping" {
+		t.Fatalf("non-owner should see only the public event, got %+v", view.Events[0])
+	}
+
+	owner := s.RedactForViewer("0")
+	if len(owner.Events) != 3 {
+		t.Fatalf("owner should see all 3 events, got %d", len(owner.Events))
+	}
+}
+
+func TestRedactForViewerIsDeepCopy(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	id := s.NewEntity("creature", "0", map[string]any{"power": 3})
+	_ = s.Add("battlefield", id)
+
+	view := s.RedactForViewer("0")
+	// Mutate the view; the original must be unaffected.
+	view.Entities[id] = ccg.Entity{ID: id, Type: "tampered"}
+	view.Zones["battlefield"].Members[0] = 999
+	if got, _ := s.Get(id); got.Type != "creature" {
+		t.Fatalf("redacted view should be a deep copy; original entity mutated: %+v", got)
+	}
+	if !s.Contains("battlefield", id) {
+		t.Fatalf("redacted view should be a deep copy; original zone Members mutated")
+	}
+}
+
+func TestEntityVisibilityOmittedFromJSONWhenDefault(t *testing.T) {
+	// Public is the zero value; omitempty must keep existing entities'
+	// wire format byte-identical.
+	s := ccg.NewState()
+	_ = s.NewEntity("creature", "0", nil)
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), "visibility") {
+		t.Fatalf("visibility should be omitted for Public; got: %s", b)
+	}
+}
+
+func TestEntityVisibilityRoundTripsThroughJSON(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", nil)
+	s.SetVisibility(id, ccg.Hidden)
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"visibility":2`) {
+		t.Fatalf("Hidden should serialise to numeric 2: %s", b)
+	}
+	var got ccg.State
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Entities[id].Visibility != ccg.Hidden {
+		t.Fatalf("Visibility lost in round-trip: %+v", got.Entities[id])
+	}
+}
+
 func TestDestroyClearsZonesAndModifiers(t *testing.T) {
 	s := fixture()
 	creatures := ccg.Query(s).InZone("battlefield").Find()

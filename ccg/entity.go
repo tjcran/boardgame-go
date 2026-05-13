@@ -24,13 +24,19 @@ type EntityID uint64
 // instantiated from. It survives zone moves and serialisation. Empty
 // DefID means the entity was minted directly via NewEntity rather
 // than from a catalog.
+//
+// Visibility controls how RedactForViewer projects this entity into
+// a viewer-specific state. The zero value is Public, so existing
+// games and entities created before this field was added behave
+// identically to before.
 type Entity struct {
-	ID    EntityID       `json:"id"`
-	DefID DefID          `json:"def_id,omitempty"`
-	Type  string         `json:"type,omitempty"`
-	Owner string         `json:"owner,omitempty"`
-	Zone  ZoneName       `json:"zone,omitempty"`
-	Attrs map[string]any `json:"attrs,omitempty"`
+	ID         EntityID       `json:"id"`
+	DefID      DefID          `json:"def_id,omitempty"`
+	Type       string         `json:"type,omitempty"`
+	Owner      string         `json:"owner,omitempty"`
+	Zone       ZoneName       `json:"zone,omitempty"`
+	Visibility Visibility     `json:"visibility,omitempty"`
+	Attrs      map[string]any `json:"attrs,omitempty"`
 }
 
 // AttrInt returns the int-cast attr value or def when missing /
