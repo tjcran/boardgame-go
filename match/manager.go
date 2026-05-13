@@ -252,6 +252,37 @@ func (m *Manager) Join(matchID, name string, opts JoinOptions) (JoinResult, erro
 	}, nil
 }
 
+// SetConnected flips a seated player's IsConnected flag and broadcasts the
+// matchData frame to every subscriber. Called by the transport on socket
+// open/close. Returns nil if the player isn't seated (a spectator) so the
+// transport can call this unconditionally.
+func (m *Manager) SetConnected(matchID, playerID string, connected bool) error {
+	if playerID == "" {
+		return nil // spectator
+	}
+	unlock := m.lockMatch(matchID)
+	defer unlock()
+	match, err := m.store.Get(matchID)
+	if err != nil {
+		return err
+	}
+	for i, p := range match.Players {
+		if p.ID != playerID {
+			continue
+		}
+		if p.IsConnected == connected {
+			return nil // no-op, no broadcast
+		}
+		match.Players[i].IsConnected = connected
+		if err := m.store.Update(match); err != nil {
+			return err
+		}
+		m.broadcastMatchData(matchID)
+		return nil
+	}
+	return nil
+}
+
 // Leave removes a player from the match after credential validation.
 func (m *Manager) Leave(matchID, playerID, credentials string) error {
 	unlock := m.lockMatch(matchID)

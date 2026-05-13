@@ -94,7 +94,8 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 	}
 	redact := move.IsRedacted(mc)
 
-	nextG, err := move.Move(mc, req.Args...)
+	moveFn := applyFnWrapMove(game, move.Move)
+	nextG, err := moveFn(mc, req.Args...)
 	if err != nil {
 		return state, err
 	}
@@ -131,7 +132,7 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 
 	// Run turn.OnMove with the updated G.
 	if turn := game.scopeTurn(next.Ctx.Phase); turn != nil && turn.OnMove != nil {
-		next.G = turn.OnMove(mc)
+		next.G = applyFnWrapHook(game, turn.OnMove, GameMethodTurnOnMove)(mc)
 		mc.G = next.G
 	}
 

@@ -52,6 +52,58 @@ type PluginPlayerView interface {
 	PlayerView(data any, g G, ctx Ctx, playerID string, game *Game) any
 }
 
+// GameMethod identifies which engine entry point a plugin's FnWrap is
+// wrapping. Mirrors BGIO's GameMethod enum.
+type GameMethod int
+
+const (
+	GameMethodMove GameMethod = iota
+	GameMethodTurnOnBegin
+	GameMethodTurnOnEnd
+	GameMethodTurnOnMove
+	GameMethodPhaseOnBegin
+	GameMethodPhaseOnEnd
+	GameMethodGameOnEnd
+)
+
+// PluginFnWrapMove lets a plugin wrap MoveFns at registration time. The
+// returned function is called instead of the original; it may inspect or
+// mutate G before/after calling through. Mirrors BGIO's `fnWrap` for moves.
+type PluginFnWrapMove interface {
+	Plugin
+	WrapMove(inner MoveFn) MoveFn
+}
+
+// PluginFnWrapHook is the hook-flavoured equivalent of PluginFnWrapMove.
+// kind tells the plugin which kind of hook is being wrapped so it can
+// behave differently for, say, TurnOnEnd vs. PhaseOnBegin.
+type PluginFnWrapHook interface {
+	Plugin
+	WrapHook(inner HookFn, kind GameMethod) HookFn
+}
+
+// applyFnWrapMove threads every MoveFn through every PluginFnWrapMove. The
+// engine calls this once at move-resolution time so plugins' wrappers
+// compose left-to-right (matching BGIO).
+func applyFnWrapMove(game *Game, fn MoveFn) MoveFn {
+	for _, p := range game.Plugins {
+		if w, ok := p.(PluginFnWrapMove); ok {
+			fn = w.WrapMove(fn)
+		}
+	}
+	return fn
+}
+
+// applyFnWrapHook threads a HookFn through every PluginFnWrapHook.
+func applyFnWrapHook(game *Game, fn HookFn, kind GameMethod) HookFn {
+	for _, p := range game.Plugins {
+		if w, ok := p.(PluginFnWrapHook); ok {
+			fn = w.WrapHook(fn, kind)
+		}
+	}
+	return fn
+}
+
 // runPluginSetup initialises every plugin's private data and stores it on
 // the state. Called from NewMatch.
 func runPluginSetup(game *Game, state State) State {

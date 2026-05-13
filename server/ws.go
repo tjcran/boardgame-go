@@ -143,6 +143,18 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 	playerID := r.URL.Query().Get("playerID")
 	client := &wsClient{conn: conn, ctx: ctx, playerID: playerID}
 
+	// Subscribe so the matchData broadcast from SetConnected reaches us.
+	unsub := s.Manager.Subscribe(matchID, client)
+	defer unsub()
+
+	// Spawn a heartbeat that pings every 25s. A failed ping cancels the
+	// connection context, which unblocks the read loop and lets the
+	// deferred SetConnected(false) flip the flag. 25s is below the
+	// commonly seen 30s idle-cutoff on load balancers.
+	pingCtx, cancelPing := context.WithCancel(ctx)
+	defer cancelPing()
+	go heartbeat(pingCtx, conn, 25*time.Second)
+
 	// Push the initial sync frame on connect (BGIO's `sync` payload: full
 	// state + matchData). Client.Send is used for subsequent updates.
 	if m, err := s.Manager.State(matchID); err == nil {
@@ -172,8 +184,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 		}
 	}
 
-	unsub := s.Manager.Subscribe(matchID, client)
-	defer unsub()
+	// Now that sync has been pushed, flip the connected flag. The
+	// resulting matchData broadcast arrives next on the wire — order is
+	// sync, then matchData(connected=true), then any subsequent updates.
+	_ = s.Manager.SetConnected(matchID, playerID, true)
+	defer s.Manager.SetConnected(matchID, playerID, false)
 
 	for {
 		var msg inbound
@@ -187,6 +202,29 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 			}
 		case "chat":
 			s.Manager.Chat(matchID, msg.PlayerID, msg.Payload)
+		}
+	}
+}
+
+// heartbeat sends WebSocket ping frames at the given interval and tears the
+// connection down on failure. coder/websocket's Ping returns when the
+// peer's pong is received; if the peer is gone or stalled, the call
+// returns an error and we close, which unblocks the read loop in handleWS.
+func heartbeat(ctx context.Context, conn *websocket.Conn, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := conn.Ping(pctx)
+			cancel()
+			if err != nil {
+				conn.Close(websocket.StatusGoingAway, "heartbeat failed")
+				return
+			}
 		}
 	}
 }

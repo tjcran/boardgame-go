@@ -64,7 +64,7 @@ func endTurn(game *Game, state State, nextPlayer string) State {
 	// Turn.OnEnd before rotating.
 	if turn != nil && turn.OnEnd != nil {
 		mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: &Events{}}
-		state.G = turn.OnEnd(mc)
+		state.G = applyFnWrapHook(game, turn.OnEnd, GameMethodTurnOnEnd)(mc)
 		// Events queued from OnEnd are intentionally NOT drained here;
 		// BGIO restricts most events inside OnEnd hooks (see events.md
 		// table). What is allowed (setPhase/endPhase/endGame) is handled
@@ -185,7 +185,7 @@ func endPhase(game *Game, state State, nextPhase string) State {
 	// the phase rotation owns the new turn setup.
 	if turn := game.scopeTurn(state.Ctx.Phase); turn != nil && turn.OnEnd != nil {
 		mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: &Events{}}
-		state.G = turn.OnEnd(mc)
+		state.G = applyFnWrapHook(game, turn.OnEnd, GameMethodTurnOnEnd)(mc)
 	}
 
 	// Resolve next phase.
@@ -198,7 +198,7 @@ func endPhase(game *Game, state State, nextPhase string) State {
 	// OnEnd of the phase we're leaving.
 	if current.OnEnd != nil {
 		mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: &Events{}}
-		state.G = current.OnEnd(mc)
+		state.G = applyFnWrapHook(game, current.OnEnd, GameMethodPhaseOnEnd)(mc)
 	}
 
 	// Clear turn-scoped state.
@@ -245,7 +245,7 @@ func runPhaseOnBegin(game *Game, state State) State {
 		return state
 	}
 	mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: &Events{}}
-	state.G = p.OnBegin(mc)
+	state.G = applyFnWrapHook(game, p.OnBegin, GameMethodPhaseOnBegin)(mc)
 	return state
 }
 
@@ -256,7 +256,7 @@ func runTurnOnBegin(game *Game, state State) State {
 		return state
 	}
 	mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: &Events{}}
-	state.G = turn.OnBegin(mc)
+	state.G = applyFnWrapHook(game, turn.OnBegin, GameMethodTurnOnBegin)(mc)
 	return state
 }
 
@@ -266,7 +266,7 @@ func runGameOnEnd(game *Game, state State) State {
 		return state
 	}
 	mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: &Events{}}
-	state.G = game.OnEnd(mc)
+	state.G = applyFnWrapHook(game, game.OnEnd, GameMethodGameOnEnd)(mc)
 	return state
 }
 

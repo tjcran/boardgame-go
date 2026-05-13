@@ -22,11 +22,11 @@ import (
 func deltaGame() *core.Game {
 	type state struct{ Count int }
 	return &core.Game{
-		Name:        "delta",
-		MinPlayers:  2,
-		MaxPlayers:  2,
-		DeltaState:  true,
-		Setup:       func(_ core.Ctx, _ any) core.G { return &state{} },
+		Name:       "delta",
+		MinPlayers: 2,
+		MaxPlayers: 2,
+		DeltaState: true,
+		Setup:      func(_ core.Ctx, _ any) core.G { return &state{} },
 		Moves: map[string]any{
 			"bump": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
 				s := mc.G.(*state)
@@ -34,6 +34,22 @@ func deltaGame() *core.Game {
 			}),
 		},
 		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+}
+
+// drainUntilType reads frames until one with the wanted type arrives, then
+// returns it. Ignores any intervening sync/matchData frames so tests that
+// only care about a specific post-event frame don't have to enumerate
+// every connect-time frame.
+func drainUntilType(ctx context.Context, conn *websocket.Conn, wantType string) (map[string]any, error) {
+	for {
+		var frame map[string]any
+		if err := wsjson.Read(ctx, conn, &frame); err != nil {
+			return nil, err
+		}
+		if frame["type"] == wantType {
+			return frame, nil
+		}
 	}
 }
 
@@ -59,14 +75,11 @@ func TestDeltaStateSendsPatchFrame(t *testing.T) {
 	}
 	defer conn.CloseNow()
 
-	// Drain the initial sync frame.
-	var initial map[string]any
-	if err := wsjson.Read(ctx, conn, &initial); err != nil {
-		t.Fatalf("initial: %v", err)
-	}
-	if initial["type"] != "sync" {
-		t.Fatalf("expected sync, got %v", initial["type"])
-	}
+	// Wait until the connect-time frames (sync + matchData(connected=true))
+	// have arrived. We test by waiting briefly — alternative would be to
+	// pump frames here, but the next move will produce a patch frame and
+	// drainUntilType handles the rest.
+	time.Sleep(50 * time.Millisecond)
 
 	// Submit a move. The transport should send a `patch` frame next.
 	postJSON(t, srv.URL+"/games/delta/"+created.MatchID+"/move", map[string]any{
@@ -75,14 +88,10 @@ func TestDeltaStateSendsPatchFrame(t *testing.T) {
 		"move":        "bump",
 	})
 
-	var frame map[string]any
-	if err := wsjson.Read(ctx, conn, &frame); err != nil {
-		t.Fatalf("read: %v", err)
+	frame, err := drainUntilType(ctx, conn, "patch")
+	if err != nil {
+		t.Fatalf("drain: %v", err)
 	}
-	if frame["type"] != "patch" {
-		t.Fatalf("expected patch frame, got %v", frame)
-	}
-	// The patch should contain at least one operation touching G.Count.
 	raw, _ := json.Marshal(frame["patch"])
 	if !strings.Contains(string(raw), "Count") {
 		t.Fatalf("patch missing Count op: %s", raw)
