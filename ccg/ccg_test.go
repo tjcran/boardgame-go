@@ -152,6 +152,125 @@ func TestZoneInsertAtErrors(t *testing.T) {
 	}
 }
 
+func TestZoneCapacityRejectsAddBeyondLimit(t *testing.T) {
+	s := ccg.NewState()
+	z := s.NewZone("lane", false)
+	z.Capacity = 2
+	a := s.NewEntity("creature", "0", nil)
+	b := s.NewEntity("creature", "0", nil)
+	c := s.NewEntity("creature", "0", nil)
+
+	if err := s.Add("lane", a); err != nil {
+		t.Fatalf("add a: %v", err)
+	}
+	if err := s.Add("lane", b); err != nil {
+		t.Fatalf("add b: %v", err)
+	}
+	if err := s.Add("lane", c); err != ccg.ErrZoneFull {
+		t.Fatalf("add c at cap: want ErrZoneFull, got %v", err)
+	}
+	if s.Size("lane") != 2 {
+		t.Fatalf("zone size after rejected add: want 2, got %d", s.Size("lane"))
+	}
+	// Entity.Zone should NOT have been set on the rejected insert.
+	got, _ := s.Get(c)
+	if got.Zone != "" {
+		t.Fatalf("Entity.Zone on rejected insert: want empty, got %q", got.Zone)
+	}
+}
+
+func TestZoneCapacityRejectsMoveToFull(t *testing.T) {
+	s := ccg.NewState()
+	hand := s.NewZone("hand", false)
+	hand.Capacity = 1
+	s.NewZone("battlefield", false)
+	a := s.NewEntity("creature", "0", nil)
+	b := s.NewEntity("creature", "0", nil)
+	_ = s.Add("hand", a)
+	_ = s.Add("battlefield", b)
+
+	if err := s.MoveTo(b, "hand"); err != ccg.ErrZoneFull {
+		t.Fatalf("move into full hand: want ErrZoneFull, got %v", err)
+	}
+	// b should still be on battlefield — the move was rejected atomically.
+	got, _ := s.Get(b)
+	if got.Zone != "battlefield" {
+		t.Fatalf("rejected move left entity in inconsistent zone: %q", got.Zone)
+	}
+	if !s.Contains("battlefield", b) {
+		t.Fatalf("rejected move removed entity from source zone")
+	}
+}
+
+func TestZoneCapacityRejectsInsertAtFull(t *testing.T) {
+	s := ccg.NewState()
+	z := s.NewZone("deck", true)
+	z.Capacity = 2
+	a := s.NewEntity("card", "0", nil)
+	b := s.NewEntity("card", "0", nil)
+	c := s.NewEntity("card", "0", nil)
+	_ = s.Add("deck", a)
+	_ = s.Add("deck", b)
+	if err := s.InsertAt("deck", c, 0); err != ccg.ErrZoneFull {
+		t.Fatalf("insert at cap: want ErrZoneFull, got %v", err)
+	}
+}
+
+func TestZoneCapacityZeroMeansUnlimited(t *testing.T) {
+	s := ccg.NewState()
+	z := s.NewZone("hand", false)
+	if z.Capacity != 0 {
+		t.Fatalf("default Capacity: want 0, got %d", z.Capacity)
+	}
+	// 100 adds should all succeed when Capacity == 0 (back-compat).
+	for i := 0; i < 100; i++ {
+		id := s.NewEntity("card", "0", nil)
+		if err := s.Add("hand", id); err != nil {
+			t.Fatalf("add %d under unlimited cap: %v", i, err)
+		}
+	}
+}
+
+func TestZoneCapacityBoundaryAfterRemove(t *testing.T) {
+	s := ccg.NewState()
+	z := s.NewZone("lane", false)
+	z.Capacity = 2
+	a := s.NewEntity("creature", "0", nil)
+	b := s.NewEntity("creature", "0", nil)
+	c := s.NewEntity("creature", "0", nil)
+	_ = s.Add("lane", a)
+	_ = s.Add("lane", b)
+	if err := s.Remove("lane", a); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	// One slot freed — c should fit.
+	if err := s.Add("lane", c); err != nil {
+		t.Fatalf("add after remove freed slot: %v", err)
+	}
+}
+
+func TestZoneCapacityShrinkBelowSizeBlocksFurtherInserts(t *testing.T) {
+	// Setting Capacity below current len(Members) is allowed (no
+	// auto-eviction — the library never destructively edits on a config
+	// write). New inserts fail until the zone shrinks below the cap.
+	s := ccg.NewState()
+	z := s.NewZone("lane", false)
+	a := s.NewEntity("creature", "0", nil)
+	b := s.NewEntity("creature", "0", nil)
+	c := s.NewEntity("creature", "0", nil)
+	_ = s.Add("lane", a)
+	_ = s.Add("lane", b)
+	_ = s.Add("lane", c)
+	z.Capacity = 1 // below current len(=3); existing members stay.
+	if s.Size("lane") != 3 {
+		t.Fatalf("setting Capacity below size auto-evicted: now %d", s.Size("lane"))
+	}
+	d := s.NewEntity("creature", "0", nil)
+	if err := s.Add("lane", d); err != ccg.ErrZoneFull {
+		t.Fatalf("add to over-capacity zone: want ErrZoneFull, got %v", err)
+	}
+}
+
 func TestModifierEffectiveAttrAddsAndStacks(t *testing.T) {
 	s := fixture()
 	creatures := ccg.Query(s).InZone("battlefield").Find()

@@ -14,19 +14,27 @@ type ZoneName string
 // Zone is an ordered or unordered collection of EntityIDs. Ordered
 // zones preserve insertion order (decks); unordered zones can still
 // iterate, but moves don't preserve position.
+//
+// Capacity caps len(Members). 0 means unlimited (default). Add,
+// InsertAt, and cross-zone MoveTo return ErrZoneFull when the cap is
+// reached. The library never auto-evicts: lowering Capacity below the
+// current size leaves existing members in place but blocks new inserts
+// until the zone shrinks below the cap.
 type Zone struct {
-	Name    ZoneName   `json:"name"`
-	Ordered bool       `json:"ordered,omitempty"`
-	Members []EntityID `json:"members,omitempty"`
+	Name     ZoneName   `json:"name"`
+	Ordered  bool       `json:"ordered,omitempty"`
+	Capacity int        `json:"capacity,omitempty"`
+	Members  []EntityID `json:"members,omitempty"`
 }
 
-// ErrUnknownZone / ErrUnknownEntity / ErrZoneEmpty / ErrInvalidPosition
-// are returned for the obvious failure modes.
+// ErrUnknownZone / ErrUnknownEntity / ErrZoneEmpty / ErrInvalidPosition /
+// ErrZoneFull are returned for the obvious failure modes.
 var (
 	ErrUnknownZone     = errors.New("ccg: unknown zone")
 	ErrUnknownEntity   = errors.New("ccg: unknown entity")
 	ErrZoneEmpty       = errors.New("ccg: zone is empty")
 	ErrInvalidPosition = errors.New("ccg: invalid zone position")
+	ErrZoneFull        = errors.New("ccg: zone at capacity")
 )
 
 // NewZone declares a zone. Idempotent — calling with an existing name
@@ -41,7 +49,9 @@ func (s *State) NewZone(name ZoneName, ordered bool) *Zone {
 }
 
 // Add appends an entity to a zone. Updates Entity.Zone to keep the
-// per-entity index consistent.
+// per-entity index consistent. Returns ErrZoneFull when the zone has
+// a non-zero Capacity and is already at it; the rejected insert is
+// atomic — Members and Entity.Zone are not touched.
 func (s *State) Add(zone ZoneName, id EntityID) error {
 	z, ok := s.Zones[zone]
 	if !ok {
@@ -50,6 +60,9 @@ func (s *State) Add(zone ZoneName, id EntityID) error {
 	e, ok := s.Entities[id]
 	if !ok {
 		return ErrUnknownEntity
+	}
+	if z.Capacity > 0 && len(z.Members) >= z.Capacity {
+		return ErrZoneFull
 	}
 	z.Members = append(z.Members, id)
 	e.Zone = zone
@@ -74,6 +87,9 @@ func (s *State) InsertAt(zone ZoneName, id EntityID, position int) error {
 	}
 	if position < 0 || position > len(z.Members) {
 		return ErrInvalidPosition
+	}
+	if z.Capacity > 0 && len(z.Members) >= z.Capacity {
+		return ErrZoneFull
 	}
 	z.Members = append(z.Members, 0)
 	copy(z.Members[position+1:], z.Members[position:])
@@ -104,13 +120,23 @@ func (s *State) Remove(zone ZoneName, id EntityID) error {
 // current position lookup by reading Entity.Zone — O(1) instead of
 // scanning every zone. If the entity has no Zone set, it's treated as
 // new (appended to target only).
+//
+// Returns ErrZoneFull when the destination has a non-zero Capacity and
+// the move would grow it past the cap. The check happens before the
+// source-zone removal, so a rejected move leaves the entity in its
+// original zone unchanged. Same-zone moves (e.Zone == to) skip the
+// capacity check — they don't change member count.
 func (s *State) MoveTo(id EntityID, to ZoneName) error {
-	if _, ok := s.Zones[to]; !ok {
+	toZone, ok := s.Zones[to]
+	if !ok {
 		return ErrUnknownZone
 	}
 	e, ok := s.Entities[id]
 	if !ok {
 		return ErrUnknownEntity
+	}
+	if toZone.Capacity > 0 && e.Zone != to && len(toZone.Members) >= toZone.Capacity {
+		return ErrZoneFull
 	}
 	if e.Zone != "" {
 		if from, ok := s.Zones[e.Zone]; ok {
@@ -122,7 +148,7 @@ func (s *State) MoveTo(id EntityID, to ZoneName) error {
 			}
 		}
 	}
-	s.Zones[to].Members = append(s.Zones[to].Members, id)
+	toZone.Members = append(toZone.Members, id)
 	e.Zone = to
 	s.Entities[id] = e
 	return nil
