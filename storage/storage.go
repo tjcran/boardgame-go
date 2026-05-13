@@ -33,6 +33,15 @@ type Match struct {
 	CreatedAt   int64      `json:"createdAt"`
 	NextMatchID string     `json:"nextMatchID,omitempty"`
 
+	// Name is an optional human-readable label set at create time
+	// (e.g. "Friday Night Catan"). Surfaced via Lobby listings.
+	Name string `json:"name,omitempty"`
+
+	// JoinCode is an optional short code (6-8 chars) clients can give
+	// to friends instead of the opaque match ID. Looked up via
+	// GET /games/{gameName}/byCode/{code}. Addresses BGIO issue #574.
+	JoinCode string `json:"joinCode,omitempty"`
+
 	// SchemaVersion is the Game.SchemaVersion under which State was last
 	// written. Read by Manager on load to decide whether to call
 	// Game.Migrate. Defaults to 0 for legacy records — that's also the

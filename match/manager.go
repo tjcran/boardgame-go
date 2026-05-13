@@ -198,11 +198,40 @@ type CreateOptions struct {
 	NumPlayers int
 	SetupData  any
 	Unlisted   bool
+
+	// Name is an optional human-readable label saved on the match
+	// ("Friday Night Catan"). Empty for unnamed matches.
+	Name string
+
+	// JoinCode is an optional short code players can use as an
+	// alternative to the opaque match ID. When set, the new match
+	// answers to GET /games/{name}/byCode/{code}. Caller is
+	// responsible for ensuring uniqueness across a game; collisions
+	// surface as a create error.
+	JoinCode string
 }
 
 // Create starts a fresh match. Returns the new match ID.
 func (m *Manager) Create(gameName string, opts CreateOptions) (string, error) {
-	return m.createLocked(gameName, opts.NumPlayers, opts.SetupData, opts.Unlisted)
+	return m.createLockedFull(gameName, opts)
+}
+
+// FindByJoinCode returns the first match in gameName whose JoinCode
+// equals code. Empty code or no match returns ErrUnknownMatch.
+func (m *Manager) FindByJoinCode(gameName, code string) (*storage.Match, error) {
+	if code == "" {
+		return nil, storage.ErrNotFound
+	}
+	matches, err := m.store.List(gameName)
+	if err != nil {
+		return nil, err
+	}
+	for _, mm := range matches {
+		if mm.JoinCode == code {
+			return mm, nil
+		}
+	}
+	return nil, storage.ErrNotFound
 }
 
 // JoinResult is what Join returns: the seat-bound player ID, the assigned
@@ -517,6 +546,55 @@ func (m *Manager) PlayAgain(matchID, playerID, credentials string, numPlayers in
 	prev.NextMatchID = next
 	_ = m.store.Update(prev)
 	return next, nil
+}
+
+// createLockedFull is the create routine used by Create with full
+// options. createLocked (below) is kept for PlayAgain's narrower
+// callsite.
+func (m *Manager) createLockedFull(gameName string, opts CreateOptions) (string, error) {
+	g := m.Game(gameName)
+	if g == nil {
+		return "", fmt.Errorf("%w: %s", ErrUnknownGame, gameName)
+	}
+	if g.ValidateSetupData != nil {
+		if msg := g.ValidateSetupData(opts.SetupData, g.PlayerCount(opts.NumPlayers)); msg != "" {
+			return "", fmt.Errorf("invalid setupData: %s", msg)
+		}
+	}
+	// JoinCode uniqueness: reject the create if another match in the
+	// same game already owns this code.
+	if opts.JoinCode != "" {
+		if existing, err := m.FindByJoinCode(gameName, opts.JoinCode); err == nil && existing != nil {
+			return "", fmt.Errorf("join code %q already in use for game %s", opts.JoinCode, gameName)
+		}
+	}
+	id := newID()
+	match := &storage.Match{
+		ID:            id,
+		GameName:      gameName,
+		State:         core.NewMatch(g, opts.NumPlayers, opts.SetupData),
+		SetupData:     opts.SetupData,
+		Unlisted:      opts.Unlisted,
+		CreatedAt:     m.now().Unix(),
+		SchemaVersion: g.SchemaVersion,
+		Name:          opts.Name,
+		JoinCode:      opts.JoinCode,
+	}
+	if err := m.store.Create(match); err != nil {
+		return "", err
+	}
+	m.Logger.Info("match.created",
+		"match_id", id,
+		"game", gameName,
+		"num_players", match.State.Ctx.NumPlayers,
+		"unlisted", opts.Unlisted,
+		"name", opts.Name, "join_code", opts.JoinCode)
+	m.fireLifecycle(LifecycleEvent{
+		Kind: LifecycleMatchCreated, MatchID: id,
+		State: match.State, Match: match,
+	})
+	m.scheduleTurnTimer(id, match.State, g)
+	return id, nil
 }
 
 // createLocked is the inner Create routine used by both Create and

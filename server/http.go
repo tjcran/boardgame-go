@@ -94,6 +94,8 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.handleListMatches(w, r, gameName)
 	case len(tail) == 1 && tail[0] == "create" && r.Method == http.MethodPost:
 		s.handleCreate(w, r, gameName)
+	case len(tail) == 2 && tail[0] == "byCode" && r.Method == http.MethodGet:
+		s.handleByCode(w, r, gameName, tail[1])
 	case len(tail) == 1 && r.Method == http.MethodGet:
 		s.handleGetMatch(w, r, gameName, tail[0])
 	case len(tail) == 2 && tail[1] == "join" && r.Method == http.MethodPost:
@@ -120,9 +122,11 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 // ---- create ---------------------------------------------------------------
 
 type createReq struct {
-	NumPlayers int  `json:"numPlayers"`
-	SetupData  any  `json:"setupData,omitempty"`
-	Unlisted   bool `json:"unlisted,omitempty"`
+	NumPlayers int    `json:"numPlayers"`
+	SetupData  any    `json:"setupData,omitempty"`
+	Unlisted   bool   `json:"unlisted,omitempty"`
+	Name       string `json:"name,omitempty"`
+	JoinCode   string `json:"joinCode,omitempty"`
 }
 type createResp struct {
 	MatchID string `json:"matchID"`
@@ -135,6 +139,8 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request, gameName s
 		NumPlayers: req.NumPlayers,
 		SetupData:  req.SetupData,
 		Unlisted:   req.Unlisted,
+		Name:       req.Name,
+		JoinCode:   req.JoinCode,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -142,6 +148,17 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request, gameName s
 	}
 	metrics.MatchesCreated.Add(1)
 	writeJSON(w, http.StatusCreated, createResp{MatchID: id})
+}
+
+// handleByCode resolves a match by JoinCode. Returns the same summary
+// shape as GET /games/{name}/{id}.
+func (s *Server) handleByCode(w http.ResponseWriter, _ *http.Request, gameName, code string) {
+	m, err := s.Manager.FindByJoinCode(gameName, code)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toSummary(m))
 }
 
 // ---- list games -----------------------------------------------------------

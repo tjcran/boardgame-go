@@ -19,20 +19,27 @@ import (
 	"github.com/tjcran/boardgame-go/core"
 )
 
-// Action is one move a bot might play. The Move name and Args correspond
-// 1:1 to a core.MoveRequest.
-type Action struct {
-	Move string
-	Args []any
-}
+// Action is one move a bot might play. Type-aliased to core.EnumerateAction
+// so games that supply core.Game.Enumerate share the same shape with
+// every bot — no conversion needed.
+type Action = core.EnumerateAction
 
-// EnumerateFn returns every legal Action for a given (G, Ctx, playerID).
-// Games supply one of these to opt into bot support — the engine can't
-// enumerate moves on its own (move signatures take typed args).
-//
-// The function should be pure (no I/O, no goroutines): bots may call it
-// thousands of times per turn during MCTS rollouts.
-type EnumerateFn func(g core.G, ctx core.Ctx, playerID string) []Action
+// EnumerateFn is type-aliased to core.EnumerateFn. Games can define one
+// once on Game.Enumerate; every bot constructor falls back to it when
+// the bot doesn't supply its own. Addresses BGIO issue #1078.
+type EnumerateFn = core.EnumerateFn
+
+// resolveEnumerate returns the explicit enumerate function if set,
+// otherwise falls back to game.Enumerate. nil if neither is set.
+func resolveEnumerate(explicit EnumerateFn, game *core.Game) EnumerateFn {
+	if explicit != nil {
+		return explicit
+	}
+	if game != nil {
+		return game.Enumerate
+	}
+	return nil
+}
 
 // Bot is the strategy interface. Play takes a State and returns the
 // Action the bot wants to play next. Implementations should respect ctx
@@ -47,7 +54,13 @@ var ErrNoMoves = errors.New("no legal moves available")
 // RandomBot picks one of the enumerated actions uniformly at random.
 // Useful as a baseline opponent.
 type RandomBot struct {
+	// Enumerate, if set, overrides Game.Enumerate. Most bots leave it
+	// unset and let the game's first-class Enumerate drive every bot.
 	Enumerate EnumerateFn
+	// Game lets the bot fall back to game.Enumerate when its own
+	// Enumerate is nil. Optional — supply if you want the "no
+	// per-bot enumerate" ergonomics from BGIO issue #1078.
+	Game *core.Game
 	// Seed is the PRNG seed; passed through plugins/random's seed
 	// scheme so the same value produces the same sequence.
 	Seed any
@@ -59,7 +72,11 @@ type RandomBot struct {
 
 // Play implements Bot.
 func (b *RandomBot) Play(ctx context.Context, state core.State, playerID string) (Action, error) {
-	actions := b.Enumerate(state.G, state.Ctx, playerID)
+	enum := resolveEnumerate(b.Enumerate, b.Game)
+	if enum == nil {
+		return Action{}, errors.New("RandomBot: no Enumerate function (set bot.Enumerate or game.Enumerate)")
+	}
+	actions := enum(state.G, state.Ctx, playerID)
 	if len(actions) == 0 {
 		return Action{}, ErrNoMoves
 	}
@@ -95,14 +112,36 @@ type MCTSBot struct {
 	// have enough samples to call anything decisive. Ignored when
 	// EarlyStop is nil.
 	EarlyStopAfter int
+
+	// Perspective, when true, runs MCTS rollouts against
+	// core.PlayerView(state, playerID) so the bot can't access opponent
+	// secret state. Mandatory for any game with hidden information
+	// (deck shuffles, fog of war, face-down cards). BGIO has no
+	// equivalent — their MCTS sees the full state and can effectively
+	// cheat. Issue #1069.
+	//
+	// Note: rollouts also use PlayerView for moves made by *opponents*
+	// during the rollout. The bot's worldview is one-sided throughout.
+	Perspective bool
 }
 
 // Play implements Bot.
 func (b *MCTSBot) Play(ctx context.Context, state core.State, playerID string) (Action, error) {
-	if b.Game == nil || b.Enumerate == nil {
-		return Action{}, errors.New("MCTSBot: Game and Enumerate are required")
+	if b.Game == nil {
+		return Action{}, errors.New("MCTSBot: Game is required")
 	}
-	actions := b.Enumerate(state.G, state.Ctx, playerID)
+	enum := resolveEnumerate(b.Enumerate, b.Game)
+	if enum == nil {
+		return Action{}, errors.New("MCTSBot: no Enumerate function (set bot.Enumerate or game.Enumerate)")
+	}
+	// Honour the Perspective option (BGIO #1069): if set, rollouts run
+	// against the player's filtered view so the AI can't read opponent
+	// secret state. Default: full state (server-omniscient mode, fine
+	// for solitaires and open-information games).
+	if b.Perspective {
+		state = core.PlayerView(b.Game, state, playerID)
+	}
+	actions := enum(state.G, state.Ctx, playerID)
 	if len(actions) == 0 {
 		return Action{}, ErrNoMoves
 	}
@@ -162,8 +201,16 @@ func (b *MCTSBot) Play(ctx context.Context, state core.State, playerID string) (
 // caller's win fraction: 1.0 win, 0.5 draw, 0.0 loss.
 func (b *MCTSBot) rollout(state core.State, viewer string, rng *uint64) float64 {
 	const maxDepth = 100
+	enum := resolveEnumerate(b.Enumerate, b.Game)
 	for d := 0; d < maxDepth && state.Ctx.Gameover == nil; d++ {
-		actions := b.Enumerate(state.G, state.Ctx, state.Ctx.CurrentPlayer)
+		// Perspective: keep the viewer's world-view throughout the
+		// rollout. We re-filter on every step so secret-state changes
+		// stay hidden even as the cascade runs.
+		view := state
+		if b.Perspective {
+			view = core.PlayerView(b.Game, state, viewer)
+		}
+		actions := enum(view.G, view.Ctx, state.Ctx.CurrentPlayer)
 		if len(actions) == 0 {
 			break
 		}

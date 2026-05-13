@@ -28,6 +28,24 @@ type PlayerViewFn func(g G, ctx Ctx, playerID string) G
 // game and writes the value to ctx.Gameover.
 type EndIfFn func(mc *MoveContext) any
 
+// EnumerateAction is one legal move available to a player from a given
+// state. Returned by Game.Enumerate to drive bots, AI training, replay
+// validators, and the BGIO-style "which moves are legal?" client APIs.
+type EnumerateAction struct {
+	Move string `json:"move"`
+	Args []any  `json:"args,omitempty"`
+}
+
+// EnumerateFn lists every legal (Move, Args) for a player at the given
+// state. Required by the `bots` package and any external "AI knows the
+// move space" use case. BGIO has a similar concept inside their AI
+// framework; lifting it to the Game definition (issue #1078) makes it
+// reusable.
+//
+// The function should be pure — bots may call it thousands of times
+// per turn during MCTS rollouts.
+type EnumerateFn func(g G, ctx Ctx, playerID string) []EnumerateAction
+
 // Game is a declarative definition. The framework consumes one of these and
 // runs matches against it.
 //
@@ -122,6 +140,13 @@ type Game struct {
 
 	// Plugins are applied in order. See core/plugin.go.
 	Plugins []Plugin
+
+	// Enumerate, if set, lists the legal moves for a given (G, Ctx,
+	// playerID). Used by bots, AI training, and clients that want to
+	// render "available actions." Optional — games that don't supply
+	// it can still be played; bots just have to be told the move space
+	// out of band.
+	Enumerate EnumerateFn
 }
 
 // PlayerCount returns the configured player count for a fresh match,
