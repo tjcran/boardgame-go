@@ -300,6 +300,39 @@ func TestCORSAllowsLocalhostInDevelopment(t *testing.T) {
 	}
 }
 
+// TestCORSRejectsLocalhostLookalike guards H3: the localhost-in-
+// development preset must compare hostnames exactly, not by prefix,
+// so attacker-controlled hostnames like "localhost.attacker.com"
+// (a registered DNS name) aren't accepted as localhost.
+func TestCORSRejectsLocalhostLookalike(t *testing.T) {
+	m := match.NewManager(storage.NewMemory())
+	m.Register(tictactoe.New())
+	s := New(m)
+	s.Origins = []string{OriginLocalhostInDevelopment}
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+
+	for _, origin := range []string{
+		"http://localhost.attacker.com",
+		"https://localhost.attacker.com:8080",
+		"http://127.0.0.1.attacker.com",
+		"http://[::1].attacker.com",   // syntactically malformed but worth fuzzing
+		"http://evil.com#http://localhost", // fragment trick — Hostname() strips fragments
+	} {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/games", nil)
+		req.Header.Set("Origin", origin)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("get %q: %v", origin, err)
+		}
+		got := resp.Header.Get("Access-Control-Allow-Origin")
+		resp.Body.Close()
+		if got != "" {
+			t.Fatalf("origin %q must not match localhost preset; got Access-Control-Allow-Origin=%q", origin, got)
+		}
+	}
+}
+
 func TestCORSRejectsUnlistedOrigin(t *testing.T) {
 	m := match.NewManager(storage.NewMemory())
 	m.Register(tictactoe.New())

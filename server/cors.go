@@ -2,8 +2,8 @@ package server
 
 import (
 	"net/http"
+	"net/url"
 	"os"
-	"strings"
 )
 
 // Origins.LOCALHOST_IN_DEVELOPMENT is a CORS preset that mirrors BGIO's
@@ -59,14 +59,21 @@ func (s *Server) originAllowed(origin string) bool {
 	return false
 }
 
-// isLocalhost recognises the common localhost forms a browser sends as the
-// Origin header.
+// isLocalhost recognises the common localhost forms a browser sends as
+// the Origin header. The check parses the origin and compares the
+// hostname exactly so attacker-controlled hostnames like
+// "localhost.attacker.com" or "127.0.0.1.attacker.com" don't match —
+// a prefix check would accept them.
 func isLocalhost(origin string) bool {
-	if strings.HasPrefix(origin, "http://localhost") ||
-		strings.HasPrefix(origin, "https://localhost") ||
-		strings.HasPrefix(origin, "http://127.0.0.1") ||
-		strings.HasPrefix(origin, "https://127.0.0.1") ||
-		strings.HasPrefix(origin, "http://[::1]") {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme == "" {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
 		return true
 	}
 	return false
