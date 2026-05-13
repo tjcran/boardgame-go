@@ -321,6 +321,83 @@ target queries. Bookkeeping only; no game semantics. Composes with the
 action queue + Random + Replay. Engine never imports it; importers pay
 nothing if their game isn't card-shaped.
 
+## Comparison vs boardgame.io
+
+### Parity — features both frameworks ship
+
+| Area | boardgame.io | boardgame-go |
+|---|:---:|:---:|
+| Declarative `Game` with `Setup` / `Moves` / `EndIf` / `OnEnd` | ✅ | ✅ |
+| Phases, stages, active-players (with `ALL`/`OTHERS`/`Once` presets) | ✅ | ✅ |
+| Turn-order strategies (Default/Reset/Continue/Once/Custom/CustomFrom) | ✅ | ✅ |
+| Phase / Turn `OnBegin` / `OnEnd` / `OnMove` / `EndIf` hooks | ✅ | ✅ |
+| Events from inside moves (`endTurn` / `setPhase` / `setStage` / `endGame` / …) | ✅ | ✅ |
+| Undo / Redo with per-turn snapshots and `DisableUndo` | ✅ | ✅ |
+| Move log with per-move `Redact` redaction | ✅ | ✅ |
+| Seeded RNG plugin (`Die` / `D4`–`D20` / `Shuffle`) | ✅ | ✅ |
+| Plugin lifecycle (`Setup` / `API` / `Flush` / `IsInvalid` / `PlayerView` / `fnWrap`) | ✅ | ✅ |
+| `PluginPlayer` (per-seat records with Opponent helper) | ✅ | ✅ |
+| Secret state via `PlayerView` (+ `STRIP_SECRETS` helper) | ✅ | ✅ |
+| Full Lobby REST API (create/join/leave/update/playAgain/move) | ✅ | ✅ |
+| Per-seat credentials with pluggable generate/authenticate hooks | ✅ | ✅ |
+| WebSocket transport with `sync` / `update` / `matchData` / `chat` frames | ✅ | ✅ |
+| JSON-Patch `deltaState` transport | ✅ | ✅ |
+| CORS with `LOCALHOST_IN_DEVELOPMENT` preset | ✅ | ✅ |
+| FlatFile storage adapter | ✅ | ✅ |
+| MCTS + Random bots | ✅ | ✅ |
+
+### Beyond BGIO — features we ship that BGIO doesn't
+
+| Feature | Why it matters | BGIO equivalent |
+|---|---|---|
+| **Cross-match concurrency by default** (goroutines) | Manager flat at ~3 µs/op across 1–64 concurrent matches | Single Node event loop bottlenecks everything |
+| **Action queue + drain primitive** (`mc.Queue.Push` / `Block` with `ResumeTag`) | MTG-style trigger cascades with pause/resume as first-class engine state | None — users hand-roll `processNext` moves |
+| **`ccg/` library** (entities, zones, layered modifiers, event bus, target queries) | CCG / TCG / deckbuilder bookkeeping with no opinionated semantics | None |
+| **Compile-time-typed games** (`typedgame.Game[S]`) | `mc.G.Score` with no runtime asserts | TypeScript types help IDE; framework is still untyped at runtime |
+| **`Move.Timeout`** | Cooperative per-move cancellation via `context.Context` | None |
+| **`Move.IgnoreBlocks`** | Concede / forfeit can bypass cascade pause | None |
+| **`MCTSBot.Perspective`** | AI can't read opponent secret state during rollouts | MCTS sees full state; effectively cheats |
+| **`MCTSBot.EarlyStop`** | Halts search when one branch dominates | None |
+| **`bots/llm/`** | OpenAI / OpenRouter / Anthropic with tool-calling-first design | None |
+| **`bots.Simulate`** | N-match round-robin between bots with aggregate stats | None |
+| **`Manager.OnLifecycle`** | Subscribe to `match.created` / `joined` / `left` / `moved` / `gameOver` / `reset` | Ad-hoc broadcast hook lists |
+| **`Manager.AutoExpire` + `Turn.TimeBudget`** | Engine-driven turn timers | Open since 2017 (BGIO #92) |
+| **`Manager.RunJanitor`** | Background sweep wipes idle matches | None |
+| **`Manager.DryMove`** | Preview a move without persisting (UI hover) | Open since 2019 (BGIO #636) |
+| **`Manager.Reset`** | Reset multiplayer match keeping seats + credentials | Open (BGIO #1166) |
+| **`Manager.ExportMatch` / `ImportMatch`** | Portable bundle for replay / debugging / AI training | None |
+| **`Game.AllowDynamicPlayers`** | Mid-match join expanding PlayOrder + NumPlayers | None (BGIO #884, #1102) |
+| **`Game.SpectatorsAllowed`** | Lock matches to seated players | None (BGIO #1007) |
+| **`Game.SchemaVersion` + `Migrate`** | Schema evolution for long-lived persisted matches | None |
+| **`Game.Validate()` at registration** | Catches dangling `Phase.Next`, duplicate `Start`, malformed moves before runtime | None |
+| **`Game.Enumerate`** | First-class legal-action function shared by all bots | BGIO #1078 — only used internally by AI |
+| **`Events.RemovePlayer` / `RunMove`** | Player elimination, chained move dispatch | BGIO #616, #1085 |
+| **Stage `OnBegin` / `OnEnd` hooks** | Pre/post-entry hooks for intra-turn sub-states | BGIO #608 (docs say they exist; never landed) |
+| **`mc.AddLog` from hooks** | Custom log entries from inside `OnBegin` / `OnEnd` | BGIO #1228 (log plugin only saw moves) |
+| **`Game.OnUndo`** | Scrub transient fields (animations) on undo | BGIO #1135 |
+| **Match join codes** | Short invite codes (e.g. `ABC123`) instead of opaque IDs | BGIO #574 (WIP, never landed) |
+| **Heartbeat + `IsConnected` tracking** | 25 s ping/pong flips connected flag; matchData broadcast | None |
+| **Per-WS bounded send queue** | Slow client can't block the per-match write lock | Open bug — Node serialises subscriber writes |
+| **Deterministic replay** (`core.Replay` / `ReplayUntil`) | Re-apply a recorded log to byte-identical final state | Leaks `Date.now`/`Math.random`; not reliable |
+| **`cmd/boardgame-go-vet`** | `go vet` analyser flagging `time.Now`/`math/rand` in moves | Documented contract; not enforced |
+| **`context.Context` propagation** | Cancellation + deadlines through `Apply` | None |
+| **`Manager.UseOptimisticConcurrency`** | Multi-instance deployments without sticky sessions | Requires sticky LB + Redis adapter |
+| **5 storage backends** (Memory / FlatFile / **SQLite** / **Postgres** / **Redis**) | Pick durability + scale tier per deployment | Memory + FlatFile in-tree; community packages for the rest |
+| **3 storage decorators** (`Cached` / `WriteBehind` / `Invalidator`) | TTL+LRU cache, async batched flushes, cross-node cache busts | None |
+| **`/debug/pprof` + `/debug/vars`** admin mux | Free profiling + per-event counters | Add via npm packages |
+| **Structured `log/slog`** | `match_id` / `player_id` / `move` / `dur_us` fields | `console.log` |
+| **Single static binary** | Cross-compile to any platform; no Node runtime needed | Node + npm install pipeline |
+
+### Not in this repo — BGIO ships, we skip
+
+| Feature | Why we skipped |
+|---|---|
+| React `<Client/>` / `<Lobby/>` components | Intrinsically JS + DOM; no Go analogue |
+| Redux store / enhancer / DevTools integration | JS-only |
+| In-browser Debug Panel | JS-only |
+| Plain JS `Client` / `LobbyClient` | The wire protocol is language-agnostic JSON; any client works |
+| TypeScript transport library | Filed as [issue #6](https://github.com/tjcran/boardgame-go/issues/6) — cross-language release process is the open question |
+
 ## Performance
 
 From `bench/` on a Ryzen 9 5900X:
