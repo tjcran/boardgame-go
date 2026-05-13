@@ -19,8 +19,14 @@ type EntityID uint64
 // the library passes through unmodified but uses for target queries
 // and modifier targeting. Helper accessors AttrInt / AttrStr /
 // AttrBool give type-asserting reads with a default-on-missing.
+//
+// DefID, when non-empty, links the entity back to the CardDef it was
+// instantiated from. It survives zone moves and serialisation. Empty
+// DefID means the entity was minted directly via NewEntity rather
+// than from a catalog.
 type Entity struct {
 	ID    EntityID       `json:"id"`
+	DefID DefID          `json:"def_id,omitempty"`
 	Type  string         `json:"type,omitempty"`
 	Owner string         `json:"owner,omitempty"`
 	Zone  ZoneName       `json:"zone,omitempty"`

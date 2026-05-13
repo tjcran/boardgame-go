@@ -1,6 +1,8 @@
 package ccg_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/tjcran/boardgame-go/ccg"
@@ -377,6 +379,168 @@ func TestEventBufferCapped(t *testing.T) {
 	}
 	if len(s.Events) > ccg.MaxEventHistory {
 		t.Fatalf("expected Events ≤ %d, got %d", ccg.MaxEventHistory, len(s.Events))
+	}
+}
+
+func TestCatalogRegisterAndGet(t *testing.T) {
+	c := ccg.NewCatalog()
+	if c.Len() != 0 {
+		t.Fatalf("empty catalog Len: want 0, got %d", c.Len())
+	}
+	if err := c.Register(ccg.CardDef{
+		ID: "goblin", Type: "creature",
+		BaseAttrs: map[string]any{"power": 2, "toughness": 1},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	got, ok := c.Get("goblin")
+	if !ok {
+		t.Fatalf("Get(goblin): not found after register")
+	}
+	if got.Type != "creature" || got.BaseAttrs["power"] != 2 {
+		t.Fatalf("Get returned wrong def: %+v", got)
+	}
+	if _, ok := c.Get("ghost"); ok {
+		t.Fatalf("Get(ghost): unexpectedly found")
+	}
+	if c.Len() != 1 {
+		t.Fatalf("catalog Len after 1 register: want 1, got %d", c.Len())
+	}
+}
+
+func TestCatalogDuplicateRegisterIsRejected(t *testing.T) {
+	c := ccg.NewCatalog()
+	if err := c.Register(ccg.CardDef{ID: "x", Type: "creature"}); err != nil {
+		t.Fatalf("first register: %v", err)
+	}
+	err := c.Register(ccg.CardDef{ID: "x", Type: "spell"})
+	if err != ccg.ErrDuplicateDef {
+		t.Fatalf("duplicate register: want ErrDuplicateDef, got %v", err)
+	}
+	// First registration must remain intact (no silent overwrite).
+	got, _ := c.Get("x")
+	if got.Type != "creature" {
+		t.Fatalf("duplicate register clobbered original: %+v", got)
+	}
+}
+
+func TestCatalogRegisterClonesBaseAttrs(t *testing.T) {
+	c := ccg.NewCatalog()
+	attrs := map[string]any{"power": 3}
+	if err := c.Register(ccg.CardDef{ID: "x", BaseAttrs: attrs}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// Mutate caller's map after registration; catalog must be unaffected.
+	attrs["power"] = 99
+	got, _ := c.Get("x")
+	if got.BaseAttrs["power"] != 3 {
+		t.Fatalf("catalog leaked caller's map mutation: %+v", got.BaseAttrs)
+	}
+}
+
+func TestStateInstantiateStampsDefIDAndAttrs(t *testing.T) {
+	c := ccg.NewCatalog()
+	_ = c.Register(ccg.CardDef{
+		ID: "goblin", Type: "creature",
+		BaseAttrs: map[string]any{"power": 2, "toughness": 1},
+	})
+	s := ccg.NewState()
+	id, err := s.Instantiate(c, "goblin", "0")
+	if err != nil {
+		t.Fatalf("instantiate: %v", err)
+	}
+	got, ok := s.Get(id)
+	if !ok {
+		t.Fatalf("Get after instantiate: not found")
+	}
+	if got.DefID != "goblin" {
+		t.Fatalf("Entity.DefID: want goblin, got %q", got.DefID)
+	}
+	if got.Type != "creature" {
+		t.Fatalf("Entity.Type: want creature, got %q", got.Type)
+	}
+	if got.Owner != "0" {
+		t.Fatalf("Entity.Owner: want 0, got %q", got.Owner)
+	}
+	if got.AttrInt("power", 0) != 2 || got.AttrInt("toughness", 0) != 1 {
+		t.Fatalf("Entity attrs not copied from def: %+v", got.Attrs)
+	}
+}
+
+func TestStateInstantiateClonesAttrsPerInstance(t *testing.T) {
+	c := ccg.NewCatalog()
+	_ = c.Register(ccg.CardDef{
+		ID: "goblin", Type: "creature",
+		BaseAttrs: map[string]any{"power": 2},
+	})
+	s := ccg.NewState()
+	a, _ := s.Instantiate(c, "goblin", "0")
+	b, _ := s.Instantiate(c, "goblin", "1")
+	// Mutate a's power; b's power must be untouched.
+	s.SetAttr(a, "power", 99)
+	bEnt, _ := s.Get(b)
+	if bEnt.AttrInt("power", 0) != 2 {
+		t.Fatalf("instances share attrs map: a mutation leaked to b (%v)", bEnt.Attrs)
+	}
+	// And the catalog must still report the pristine def value.
+	def, _ := c.Get("goblin")
+	if def.BaseAttrs["power"] != 2 {
+		t.Fatalf("instance attr mutation leaked back to catalog: %+v", def.BaseAttrs)
+	}
+}
+
+func TestStateInstantiateUnknownDef(t *testing.T) {
+	c := ccg.NewCatalog()
+	s := ccg.NewState()
+	if _, err := s.Instantiate(c, "ghost", "0"); err != ccg.ErrUnknownDef {
+		t.Fatalf("unknown def: want ErrUnknownDef, got %v", err)
+	}
+}
+
+func TestStateInstantiateNilCatalog(t *testing.T) {
+	s := ccg.NewState()
+	if _, err := s.Instantiate(nil, "anything", "0"); err != ccg.ErrUnknownDef {
+		t.Fatalf("nil catalog: want ErrUnknownDef, got %v", err)
+	}
+}
+
+func TestEntityDefIDOmittedFromJSONWhenEmpty(t *testing.T) {
+	// Entities minted via NewEntity have no DefID; omitempty should
+	// keep the wire format byte-identical to pre-DefID builds.
+	s := ccg.NewState()
+	_ = s.NewEntity("creature", "0", nil)
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), "def_id") {
+		t.Fatalf("def_id should be omitted when empty; got: %s", b)
+	}
+}
+
+func TestEntityDefIDRoundTripsThroughJSON(t *testing.T) {
+	c := ccg.NewCatalog()
+	_ = c.Register(ccg.CardDef{
+		ID: "goblin", Type: "creature",
+		BaseAttrs: map[string]any{"power": 2},
+	})
+	s := ccg.NewState()
+	id, _ := s.Instantiate(c, "goblin", "0")
+
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"def_id":"goblin"`) {
+		t.Fatalf("def_id missing from serialized state: %s", b)
+	}
+
+	var got ccg.State
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Entities[id].DefID != "goblin" {
+		t.Fatalf("DefID lost in round-trip: %+v", got.Entities[id])
 	}
 }
 
