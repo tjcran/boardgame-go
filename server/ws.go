@@ -17,58 +17,117 @@ import (
 
 // wsClient is one connected browser tab. The match.Manager pushes state
 // snapshots through Send; the connection's read loop receives moves.
+//
+// Writes go through a bounded send channel drained by a single goroutine,
+// so a slow client never blocks the manager's broadcast — and never holds
+// the per-match lock that Manager.Move acquires. When the channel fills
+// (slow consumer), older state-shaped frames are dropped (we always have
+// a fresher one coming); chat/error frames drop too, but the connection
+// is closed shortly after via the write loop's error path.
+//
+// BGIO has this bug structurally — Node's single event loop serialises
+// every subscriber's write; we get true per-subscriber concurrency for
+// free via goroutines.
 type wsClient struct {
-	mu       sync.Mutex
 	conn     *websocket.Conn
 	ctx      context.Context
 	playerID string // "" for spectators
 
-	// prev is the last redacted state we sent this client. Used by
-	// SendPatch to compute JSON Patch diffs when Game.DeltaState=true.
-	prev *core.State
+	out  chan map[string]any
+	done chan struct{}
+
+	prevMu sync.Mutex
+	prev   *core.State
 }
 
-// Send implements match.Subscriber. The mutex matters because the manager
-// fans out to subscribers without coordinating with the read loop.
-//
-// The wire frame is BGIO's `update` shape: { type: "update", state, matchID }.
-// The initial state push at connect time uses `sync` (see handleWS).
+// wsSendBufferSize is how many pending frames we hold per connection
+// before dropping. ~32 messages is plenty for a healthy client; a client
+// that builds 32 frames of backlog without acking is by definition stuck.
+const wsSendBufferSize = 32
+
+// newWSClient wires the bounded send channel and starts the writer
+// goroutine. Caller must call client.close() when the socket closes.
+func newWSClient(ctx context.Context, conn *websocket.Conn, playerID string) *wsClient {
+	c := &wsClient{
+		conn:     conn,
+		ctx:      ctx,
+		playerID: playerID,
+		out:      make(chan map[string]any, wsSendBufferSize),
+		done:     make(chan struct{}),
+	}
+	go c.writeLoop()
+	return c
+}
+
+// writeLoop drains the send channel onto the WebSocket. Any write error
+// (timeout, client gone) tears the connection down and stops the loop.
+func (c *wsClient) writeLoop() {
+	defer close(c.done)
+	for frame := range c.out {
+		wctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+		err := wsjson.Write(wctx, c.conn, frame)
+		cancel()
+		if err != nil {
+			// Tear down — the handleWS read loop will exit when the
+			// connection closes.
+			c.conn.Close(websocket.StatusGoingAway, "slow writer")
+			return
+		}
+	}
+}
+
+// close shuts down the writer goroutine. Idempotent.
+func (c *wsClient) close() {
+	defer func() { recover() }() // close on already-closed channel is OK
+	close(c.out)
+}
+
+// enqueue is the non-blocking send onto c.out with drop-oldest semantics
+// when the buffer is full. State pushes are idempotent (only the latest
+// matters), so dropping is correct for them; chat/error frames drop too,
+// but the writer loop's deadline will surface the slow consumer.
+func (c *wsClient) enqueue(frame map[string]any) {
+	select {
+	case c.out <- frame:
+		return
+	default:
+	}
+	// Full — drop one entry and try again.
+	select {
+	case <-c.out:
+	default:
+	}
+	select {
+	case c.out <- frame:
+	default:
+		// Still full; give up. The next write timeout will close us.
+	}
+}
+
+// Send implements match.Subscriber. Mirrors BGIO's `update` frame shape.
 func (c *wsClient) Send(state core.State) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.prevMu.Lock()
 	cp := state
 	c.prev = &cp
-	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
-	defer cancel()
-	_ = wsjson.Write(ctx, c.conn, map[string]any{
-		"type":  "update",
-		"state": state,
-	})
+	c.prevMu.Unlock()
+	c.enqueue(map[string]any{"type": "update", "state": state})
 }
 
-// PlayerID identifies which seat this subscriber represents so the manager
-// can compute the right per-seat state.
+// PlayerID identifies which seat this subscriber represents.
 func (c *wsClient) PlayerID() string { return c.playerID }
 
-// SendChat implements match.Subscriber; pushes a chat frame to the
-// connection.
+// SendChat enqueues a chat frame.
 func (c *wsClient) SendChat(msg match.ChatMessage) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
-	defer cancel()
-	_ = wsjson.Write(ctx, c.conn, map[string]any{"type": "chat", "chat": msg})
+	c.enqueue(map[string]any{"type": "chat", "chat": msg})
 }
 
-// SendPatch implements match.PatchSubscriber. Diffs against the connection's
-// last sent state and sends a JSON Patch (RFC 6902) `patch` frame. If we
-// don't have a previous state cached (e.g. the connection just opened
-// before the first update), falls back to a full state push so clients
-// don't desync.
+// SendPatch diffs against the connection's last sent state and enqueues
+// a JSON Patch `patch` frame. If we have no prior state cached, falls
+// back to a full state push so clients don't desync.
 func (c *wsClient) SendPatch(next core.State) {
-	c.mu.Lock()
+	c.prevMu.Lock()
 	prev := c.prev
-	c.mu.Unlock()
+	c.prevMu.Unlock()
 	if prev == nil {
 		c.Send(next)
 		return
@@ -78,13 +137,11 @@ func (c *wsClient) SendPatch(next core.State) {
 		c.Send(next)
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.prevMu.Lock()
 	cp := next
 	c.prev = &cp
-	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
-	defer cancel()
-	_ = wsjson.Write(ctx, c.conn, map[string]any{
+	c.prevMu.Unlock()
+	c.enqueue(map[string]any{
 		"type":    "patch",
 		"patch":   patch,
 		"prevID":  prev.StateID,
@@ -92,13 +149,9 @@ func (c *wsClient) SendPatch(next core.State) {
 	})
 }
 
-// SendMatchData implements match.Subscriber; pushes a matchData frame
-// when the seated player list changes (BGIO's `matchData` frame).
+// SendMatchData enqueues a matchData frame when the seated-player list
+// changes.
 func (c *wsClient) SendMatchData(players []storage.Player) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
-	defer cancel()
 	out := make([]map[string]any, 0, len(players))
 	for _, p := range players {
 		out = append(out, map[string]any{
@@ -108,15 +161,37 @@ func (c *wsClient) SendMatchData(players []storage.Player) {
 			"isConnected": p.IsConnected,
 		})
 	}
-	_ = wsjson.Write(ctx, c.conn, map[string]any{
-		"type":      "matchData",
-		"matchData": out,
-	})
+	c.enqueue(map[string]any{"type": "matchData", "matchData": out})
 }
 
-// inbound is the envelope clients send. Today: "move" (submit a move) and
-// "chat" (broadcast a chat message). The "leave" wire form is handled by
-// the REST API.
+// heartbeat sends WebSocket ping frames at the given interval and tears
+// the connection down on failure. coder/websocket's Ping returns when
+// the peer's pong is received; failure means the peer is gone.
+func heartbeat(ctx context.Context, conn *websocket.Conn, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := conn.Ping(pctx)
+			cancel()
+			if err != nil {
+				conn.Close(websocket.StatusGoingAway, "heartbeat failed")
+				return
+			}
+		}
+	}
+}
+
+// sendError pushes a {"type":"error","error":...} frame.
+func (c *wsClient) sendError(err error) {
+	c.enqueue(map[string]any{"type": "error", "error": err.Error()})
+}
+
+// inbound is the envelope clients send.
 type inbound struct {
 	Type        string `json:"type"`
 	PlayerID    string `json:"playerID"`
@@ -124,15 +199,13 @@ type inbound struct {
 	Move        string `json:"move"`
 	Args        []any  `json:"args"`
 	StateID     int    `json:"stateID,omitempty"`
-	Payload     any    `json:"payload"` // chat body
+	Payload     any    `json:"payload"`
 }
 
-// handleWS upgrades the connection, sends the current state immediately, and
-// then loops on incoming move messages. The connection's seat is taken
-// from the ?playerID= query parameter (empty = spectator).
+// handleWS upgrades the connection, sends the current state immediately,
+// and then loops on incoming move messages.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matchID string) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// MVP: accept any origin. Tighten when we add auth.
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
@@ -144,22 +217,17 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 
 	ctx := r.Context()
 	playerID := r.URL.Query().Get("playerID")
-	client := &wsClient{conn: conn, ctx: ctx, playerID: playerID}
+	client := newWSClient(ctx, conn, playerID)
+	defer client.close()
 
-	// Subscribe so the matchData broadcast from SetConnected reaches us.
 	unsub := s.Manager.Subscribe(matchID, client)
 	defer unsub()
 
-	// Spawn a heartbeat that pings every 25s. A failed ping cancels the
-	// connection context, which unblocks the read loop and lets the
-	// deferred SetConnected(false) flip the flag. 25s is below the
-	// commonly seen 30s idle-cutoff on load balancers.
 	pingCtx, cancelPing := context.WithCancel(ctx)
 	defer cancelPing()
 	go heartbeat(pingCtx, conn, 25*time.Second)
 
-	// Push the initial sync frame on connect (BGIO's `sync` payload: full
-	// state + matchData). Client.Send is used for subsequent updates.
+	// Push the initial sync frame on connect.
 	if m, err := s.Manager.State(matchID); err == nil {
 		if g := s.Manager.Game(m.GameName); g != nil {
 			view := core.PlayerView(g, m.State, playerID)
@@ -172,24 +240,19 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 					"isConnected": p.IsConnected,
 				})
 			}
-			client.mu.Lock()
+			client.prevMu.Lock()
 			cp := view
-			client.prev = &cp // seed for subsequent SendPatch diffs
-			ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
-			_ = wsjson.Write(ctx2, conn, map[string]any{
+			client.prev = &cp
+			client.prevMu.Unlock()
+			client.enqueue(map[string]any{
 				"type":      "sync",
 				"state":     view,
 				"matchData": players,
 				"matchID":   matchID,
 			})
-			cancel()
-			client.mu.Unlock()
 		}
 	}
 
-	// Now that sync has been pushed, flip the connected flag. The
-	// resulting matchData broadcast arrives next on the wire — order is
-	// sync, then matchData(connected=true), then any subsequent updates.
 	_ = s.Manager.SetConnected(matchID, playerID, true)
 	defer s.Manager.SetConnected(matchID, playerID, false)
 
@@ -216,37 +279,4 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 			metrics.ChatMessages.Add(1)
 		}
 	}
-}
-
-// heartbeat sends WebSocket ping frames at the given interval and tears the
-// connection down on failure. coder/websocket's Ping returns when the
-// peer's pong is received; if the peer is gone or stalled, the call
-// returns an error and we close, which unblocks the read loop in handleWS.
-func heartbeat(ctx context.Context, conn *websocket.Conn, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			err := conn.Ping(pctx)
-			cancel()
-			if err != nil {
-				conn.Close(websocket.StatusGoingAway, "heartbeat failed")
-				return
-			}
-		}
-	}
-}
-
-// sendError pushes a {"type":"error","error":...} frame to the connection
-// without tearing it down. The match's authoritative state remains valid.
-func (c *wsClient) sendError(err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	ec, cancel := context.WithTimeout(c.ctx, 5*time.Second)
-	defer cancel()
-	_ = wsjson.Write(ec, c.conn, map[string]string{"type": "error", "error": err.Error()})
 }
