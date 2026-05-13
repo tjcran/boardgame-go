@@ -13,13 +13,13 @@ type Events struct {
 type event struct {
 	kind eventKind
 	// payload fields, used by kind:
-	playerID    string
-	stage       string
-	phase       string
-	gameover    any
-	turnNext    string
-	activeCfg   *ActivePlayersConfig
-	stageOpts   *setStageOpts
+	playerID  string
+	stage     string
+	phase     string
+	gameover  any
+	turnNext  string
+	activeCfg *ActivePlayersConfig
+	stageOpts *setStageOpts
 }
 
 type eventKind int
@@ -33,6 +33,7 @@ const (
 	evEndGame
 	evSetActivePlayers
 	evPass
+	evRemovePlayer
 )
 
 // setStageOpts carries the optional minMoves/maxMoves for the long-form
@@ -111,6 +112,16 @@ func (e *Events) EndGame(result ...any) {
 // SetActivePlayers queues an update to ctx.ActivePlayers.
 func (e *Events) SetActivePlayers(cfg ActivePlayersConfig) {
 	e.queue = append(e.queue, event{kind: evSetActivePlayers, activeCfg: &cfg})
+}
+
+// RemovePlayer eliminates a player from the match, splicing them out of
+// ctx.PlayOrder so the turn order skips them naturally. If the removed
+// player was the current player, the turn ends.
+//
+// Mirrors the feature request behind BGIO issue #616 — player elimination
+// outside the normal game flow.
+func (e *Events) RemovePlayer(playerID string) {
+	e.queue = append(e.queue, event{kind: evRemovePlayer, playerID: playerID})
 }
 
 // drain pops queued events into a slice and clears the queue. Used by the

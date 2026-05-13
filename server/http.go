@@ -18,8 +18,20 @@ import (
 type Server struct {
 	Manager *match.Manager
 	Origins []string
-	mux     *http.ServeMux
+
+	// MaxBodyBytes caps the size of any single request body. Defaults to
+	// DefaultMaxBodyBytes (8 MiB). Set higher if your game's setupData
+	// is large (BGIO issue #860, where the default 1 MB rejected legit
+	// payloads).
+	MaxBodyBytes int64
+
+	mux *http.ServeMux
 }
+
+// DefaultMaxBodyBytes is the per-request body limit when Server.MaxBodyBytes
+// is zero. 8 MiB accommodates large setupData payloads while still rejecting
+// obviously hostile requests.
+const DefaultMaxBodyBytes int64 = 8 << 20
 
 // New wires routes onto a fresh mux.
 func New(m *match.Manager) *Server {
@@ -33,6 +45,16 @@ func New(m *match.Manager) *Server {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.applyCORS(w, r) {
 		return
+	}
+	// Cap the request body so a huge POST (or a misbehaving client) can't
+	// exhaust memory. Skipped for WebSocket upgrades — those swap the
+	// body for a long-lived frame stream.
+	if r.Body != nil && r.Header.Get("Upgrade") == "" {
+		max := s.MaxBodyBytes
+		if max == 0 {
+			max = DefaultMaxBodyBytes
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, max)
 	}
 	s.mux.ServeHTTP(w, r)
 }
@@ -84,6 +106,10 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 		s.handlePlayAgain(w, r, gameName, tail[0])
 	case len(tail) == 2 && tail[1] == "move" && r.Method == http.MethodPost:
 		s.handleMove(w, r, gameName, tail[0])
+	case len(tail) == 2 && tail[1] == "dryMove" && r.Method == http.MethodPost:
+		s.handleDryMove(w, r, gameName, tail[0])
+	case len(tail) == 2 && tail[1] == "reset" && r.Method == http.MethodPost:
+		s.handleReset(w, r, gameName, tail[0])
 	case len(tail) == 2 && tail[1] == "ws" && r.Method == http.MethodGet:
 		s.handleWS(w, r, gameName, tail[0])
 	default:
@@ -351,6 +377,54 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, _, matchID s
 		}
 	}
 	writeJSON(w, http.StatusOK, state)
+}
+
+// ---- dry-run move ---------------------------------------------------------
+
+// handleDryMove runs a move through the reducer and returns the would-be
+// state without persisting it or broadcasting to subscribers. Useful for
+// preview UIs (BGIO issue #636).
+func (s *Server) handleDryMove(w http.ResponseWriter, r *http.Request, _, matchID string) {
+	var req moveReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	state, err := s.Manager.DryMoveReq(matchID, req.PlayerID, req.Credentials, core.MoveRequest{
+		Move:    req.Move,
+		Args:    req.Args,
+		StateID: req.StateID,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if m, err := s.Manager.State(matchID); err == nil {
+		if g := s.Manager.Game(m.GameName); g != nil {
+			state = core.PlayerView(g, state, req.PlayerID)
+		}
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+// ---- reset ----------------------------------------------------------------
+
+type resetReq struct {
+	PlayerID    string `json:"playerID"`
+	Credentials string `json:"credentials"`
+}
+
+func (s *Server) handleReset(w http.ResponseWriter, r *http.Request, _, matchID string) {
+	var req resetReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.Manager.Reset(matchID, req.PlayerID, req.Credentials); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct{}{})
 }
 
 // ---- shared utilities -----------------------------------------------------

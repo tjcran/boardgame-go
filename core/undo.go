@@ -22,6 +22,12 @@ func Undo(game *Game, state State) (State, error) {
 	last.Undone = append(state.Undone, popped)
 	// Truncate the log to drop the undone entry; keep prior history.
 	last.Log = state.Log[:len(state.Log)-1]
+	// OnUndo intercept: lets the game scrub transient fields that
+	// shouldn't replay on undo (animations, sounds, hint highlights).
+	if game.OnUndo != nil {
+		mc := &MoveContext{G: last.G, Ctx: last.Ctx, Events: &Events{}}
+		last.G = game.OnUndo(mc)
+	}
 	return last, nil
 }
 

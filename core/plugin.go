@@ -64,6 +64,8 @@ const (
 	GameMethodPhaseOnBegin
 	GameMethodPhaseOnEnd
 	GameMethodGameOnEnd
+	GameMethodStageOnBegin
+	GameMethodStageOnEnd
 )
 
 // PluginFnWrapMove lets a plugin wrap MoveFns at registration time. The

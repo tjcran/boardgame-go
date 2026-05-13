@@ -17,7 +17,8 @@ func Stage(name string) *string {
 // StageConfig defines an intra-turn sub-state. Stages live inside a
 // TurnConfig.Stages map.
 //
-// Mirrors BGIO's `turn.stages.{name}`.
+// Mirrors BGIO's `turn.stages.{name}` — plus OnBegin/OnEnd hooks the BGIO
+// docs say should exist but never landed (issue #608).
 type StageConfig struct {
 	// Moves overrides the active move table for players in this stage. If
 	// nil, players in this stage can use the surrounding phase/global moves.
@@ -27,6 +28,16 @@ type StageConfig struct {
 	// events.EndStage() is called from this stage. Empty string means the
 	// player leaves the active set entirely.
 	Next string
+
+	// OnBegin fires when a player enters this stage (via setStage, or via
+	// EndStage from a stage whose Next points here). The hook's MoveContext
+	// has PlayerID set to the entering player.
+	OnBegin HookFn
+
+	// OnEnd fires when a player exits this stage (via endStage, including
+	// when a Next chain moves them on). The hook's MoveContext has
+	// PlayerID set to the exiting player.
+	OnEnd HookFn
 }
 
 // ActivePlayersConfig describes how to populate ctx.ActivePlayers, either at

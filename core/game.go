@@ -69,6 +69,13 @@ type Game struct {
 	// OnEnd is called after EndIf fires. Useful for final scoring/cleanup.
 	OnEnd HookFn
 
+	// OnUndo, if set, is called when core.Undo has restored the pre-move
+	// state but before it's returned to the caller. Lets the game scrub
+	// transient fields (animations, sound triggers, UI hints) that
+	// shouldn't replay on undo. Addresses BGIO issue #1135 — BGIO has no
+	// such hook today.
+	OnUndo HookFn
+
 	// PlayerView, if set, is called before pushing state to a client to
 	// redact G per-seat.
 	PlayerView PlayerViewFn
@@ -84,6 +91,13 @@ type Game struct {
 	// DeltaState, when true, makes the transport send JSON Patch diffs
 	// instead of full state on update (BGIO's `deltaState`).
 	DeltaState bool
+
+	// AllowDynamicPlayers permits new players to join after the match has
+	// started: Manager.Join appends a fresh seat to ctx.PlayOrder and
+	// bumps ctx.NumPlayers (within MaxPlayers). Addresses BGIO issues
+	// #884 / #1102, which BGIO can't support because its engine assumes
+	// PlayOrder is fixed.
+	AllowDynamicPlayers bool
 
 	// Plugins are applied in order. See core/plugin.go.
 	Plugins []Plugin

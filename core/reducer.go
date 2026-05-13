@@ -166,15 +166,15 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// (so ctx.CurrentPlayer in EndIf is the player who just moved). Then
 	// phase.EndIf, then per-stage maxMoves cleanup, then turn.EndIf/maxMoves.
 	if next.Ctx.Gameover == nil && game.EndIf != nil {
-		mc2 := &MoveContext{G: next.G, Ctx: next.Ctx, PlayerID: req.PlayerID, Events: &Events{}}
+		mc2 := &MoveContext{G: next.G, Ctx: next.Ctx, PlayerID: req.PlayerID, Events: events}
 		if res := game.EndIf(mc2); res != nil {
 			next.Ctx.Gameover = res
-			next = runGameOnEnd(game, next)
+			next = runGameOnEnd(game, next, events)
 		}
 	}
 
 	if next.Ctx.Gameover == nil {
-		next = checkPhaseEndIf(game, next)
+		next = checkPhaseEndIf(game, next, events)
 	}
 
 	if next.Ctx.Gameover == nil {
@@ -182,7 +182,18 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	}
 
 	if next.Ctx.Gameover == nil {
-		next = checkTurnAutoEnd(game, next, move)
+		next = checkTurnAutoEnd(game, next, move, events)
+	}
+
+	// Drain anything queued by the EndIf / auto-end paths above.
+	next, err = drainEvents(game, next, mc, events)
+	if err != nil {
+		return state, err
+	}
+
+	// Flush any AddLog entries that hooks/moves appended.
+	if mc.extra != nil {
+		next.Log = append(next.Log, mc.extra.entries...)
 	}
 
 	return next, nil
@@ -241,29 +252,27 @@ func resolveMove(game *Game, ctx Ctx, stage, name string) (Move, error) {
 }
 
 // checkTurnAutoEnd evaluates turn.EndIf and turn.MaxMoves and ends the turn
-// if either fires.
-func checkTurnAutoEnd(game *Game, state State, move Move) State {
+// if either fires. events is the shared queue from the outer drain loop.
+func checkTurnAutoEnd(game *Game, state State, move Move, events *Events) State {
 	turn := game.scopeTurn(state.Ctx.Phase)
 	if turn == nil {
 		return state
 	}
 	if turn.EndIf != nil {
-		mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: &Events{}}
+		mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
 		if end, next := turn.EndIf(mc); end {
-			return endTurn(game, state, next)
+			return endTurn(game, state, next, events)
 		}
 	}
-	// MaxMoves auto-end only counts toward the turn-level limit; per-stage
-	// MaxMoves is handled separately.
 	if turn.MaxMoves > 0 && state.Ctx.NumMoves >= turn.MaxMoves && !move.NoLimit {
-		return endTurn(game, state, "")
+		return endTurn(game, state, "", events)
 	}
 	return state
 }
 
 // checkPhaseEndIf evaluates phase.EndIf for the current phase and rotates
 // phases if it fires.
-func checkPhaseEndIf(game *Game, state State) State {
+func checkPhaseEndIf(game *Game, state State, events *Events) State {
 	if state.Ctx.Phase == "" {
 		return state
 	}
@@ -271,12 +280,12 @@ func checkPhaseEndIf(game *Game, state State) State {
 	if !ok || p.EndIf == nil {
 		return state
 	}
-	mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: &Events{}}
+	mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
 	end, next := p.EndIf(mc)
 	if !end {
 		return state
 	}
-	return endPhase(game, state, next)
+	return endPhase(game, state, next, events)
 }
 
 // bumpStageMoveCount records a move against the per-active-player counter
@@ -328,26 +337,6 @@ func autoEndStagesByMaxMoves(state State) State {
 	return state
 }
 
-// drainActivePlayers pops the Revert stack or applies a PendingNext config
-// when the current active-player set becomes empty.
-func drainActivePlayers(state State) State {
-	if len(state.ActiveStack) > 0 {
-		top := state.ActiveStack[len(state.ActiveStack)-1]
-		state.ActiveStack = state.ActiveStack[:len(state.ActiveStack)-1]
-		state.Ctx.ActivePlayers = top.ActivePlayers
-		state.MoveCounts = top.MoveCounts
-		state.StageMinMoves = top.StageMin
-		state.StageMaxMoves = top.StageMax
-		return state
-	}
-	if state.PendingNext != nil {
-		cfg := *state.PendingNext
-		state.PendingNext = nil
-		return applySetActivePlayers(state, cfg)
-	}
-	state.Ctx.ActivePlayers = nil
-	state.MoveCounts = nil
-	state.StageMinMoves = nil
-	state.StageMaxMoves = nil
-	return state
-}
+// drainActivePlayers lives in transitions.go (the file that owns most of
+// the active-players state machine). It's referenced from autoEndStagesByMaxMoves
+// below.

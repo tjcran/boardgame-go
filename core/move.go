@@ -30,6 +30,10 @@ type MoveContext struct {
 	// Plugins holds plugin-supplied APIs keyed by Plugin.Name. Use
 	// mc.Plugin("name") to fetch with a type assertion.
 	Plugins map[string]any
+
+	// extra holds AddLog entries appended during this MoveContext's
+	// lifetime. Engine-only; not visible to plugins.
+	extra *extraLog
 }
 
 // Plugin returns the API object exposed by the named plugin, or nil if no
@@ -39,6 +43,38 @@ func (mc *MoveContext) Plugin(name string) any {
 		return nil
 	}
 	return mc.Plugins[name]
+}
+
+// extraLog is a side channel for log entries appended by moves/hooks via
+// AddLog. The reducer drains it into State.Log after the move's main path.
+// Kept off the public surface so callers can't tamper.
+//
+// AddLog from a hook (BGIO issue #1228, which BGIO can't do because its
+// log plugin only sees move-time updates) lands here too.
+type extraLog struct {
+	entries []LogEntry
+}
+
+// AddLog appends a custom LogEntry to the match log. Use from inside a
+// move or hook to record a domain-specific event (e.g. "alice draws
+// 3 cards") that should show up in the move log alongside automatic
+// move entries.
+//
+// Empty Kind is rewritten to "custom".
+func (mc *MoveContext) AddLog(entry LogEntry) {
+	if mc.extra == nil {
+		mc.extra = &extraLog{}
+	}
+	if entry.Kind == "" {
+		entry.Kind = "custom"
+	}
+	if entry.Turn == 0 {
+		entry.Turn = mc.Ctx.Turn
+	}
+	if entry.Phase == "" {
+		entry.Phase = mc.Ctx.Phase
+	}
+	mc.extra.entries = append(mc.extra.entries, entry)
 }
 
 // MoveFn is the canonical move signature: take a MoveContext and zero or more

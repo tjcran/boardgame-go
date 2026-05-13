@@ -97,8 +97,14 @@ func NewMatch(game *Game, numPlayers int, setupData any) State {
 	st = applyActivePlayersFromTurn(game, st)
 
 	// Run the starting phase's OnBegin hook, then the active Turn.OnBegin.
-	st = runPhaseOnBegin(game, st)
-	st = runTurnOnBegin(game, st)
+	// Events queued by these hooks go into a fresh queue and are drained
+	// here — without this, events.EndTurn() in phase.OnBegin would be
+	// silently dropped (BGIO bug #1237).
+	events := &Events{}
+	st = runPhaseOnBegin(game, st, events)
+	st = runTurnOnBegin(game, st, events)
+	drainMC := &MoveContext{G: st.G, Ctx: st.Ctx, Events: events}
+	st, _ = drainEvents(game, st, drainMC, events)
 	return st
 }
 

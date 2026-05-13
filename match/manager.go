@@ -239,6 +239,9 @@ func (m *Manager) Join(matchID, name string, opts JoinOptions) (JoinResult, erro
 		taken[p.Seat] = true
 	}
 
+	game := m.Game(match.GameName)
+	dynamic := game != nil && game.AllowDynamicPlayers
+
 	seat := requestedSeat
 	if seat != "" {
 		if taken[seat] {
@@ -253,7 +256,16 @@ func (m *Manager) Join(matchID, name string, opts JoinOptions) (JoinResult, erro
 			}
 		}
 		if seat == "" {
-			return JoinResult{}, ErrNoSeatsLeft
+			if !dynamic {
+				return JoinResult{}, ErrNoSeatsLeft
+			}
+			// AllowDynamicPlayers: grow the table by one seat.
+			seat = strconv.Itoa(match.State.Ctx.NumPlayers)
+			if game.MaxPlayers > 0 && match.State.Ctx.NumPlayers >= game.MaxPlayers {
+				return JoinResult{}, ErrNoSeatsLeft
+			}
+			match.State.Ctx.PlayOrder = append(match.State.Ctx.PlayOrder, seat)
+			match.State.Ctx.NumPlayers++
 		}
 	}
 
@@ -314,6 +326,48 @@ func (m *Manager) SetConnected(matchID, playerID string, connected bool) error {
 		m.broadcastMatchData(matchID)
 		return nil
 	}
+	return nil
+}
+
+// Reset re-initialises the match's State (running Setup again) while
+// keeping the seated Players and their credentials. The caller must be a
+// seated player with valid credentials. Addresses BGIO issue #1166
+// (client.reset doesn't work in multiplayer).
+//
+// After Reset the new state is broadcast like any other state change.
+func (m *Manager) Reset(matchID, playerID, credentials string) error {
+	unlock := m.lockMatch(matchID)
+	defer unlock()
+	match, err := m.store.Get(matchID)
+	if err != nil {
+		return err
+	}
+	authed := false
+	for _, p := range match.Players {
+		if p.ID == playerID && m.AuthenticateCredentials(credentials, p) {
+			authed = true
+			break
+		}
+	}
+	if !authed {
+		return ErrBadCredentials
+	}
+	g := m.Game(match.GameName)
+	if g == nil {
+		return fmt.Errorf("%w: %s", ErrUnknownGame, match.GameName)
+	}
+	match.State = core.NewMatch(g, match.State.Ctx.NumPlayers, match.SetupData)
+	// IsConnected flags are per-socket; on reset we reset them too so
+	// clients re-announce themselves on reconnect.
+	for i := range match.Players {
+		match.Players[i].IsConnected = false
+	}
+	if err := m.store.Update(match); err != nil {
+		return err
+	}
+	m.broadcast(matchID, match.State)
+	m.broadcastMatchData(matchID)
+	m.Logger.Info("match.reset", "match_id", matchID, "player_id", playerID)
 	return nil
 }
 
@@ -497,6 +551,49 @@ func (m *Manager) MoveReq(matchID, playerID, credentials string, req core.MoveRe
 	return m.MoveReqCtx(context.Background(), matchID, playerID, credentials, req)
 }
 
+// DryMove runs a move through the reducer but does NOT persist the new
+// state or broadcast to subscribers. Used by clients to preview the
+// would-be result without leaking via undo-after-do. Addresses BGIO
+// issue #636.
+//
+// credentials are still validated; the caller must be the seated player.
+func (m *Manager) DryMove(matchID, playerID, credentials, moveName string, args []any) (core.State, error) {
+	return m.DryMoveReq(matchID, playerID, credentials, core.MoveRequest{
+		Move: moveName,
+		Args: args,
+	})
+}
+
+// DryMoveReq is the long-form DryMove that accepts a MoveRequest.
+func (m *Manager) DryMoveReq(matchID, playerID, credentials string, req core.MoveRequest) (core.State, error) {
+	unlock := m.lockMatch(matchID)
+	defer unlock()
+
+	match, err := m.store.Get(matchID)
+	if err != nil {
+		return core.State{}, err
+	}
+	g := m.Game(match.GameName)
+	if g == nil {
+		return core.State{}, fmt.Errorf("%w: %s", ErrUnknownGame, match.GameName)
+	}
+	seat := ""
+	for _, p := range match.Players {
+		if p.ID == playerID {
+			seat = p.Seat
+			if credentials != "" && !m.AuthenticateCredentials(credentials, p) {
+				return core.State{}, ErrBadCredentials
+			}
+			break
+		}
+	}
+	if seat == "" {
+		return core.State{}, ErrUnknownSeat
+	}
+	req.PlayerID = seat
+	return core.Apply(g, match.State, req)
+}
+
 // MoveReqCtx is the context-aware MoveReq. The supplied ctx is threaded
 // into MoveContext.Context so moves and plugins can honour deadlines.
 func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials string, req core.MoveRequest) (core.State, error) {
@@ -532,7 +629,7 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 		return core.State{}, ErrUnknownSeat
 	}
 
-	if len(match.Players) < match.State.Ctx.NumPlayers {
+	if !g.AllowDynamicPlayers && len(match.Players) < match.State.Ctx.NumPlayers {
 		return core.State{}, ErrSeatRequired
 	}
 
