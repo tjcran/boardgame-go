@@ -32,6 +32,11 @@ type MoveContext struct {
 	// mc.Plugin("name") to fetch with a type assertion.
 	Plugins map[string]any
 
+	// Queue is the server-driven cascade scheduler. Use mc.Queue.Push
+	// to schedule follow-up moves; mc.Queue.Block to pause for player
+	// input. Drained by the reducer after the move + Events drain.
+	Queue *Queue
+
 	// extra holds AddLog entries appended during this MoveContext's
 	// lifetime. Engine-only; not visible to plugins.
 	extra *extraLog
@@ -132,6 +137,11 @@ type Move struct {
 	// forcibly stop a goroutine — Timeout is a cooperative cancellation
 	// signal, not a guarantee.
 	Timeout time.Duration
+
+	// IgnoreBlocks lets this move bypass the ErrBlocked gate the
+	// reducer applies when State.Blocks is non-empty. Use sparingly —
+	// concede / forfeit / emergency-exit moves are the obvious case.
+	IgnoreBlocks bool
 }
 
 // IsUndoable resolves the Undoable field for a given context. The default

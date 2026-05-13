@@ -10,11 +10,17 @@ import (
 // claiming to make it. StateID is the client's last-seen state ID; the
 // reducer rejects with ErrStaleState when it doesn't match (unless the
 // move opted in via IgnoreStaleStateID). StateID=0 disables the check.
+//
+// ResumeTag, when set, matches against State.Blocks at Apply entry —
+// the first BlockSpec with matching Tag + PlayerID is removed before
+// the move runs. Used to resolve pause points opened by an earlier
+// cascade's Queue.Block call.
 type MoveRequest struct {
-	PlayerID string `json:"playerID"`
-	Move     string `json:"move"`
-	Args     []any  `json:"args"`
-	StateID  int    `json:"stateID,omitempty"`
+	PlayerID  string `json:"playerID"`
+	Move      string `json:"move"`
+	Args      []any  `json:"args"`
+	StateID   int    `json:"stateID,omitempty"`
+	ResumeTag string `json:"resumeTag,omitempty"`
 }
 
 // Public sentinel errors. They're surfaced through the transport with
@@ -27,7 +33,16 @@ var (
 	ErrMinMoves       = errors.New("minimum moves not reached")
 	ErrInactivePlayer = errors.New("player is not active")
 	ErrStaleState     = errors.New("client state is stale")
+	ErrBlocked        = errors.New("match has pending blocks; supply MoveRequest.ResumeTag")
+	ErrUnknownResumeTag = errors.New("ResumeTag does not match any pending block")
+	ErrDrainOverflow  = errors.New("cascade drain exceeded MaxDrainDepth")
 )
+
+// MaxDrainDepth caps how many drain steps the reducer will run for a
+// single external move. Exceeding the cap rolls the entire cascade
+// back to the pre-external state and returns ErrDrainOverflow. 200 is
+// a comfortable margin above any plausible TCG resolution depth.
+const MaxDrainDepth = 200
 
 // Apply runs a move through the full reducer pipeline with a
 // context.Background() context. For request-scoped propagation use
@@ -43,35 +58,64 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 // expensive work is the user's code).
 //
 //  1. Reject if the game is already over.
-//  2. Check the player is allowed to move in the current scope.
-//  3. Resolve the move from the active phase or global table.
-//  4. Run the move function -> new G.
-//  5. Run turn.OnMove and count the move (unless NoLimit).
-//  6. Drain queued events from the move (endTurn, setStage, ...).
-//  7. Check turn.EndIf, turn.MaxMoves -> auto-end turn.
-//  8. Check phase.EndIf -> auto-end phase.
-//  9. Check game.EndIf -> game over.
+//  2. Resolve ResumeTag against State.Blocks (removes one matching).
+//  3. If blocks remain and the move doesn't IgnoreBlocks, ErrBlocked.
+//  4. Check the player is allowed to move in the current scope.
+//  5. Resolve the move from the active phase or global table.
+//  6. Run the move function -> new G.
+//  7. Run turn.OnMove and count the move (unless NoLimit).
+//  8. Drain queued events (endTurn, setStage, ...).
+//  9. Check Game.EndIf, phase.EndIf, turn.EndIf / MaxMoves.
+//  10. Bump State.StateID once.
+//  11. Drain State.Queue (cascade). Each drain step runs through
+//      applyOne with a Parent log index; the outer state-ID stays put.
+//      Pauses on the first non-empty Blocks set.
 //
-// On any error, the returned state equals the input state.
+// On any error after the external move starts, the returned state
+// equals the pre-Apply state (cascades are atomic).
 func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest) (State, error) {
+	rollback := state
+
 	if state.Ctx.Gameover != nil {
 		return state, ErrGameOver
+	}
+
+	// Resume-tag handling: remove a matching block before the move runs.
+	// If no match, refuse — the tag implies the caller thinks they're
+	// resolving a specific pause that doesn't exist.
+	if req.ResumeTag != "" {
+		idx := findBlock(state.Blocks, req.ResumeTag, req.PlayerID)
+		if idx < 0 {
+			return state, fmt.Errorf("%w: tag=%s player=%s",
+				ErrUnknownResumeTag, req.ResumeTag, req.PlayerID)
+		}
+		state.Blocks = append(state.Blocks[:idx], state.Blocks[idx+1:]...)
+	}
+
+	// Block gate: if blocks remain (after resume), refuse non-IgnoreBlocks
+	// moves so non-resume external work can't sneak past a pause.
+	if len(state.Blocks) > 0 {
+		move, err := resolveMove(game, state.Ctx, "", req.Move)
+		if err == nil && !move.IgnoreBlocks {
+			return rollback, ErrBlocked
+		}
 	}
 
 	// Player must be allowed to move in this scope.
 	stage, err := authorizedStage(state.Ctx, req.PlayerID)
 	if err != nil {
-		return state, err
+		return rollback, err
 	}
 
 	// Resolve the move from the active move table, honouring stage
 	// overrides first, then phase overrides, then global.
 	move, err := resolveMove(game, state.Ctx, stage, req.Move)
 	if err != nil {
-		return state, err
+		return rollback, err
 	}
 
 	events := &Events{}
+	queue := &Queue{}
 	plugins := buildPluginAPIs(game, state, req.PlayerID)
 	moveCtx := ctx
 	if move.Timeout > 0 {
@@ -86,6 +130,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		Events:   events,
 		Plugins:  plugins,
 		Context:  moveCtx,
+		Queue:    queue,
 	}
 	// Ergonomic shortcut: if the Random plugin is registered, expose its
 	// API as mc.Random so moves can write `mc.Random.D6()` instead of
@@ -125,15 +170,18 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	mc.G = next.G // hooks see the post-move G
 
 	// Append to the log. Args are kept; PlayerView redacts to other seats.
+	parentIdx := len(next.Log)
 	next.Log = append(next.Log, LogEntry{
-		Kind:     "move",
-		Move:     req.Move,
-		PlayerID: req.PlayerID,
-		Args:     append([]any(nil), req.Args...),
-		Turn:     state.Ctx.Turn,
-		Phase:    state.Ctx.Phase,
-		Redact:   redact,
-		Undoable: undoable,
+		Kind:      "move",
+		Move:      req.Move,
+		PlayerID:  req.PlayerID,
+		Args:      append([]any(nil), req.Args...),
+		Turn:      state.Ctx.Turn,
+		Phase:     state.Ctx.Phase,
+		Redact:    redact,
+		Undoable:  undoable,
+		Parent:    -1,
+		ResumeTag: req.ResumeTag,
 	})
 	// Any successful move invalidates the redo stack.
 	next.Undone = nil
@@ -202,7 +250,128 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		next.Log = append(next.Log, mc.extra.entries...)
 	}
 
+	// Harvest the move's Queue.Push / Queue.Block calls.
+	pending, newBlocks := queue.drain()
+	next.Queue = append(next.Queue, pending...)
+	next.Blocks = append(next.Blocks, newBlocks...)
+
+	// Cascade drain. Each pending action runs through applyStep (the
+	// same machinery as Apply but no state-ID bump, no resume-tag
+	// handling, no ErrBlocked gate — those are external-move concerns).
+	// Pauses on the first non-empty Blocks set. Any error inside the
+	// cascade rolls back the WHOLE external move so we never persist a
+	// half-finished resolution.
+	depth := 0
+	for len(next.Queue) > 0 && len(next.Blocks) == 0 && next.Ctx.Gameover == nil {
+		depth++
+		if depth > MaxDrainDepth {
+			return rollback, ErrDrainOverflow
+		}
+		step := next.Queue[0]
+		next.Queue = next.Queue[1:]
+		var stepErr error
+		next, stepErr = applyStep(ctx, game, next, step, parentIdx)
+		if stepErr != nil {
+			return rollback, stepErr
+		}
+	}
+
 	return next, nil
+}
+
+// findBlock returns the index of the first BlockSpec matching tag +
+// playerID, or -1 when no match exists.
+func findBlock(blocks []BlockSpec, tag, playerID string) int {
+	for i, b := range blocks {
+		if b.Tag == tag && b.PlayerID == playerID {
+			return i
+		}
+	}
+	return -1
+}
+
+// applyStep runs a server-driven move from State.Queue. Same pipeline
+// as ApplyContext for an external move, with three differences:
+//
+//   - No state-ID bump (state-ID is bumped once per external move).
+//   - No ResumeTag / ErrBlocked handling — drain steps run regardless.
+//   - The log entry's Parent points at the external move's index.
+//
+// Errors here bubble up to ApplyContext, which rolls the whole cascade
+// back. Drain steps that want to fail silently should return mc.G
+// unchanged.
+func applyStep(ctx context.Context, game *Game, state State, action QueuedAction, parentIdx int) (State, error) {
+	stage, err := authorizedStageDrain(state.Ctx, action.PlayerID)
+	if err != nil {
+		return state, err
+	}
+	move, err := resolveMove(game, state.Ctx, stage, action.Move)
+	if err != nil {
+		return state, err
+	}
+
+	events := &Events{}
+	queue := &Queue{}
+	plugins := buildPluginAPIs(game, state, action.PlayerID)
+	mc := &MoveContext{
+		G:        state.G,
+		Ctx:      state.Ctx,
+		PlayerID: action.PlayerID,
+		Events:   events,
+		Plugins:  plugins,
+		Context:  ctx,
+		Queue:    queue,
+	}
+	if r, ok := plugins[RandomPluginName].(*Random); ok {
+		mc.Random = r
+	}
+
+	moveFn := applyFnWrapMove(game, move.Move)
+	nextG, err := moveFn(mc, action.Args...)
+	if err != nil {
+		return state, err
+	}
+
+	next := state
+	next.G = nextG
+	mc.G = next.G
+	next.Log = append(next.Log, LogEntry{
+		Kind:     "drain-step",
+		Move:     action.Move,
+		PlayerID: action.PlayerID,
+		Args:     append([]any(nil), action.Args...),
+		Turn:     state.Ctx.Turn,
+		Phase:    state.Ctx.Phase,
+		Parent:   parentIdx,
+	})
+	next = flushPlugins(game, next, mc)
+	if err := validatePlugins(game, next); err != nil {
+		return state, err
+	}
+	next, err = drainEvents(game, next, mc, events)
+	if err != nil {
+		return state, err
+	}
+	if mc.extra != nil {
+		next.Log = append(next.Log, mc.extra.entries...)
+	}
+	pending, newBlocks := queue.drain()
+	next.Queue = append(next.Queue, pending...)
+	next.Blocks = append(next.Blocks, newBlocks...)
+	return next, nil
+}
+
+// authorizedStageDrain is the same as authorizedStage but tolerates an
+// active-players mismatch — drain steps are server-driven and not
+// subject to the same gating as a client move. The stage lookup is
+// still useful for resolving stage-scoped move tables.
+func authorizedStageDrain(ctx Ctx, playerID string) (string, error) {
+	if ctx.ActivePlayers != nil {
+		if stage, ok := ctx.ActivePlayers[playerID]; ok {
+			return stage, nil
+		}
+	}
+	return "", nil
 }
 
 // authorizedStage returns the stage name the player is currently in, or

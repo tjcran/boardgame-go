@@ -34,6 +34,17 @@ type State struct {
 	// Snapshots are private — never sent to clients.
 	TurnSnapshots []State `json:"-"`
 
+	// Queue is the pending FIFO of server-driven actions waiting for the
+	// reducer to drain. Populated by moves calling mc.Queue.Push;
+	// drained by the engine after each external move's event drain.
+	// Persisted across pauses (when Blocks is non-empty).
+	Queue []QueuedAction `json:"queue,omitempty"`
+
+	// Blocks pauses the cascade. The drain stops on the first block and
+	// state is persisted. The next move whose ResumeTag + PlayerID match
+	// removes a block; if all are gone the drain resumes.
+	Blocks []BlockSpec `json:"blocks,omitempty"`
+
 	// activeStack supports BGIO's `revert: true` on ActivePlayersConfig.
 	// When SetActivePlayers is called with Revert=true, the previous
 	// ActivePlayers map is pushed here; when the new set drains the engine

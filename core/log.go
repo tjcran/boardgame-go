@@ -37,6 +37,16 @@ type LogEntry struct {
 	// in the current turn. Mirrors BGIO's Move.Undoable resolution at the
 	// time the move was played.
 	Undoable bool `json:"undoable"`
+
+	// Parent is the index in State.Log of the external move that
+	// initiated this cascade entry. -1 means "external" (top-level).
+	// Drain steps and resume entries point at their initiating move so
+	// clients can render hierarchical move logs.
+	Parent int `json:"parent,omitempty"`
+
+	// ResumeTag, on a move entry, is the value of MoveRequest.ResumeTag
+	// that resolved a pending block. Empty for non-resume moves.
+	ResumeTag string `json:"resumeTag,omitempty"`
 }
 
 // redactedLog returns the log filtered for a specific seat: entries marked
