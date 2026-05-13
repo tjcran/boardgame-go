@@ -2,6 +2,7 @@ package ccg_test
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -541,6 +542,214 @@ func TestEntityDefIDRoundTripsThroughJSON(t *testing.T) {
 	}
 	if got.Entities[id].DefID != "goblin" {
 		t.Fatalf("DefID lost in round-trip: %+v", got.Entities[id])
+	}
+}
+
+func TestDeckListTotalAndCardsDeterministic(t *testing.T) {
+	list := ccg.DeckList{"goblin": 3, "anthem": 2, "bolt": 4}
+	if list.Total() != 9 {
+		t.Fatalf("Total: want 9, got %d", list.Total())
+	}
+	// Run twice; result must be identical (lexicographic order).
+	a := list.Cards()
+	b := list.Cards()
+	if len(a) != len(b) {
+		t.Fatalf("Cards length not stable: %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("Cards order not stable at %d: %v vs %v", i, a, b)
+		}
+	}
+	// Lexicographic check: "anthem" before "bolt" before "goblin".
+	want := []ccg.DefID{"anthem", "anthem", "bolt", "bolt", "bolt", "bolt", "goblin", "goblin", "goblin"}
+	if len(a) != len(want) {
+		t.Fatalf("Cards count: want %d, got %d", len(want), len(a))
+	}
+	for i := range want {
+		if a[i] != want[i] {
+			t.Fatalf("Cards[%d]: want %s, got %s (full=%v)", i, want[i], a[i], a)
+		}
+	}
+}
+
+func TestDeckListEmpty(t *testing.T) {
+	list := ccg.DeckList{}
+	if list.Total() != 0 || len(list.Cards()) != 0 {
+		t.Fatalf("empty list: Total=%d Cards=%v", list.Total(), list.Cards())
+	}
+}
+
+func TestDeckValidatorMinSize(t *testing.T) {
+	c := ccg.NewCatalog()
+	v := ccg.MinSize(5)
+	if err := v.Validate(ccg.DeckList{"x": 3}, c); !errors.Is(err, ccg.ErrDeckListMinSize) {
+		t.Fatalf("under-min: want ErrDeckListMinSize, got %v", err)
+	}
+	if err := v.Validate(ccg.DeckList{"x": 5}, c); err != nil {
+		t.Fatalf("at-min: %v", err)
+	}
+	if err := v.Validate(ccg.DeckList{"x": 7}, c); err != nil {
+		t.Fatalf("over-min: %v", err)
+	}
+}
+
+func TestDeckValidatorMaxSize(t *testing.T) {
+	v := ccg.MaxSize(10)
+	if err := v.Validate(ccg.DeckList{"x": 11}, nil); !errors.Is(err, ccg.ErrDeckListMaxSize) {
+		t.Fatalf("over-max: want ErrDeckListMaxSize, got %v", err)
+	}
+	if err := v.Validate(ccg.DeckList{"x": 10}, nil); err != nil {
+		t.Fatalf("at-max: %v", err)
+	}
+}
+
+func TestDeckValidatorMaxCopies(t *testing.T) {
+	v := ccg.MaxCopies(4)
+	if err := v.Validate(ccg.DeckList{"a": 4, "b": 5}, nil); !errors.Is(err, ccg.ErrDeckListMaxCopies) {
+		t.Fatalf("over-copies: want ErrDeckListMaxCopies, got %v", err)
+	}
+	if err := v.Validate(ccg.DeckList{"a": 4, "b": 4, "c": 1}, nil); err != nil {
+		t.Fatalf("at-copies: %v", err)
+	}
+}
+
+func TestDeckValidatorRequireDefsExist(t *testing.T) {
+	c := ccg.NewCatalog()
+	_ = c.Register(ccg.CardDef{ID: "goblin", Type: "creature"})
+	v := ccg.RequireDefsExist()
+	if err := v.Validate(ccg.DeckList{"goblin": 4}, c); err != nil {
+		t.Fatalf("known def: %v", err)
+	}
+	if err := v.Validate(ccg.DeckList{"goblin": 4, "ghost": 1}, c); !errors.Is(err, ccg.ErrDeckListUnknownDef) {
+		t.Fatalf("unknown def: want ErrDeckListUnknownDef, got %v", err)
+	}
+	if err := v.Validate(ccg.DeckList{"goblin": 4}, nil); !errors.Is(err, ccg.ErrDeckListUnknownDef) {
+		t.Fatalf("nil catalog: want ErrDeckListUnknownDef, got %v", err)
+	}
+}
+
+func TestDeckValidatorNonNegativeCounts(t *testing.T) {
+	v := ccg.NonNegativeCounts()
+	if err := v.Validate(ccg.DeckList{"a": 0}, nil); !errors.Is(err, ccg.ErrDeckListNegativeCnt) {
+		t.Fatalf("zero count: want ErrDeckListNegativeCnt, got %v", err)
+	}
+	if err := v.Validate(ccg.DeckList{"a": -1}, nil); !errors.Is(err, ccg.ErrDeckListNegativeCnt) {
+		t.Fatalf("negative count: want ErrDeckListNegativeCnt, got %v", err)
+	}
+	if err := v.Validate(ccg.DeckList{"a": 1}, nil); err != nil {
+		t.Fatalf("positive count: %v", err)
+	}
+}
+
+func TestDeckValidatorCompose(t *testing.T) {
+	c := ccg.NewCatalog()
+	_ = c.Register(ccg.CardDef{ID: "goblin", Type: "creature"})
+
+	v := ccg.Compose(
+		ccg.RequireDefsExist(),
+		ccg.MinSize(2),
+		ccg.MaxSize(10),
+		ccg.MaxCopies(4),
+	)
+	if err := v.Validate(ccg.DeckList{"goblin": 4}, c); err != nil {
+		t.Fatalf("legal compose: %v", err)
+	}
+	// First failure wins (RequireDefsExist runs before size).
+	err := v.Validate(ccg.DeckList{"ghost": 1}, c)
+	if !errors.Is(err, ccg.ErrDeckListUnknownDef) {
+		t.Fatalf("compose first-failure: want ErrDeckListUnknownDef, got %v", err)
+	}
+}
+
+func TestLoadDeckListInsertsInDeterministicOrder(t *testing.T) {
+	c := ccg.NewCatalog()
+	_ = c.Register(ccg.CardDef{ID: "goblin", Type: "creature", BaseAttrs: map[string]any{"power": 2}})
+	_ = c.Register(ccg.CardDef{ID: "anthem", Type: "spell"})
+
+	list := ccg.DeckList{"goblin": 2, "anthem": 1}
+
+	run := func() []ccg.DefID {
+		s := ccg.NewState()
+		s.NewZone("deck", true)
+		ids, err := s.LoadDeckList(c, list, "0", "deck")
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		var defs []ccg.DefID
+		for _, id := range ids {
+			e, _ := s.Get(id)
+			defs = append(defs, e.DefID)
+		}
+		return defs
+	}
+	a := run()
+	b := run()
+	if len(a) != 3 {
+		t.Fatalf("expected 3 cards loaded, got %d", len(a))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("LoadDeckList not deterministic at %d: %v vs %v", i, a, b)
+		}
+	}
+	want := []ccg.DefID{"anthem", "goblin", "goblin"}
+	for i := range want {
+		if a[i] != want[i] {
+			t.Fatalf("position %d: want %s, got %s (full=%v)", i, want[i], a[i], a)
+		}
+	}
+}
+
+func TestLoadDeckListRespectsZoneCapacity(t *testing.T) {
+	c := ccg.NewCatalog()
+	_ = c.Register(ccg.CardDef{ID: "goblin", Type: "creature"})
+	s := ccg.NewState()
+	z := s.NewZone("deck", true)
+	z.Capacity = 2
+
+	_, err := s.LoadDeckList(c, ccg.DeckList{"goblin": 5}, "0", "deck")
+	if !errors.Is(err, ccg.ErrZoneFull) {
+		t.Fatalf("load over-capacity: want ErrZoneFull, got %v", err)
+	}
+	if s.Size("deck") != 2 {
+		t.Fatalf("expected partial fill to 2, got %d", s.Size("deck"))
+	}
+}
+
+func TestLoadDeckListUnknownDefStopsEarly(t *testing.T) {
+	c := ccg.NewCatalog()
+	_ = c.Register(ccg.CardDef{ID: "goblin", Type: "creature"})
+	s := ccg.NewState()
+	s.NewZone("deck", true)
+	// "anthem" sorts before "goblin"; LoadDeckList iterates in DefID
+	// order, so the unknown ref trips immediately.
+	_, err := s.LoadDeckList(c, ccg.DeckList{"anthem": 1, "goblin": 1}, "0", "deck")
+	if !errors.Is(err, ccg.ErrUnknownDef) {
+		t.Fatalf("want ErrUnknownDef, got %v", err)
+	}
+}
+
+func TestLoadDeckListSkipsZeroCounts(t *testing.T) {
+	c := ccg.NewCatalog()
+	_ = c.Register(ccg.CardDef{ID: "goblin", Type: "creature"})
+	s := ccg.NewState()
+	s.NewZone("deck", true)
+	ids, err := s.LoadDeckList(c, ccg.DeckList{"goblin": 0}, "0", "deck")
+	if err != nil {
+		t.Fatalf("zero-count load: %v", err)
+	}
+	if len(ids) != 0 || s.Size("deck") != 0 {
+		t.Fatalf("zero count produced %d entities", len(ids))
+	}
+}
+
+func TestLoadDeckListNilCatalog(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("deck", true)
+	_, err := s.LoadDeckList(nil, ccg.DeckList{"x": 1}, "0", "deck")
+	if !errors.Is(err, ccg.ErrUnknownDef) {
+		t.Fatalf("nil catalog: want ErrUnknownDef, got %v", err)
 	}
 }
 
