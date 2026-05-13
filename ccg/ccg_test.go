@@ -68,6 +68,90 @@ func TestZoneMoveToUpdatesEntityZone(t *testing.T) {
 	}
 }
 
+func TestZoneInsertAtPositions(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("deck", true)
+	a := s.NewEntity("card", "0", nil)
+	b := s.NewEntity("card", "0", nil)
+	c := s.NewEntity("card", "0", nil)
+
+	// Build deck [a] via Add, then insert b at the front (bottom),
+	// then insert c at the end (top): expected order [b, a, c].
+	if err := s.Add("deck", a); err != nil {
+		t.Fatalf("add a: %v", err)
+	}
+	if err := s.InsertAt("deck", b, 0); err != nil {
+		t.Fatalf("insert b at 0: %v", err)
+	}
+	if err := s.InsertAt("deck", c, 2); err != nil {
+		t.Fatalf("insert c at len: %v", err)
+	}
+	got := s.Peek("deck", 3)
+	// Peek returns top-first; top is end of Members, so the slice order
+	// at Members is [b, a, c] and Peek yields [c, a, b].
+	want := []ccg.EntityID{c, a, b}
+	for i, id := range want {
+		if got[i] != id {
+			t.Fatalf("position %d: want %d, got %d (full=%v)", i, id, got[i], got)
+		}
+	}
+}
+
+func TestZoneInsertAtMiddle(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("lane", true)
+	a := s.NewEntity("card", "0", nil)
+	b := s.NewEntity("card", "0", nil)
+	c := s.NewEntity("card", "0", nil)
+	_ = s.Add("lane", a)
+	_ = s.Add("lane", b)
+	// Insert c between a and b: Members becomes [a, c, b].
+	if err := s.InsertAt("lane", c, 1); err != nil {
+		t.Fatalf("insert at 1: %v", err)
+	}
+	// Peek yields top-first → [b, c, a].
+	got := s.Peek("lane", 3)
+	want := []ccg.EntityID{b, c, a}
+	for i, id := range want {
+		if got[i] != id {
+			t.Fatalf("position %d: want %d, got %d (full=%v)", i, id, got[i], got)
+		}
+	}
+}
+
+func TestZoneInsertAtUpdatesEntityZone(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("deck", true)
+	id := s.NewEntity("card", "0", nil)
+	if err := s.InsertAt("deck", id, 0); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	got, _ := s.Get(id)
+	if got.Zone != "deck" {
+		t.Fatalf("expected Entity.Zone updated to deck, got %q", got.Zone)
+	}
+}
+
+func TestZoneInsertAtErrors(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("deck", true)
+	id := s.NewEntity("card", "0", nil)
+
+	if err := s.InsertAt("missing", id, 0); err != ccg.ErrUnknownZone {
+		t.Fatalf("unknown zone: want %v, got %v", ccg.ErrUnknownZone, err)
+	}
+	if err := s.InsertAt("deck", ccg.EntityID(9999), 0); err != ccg.ErrUnknownEntity {
+		t.Fatalf("unknown entity: want %v, got %v", ccg.ErrUnknownEntity, err)
+	}
+	if err := s.InsertAt("deck", id, -1); err != ccg.ErrInvalidPosition {
+		t.Fatalf("negative position: want %v, got %v", ccg.ErrInvalidPosition, err)
+	}
+	// position > len (deck is empty so any position > 0 is out of range)
+	if err := s.InsertAt("deck", id, 1); err != ccg.ErrInvalidPosition {
+		t.Fatalf("over-len position: want %v, got %v", ccg.ErrInvalidPosition, err)
+	}
+}
+
 func TestModifierEffectiveAttrAddsAndStacks(t *testing.T) {
 	s := fixture()
 	creatures := ccg.Query(s).InZone("battlefield").Find()

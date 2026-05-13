@@ -20,12 +20,13 @@ type Zone struct {
 	Members []EntityID `json:"members,omitempty"`
 }
 
-// ErrUnknownZone / ErrUnknownEntity / ErrZoneEmpty are returned for the
-// obvious failure modes.
+// ErrUnknownZone / ErrUnknownEntity / ErrZoneEmpty / ErrInvalidPosition
+// are returned for the obvious failure modes.
 var (
-	ErrUnknownZone   = errors.New("ccg: unknown zone")
-	ErrUnknownEntity = errors.New("ccg: unknown entity")
-	ErrZoneEmpty     = errors.New("ccg: zone is empty")
+	ErrUnknownZone     = errors.New("ccg: unknown zone")
+	ErrUnknownEntity   = errors.New("ccg: unknown entity")
+	ErrZoneEmpty       = errors.New("ccg: zone is empty")
+	ErrInvalidPosition = errors.New("ccg: invalid zone position")
 )
 
 // NewZone declares a zone. Idempotent — calling with an existing name
@@ -51,6 +52,32 @@ func (s *State) Add(zone ZoneName, id EntityID) error {
 		return ErrUnknownEntity
 	}
 	z.Members = append(z.Members, id)
+	e.Zone = zone
+	s.Entities[id] = e
+	return nil
+}
+
+// InsertAt places an entity at a specific index in the zone. Position 0
+// inserts at the front of Members (bottom of deck, since Draw pops from
+// the end); position == len(Members) appends (top of deck), equivalent
+// to Add. Out-of-range positions return ErrInvalidPosition. Updates
+// Entity.Zone like Add. Does not auto-remove the entity from any prior
+// zone — callers that need a move-with-position should Remove first.
+func (s *State) InsertAt(zone ZoneName, id EntityID, position int) error {
+	z, ok := s.Zones[zone]
+	if !ok {
+		return ErrUnknownZone
+	}
+	e, ok := s.Entities[id]
+	if !ok {
+		return ErrUnknownEntity
+	}
+	if position < 0 || position > len(z.Members) {
+		return ErrInvalidPosition
+	}
+	z.Members = append(z.Members, 0)
+	copy(z.Members[position+1:], z.Members[position:])
+	z.Members[position] = id
 	e.Zone = zone
 	s.Entities[id] = e
 	return nil
