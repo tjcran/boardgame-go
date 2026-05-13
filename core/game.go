@@ -99,6 +99,18 @@ type Game struct {
 	// PlayOrder is fixed.
 	AllowDynamicPlayers bool
 
+	// SchemaVersion identifies the shape of G. Bump it whenever the
+	// schema changes incompatibly. Persisted matches carry the version
+	// they were stored under; on load, Manager.State runs Migrate from
+	// the stored version up to this one. Default is 0.
+	SchemaVersion int
+
+	// Migrate transforms an in-state G from a prior SchemaVersion to the
+	// next. Called once per intermediate version: Migrate(s, 3) should
+	// produce the v4 form. Required when SchemaVersion > 0 and matches
+	// from older versions exist.
+	Migrate func(state State, fromVersion int) (State, error)
+
 	// Plugins are applied in order. See core/plugin.go.
 	Plugins []Plugin
 }

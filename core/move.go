@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // MoveContext is the single argument passed to every move function and game
@@ -119,6 +120,14 @@ type Move struct {
 	// IgnoreStaleStateID accepts the move even when the client's state ID is
 	// out of date. Use with care — the move must defend itself.
 	IgnoreStaleStateID bool
+
+	// Timeout, if > 0, derives a context.WithTimeout from the caller's
+	// MoveContext.Context for the duration of this move. The MoveFn
+	// observes the deadline via mc.Context.Done(); a well-behaved move
+	// returns early when the context is cancelled. Note: Go can't
+	// forcibly stop a goroutine — Timeout is a cooperative cancellation
+	// signal, not a guarantee.
+	Timeout time.Duration
 }
 
 // IsUndoable resolves the Undoable field for a given context. The default

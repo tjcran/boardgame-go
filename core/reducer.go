@@ -73,13 +73,19 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 
 	events := &Events{}
 	plugins := buildPluginAPIs(game, state, req.PlayerID)
+	moveCtx := ctx
+	if move.Timeout > 0 {
+		var cancel context.CancelFunc
+		moveCtx, cancel = context.WithTimeout(ctx, move.Timeout)
+		defer cancel()
+	}
 	mc := &MoveContext{
 		G:        state.G,
 		Ctx:      state.Ctx,
 		PlayerID: req.PlayerID,
 		Events:   events,
 		Plugins:  plugins,
-		Context:  ctx,
+		Context:  moveCtx,
 	}
 	// Ergonomic shortcut: if the Random plugin is registered, expose its
 	// API as mc.Random so moves can write `mc.Random.D6()` instead of

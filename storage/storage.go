@@ -32,6 +32,12 @@ type Match struct {
 	Unlisted    bool       `json:"unlisted,omitempty"`
 	CreatedAt   int64      `json:"createdAt"`
 	NextMatchID string     `json:"nextMatchID,omitempty"`
+
+	// SchemaVersion is the Game.SchemaVersion under which State was last
+	// written. Read by Manager on load to decide whether to call
+	// Game.Migrate. Defaults to 0 for legacy records — that's also the
+	// default Game.SchemaVersion, so existing data round-trips cleanly.
+	SchemaVersion int `json:"schemaVersion,omitempty"`
 }
 
 // Storage is the persistence interface the match manager depends on.

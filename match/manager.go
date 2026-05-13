@@ -103,6 +103,10 @@ type Manager struct {
 	// production deployments. Off by default to preserve BGIO's relaxed
 	// dev-mode behaviour.
 	RequireStateID bool
+
+	// Lifecycle handlers registered via OnLifecycle / OnLifecycleKind.
+	lifecycleMu   sync.Mutex
+	lifecycleSubs map[LifecycleEventKind][]LifecycleHandler
 }
 
 // NewManager builds a manager backed by the given storage. Register games
@@ -209,7 +213,7 @@ func (m *Manager) Join(matchID, name string, opts JoinOptions) (JoinResult, erro
 	unlock := m.lockMatch(matchID)
 	defer unlock()
 
-	match, err := m.store.Get(matchID)
+	match, err := m.loadMigrated(matchID)
 	if err != nil {
 		return JoinResult{}, err
 	}
@@ -293,6 +297,10 @@ func (m *Manager) Join(matchID, name string, opts JoinOptions) (JoinResult, erro
 		"player_id", playerID,
 		"seat", seat,
 		"name", name)
+	m.fireLifecycle(LifecycleEvent{
+		Kind: LifecycleMatchJoined, MatchID: matchID,
+		PlayerID: playerID, State: match.State, Match: match,
+	})
 	return JoinResult{
 		PlayerID: playerID, Seat: seat, PlayerCredentials: creds,
 	}, nil
@@ -308,7 +316,7 @@ func (m *Manager) SetConnected(matchID, playerID string, connected bool) error {
 	}
 	unlock := m.lockMatch(matchID)
 	defer unlock()
-	match, err := m.store.Get(matchID)
+	match, err := m.loadMigrated(matchID)
 	if err != nil {
 		return err
 	}
@@ -338,7 +346,7 @@ func (m *Manager) SetConnected(matchID, playerID string, connected bool) error {
 func (m *Manager) Reset(matchID, playerID, credentials string) error {
 	unlock := m.lockMatch(matchID)
 	defer unlock()
-	match, err := m.store.Get(matchID)
+	match, err := m.loadMigrated(matchID)
 	if err != nil {
 		return err
 	}
@@ -368,6 +376,10 @@ func (m *Manager) Reset(matchID, playerID, credentials string) error {
 	m.broadcast(matchID, match.State)
 	m.broadcastMatchData(matchID)
 	m.Logger.Info("match.reset", "match_id", matchID, "player_id", playerID)
+	m.fireLifecycle(LifecycleEvent{
+		Kind: LifecycleMatchReset, MatchID: matchID,
+		PlayerID: playerID, State: match.State, Match: match,
+	})
 	return nil
 }
 
@@ -375,7 +387,7 @@ func (m *Manager) Reset(matchID, playerID, credentials string) error {
 func (m *Manager) Leave(matchID, playerID, credentials string) error {
 	unlock := m.lockMatch(matchID)
 	defer unlock()
-	match, err := m.store.Get(matchID)
+	match, err := m.loadMigrated(matchID)
 	if err != nil {
 		return err
 	}
@@ -391,6 +403,10 @@ func (m *Manager) Leave(matchID, playerID, credentials string) error {
 			return err
 		}
 		m.broadcastMatchData(matchID)
+		m.fireLifecycle(LifecycleEvent{
+			Kind: LifecycleMatchLeft, MatchID: matchID,
+			PlayerID: playerID, State: match.State, Match: match,
+		})
 		return nil
 	}
 	return ErrUnknownSeat
@@ -409,7 +425,7 @@ type UpdatePlayerOpts struct {
 func (m *Manager) UpdatePlayer(matchID, playerID, credentials string, opts UpdatePlayerOpts) error {
 	unlock := m.lockMatch(matchID)
 	defer unlock()
-	match, err := m.store.Get(matchID)
+	match, err := m.loadMigrated(matchID)
 	if err != nil {
 		return err
 	}
@@ -443,7 +459,7 @@ func (m *Manager) UpdatePlayer(matchID, playerID, credentials string, opts Updat
 func (m *Manager) PlayAgain(matchID, playerID, credentials string, numPlayers int, setupData any, useDataFromPrev bool) (string, error) {
 	unlock := m.lockMatch(matchID)
 	defer unlock()
-	prev, err := m.store.Get(matchID)
+	prev, err := m.loadMigrated(matchID)
 	if err != nil {
 		return "", err
 	}
@@ -498,12 +514,13 @@ func (m *Manager) createLocked(gameName string, numPlayers int, setupData any, u
 	}
 	id := newID()
 	match := &storage.Match{
-		ID:        id,
-		GameName:  gameName,
-		State:     core.NewMatch(g, numPlayers, setupData),
-		SetupData: setupData,
-		Unlisted:  unlisted,
-		CreatedAt: m.now().Unix(),
+		ID:            id,
+		GameName:      gameName,
+		State:         core.NewMatch(g, numPlayers, setupData),
+		SetupData:     setupData,
+		Unlisted:      unlisted,
+		CreatedAt:     m.now().Unix(),
+		SchemaVersion: g.SchemaVersion,
 	}
 	if err := m.store.Create(match); err != nil {
 		return "", err
@@ -513,12 +530,58 @@ func (m *Manager) createLocked(gameName string, numPlayers int, setupData any, u
 		"game", gameName,
 		"num_players", match.State.Ctx.NumPlayers,
 		"unlisted", unlisted)
+	m.fireLifecycle(LifecycleEvent{
+		Kind: LifecycleMatchCreated, MatchID: id,
+		State: match.State, Match: match,
+	})
 	return id, nil
 }
 
-// State returns a snapshot of the match's state.
+// State returns a snapshot of the match's state, migrating it forward if
+// the stored SchemaVersion is older than the registered Game's.
 func (m *Manager) State(matchID string) (*storage.Match, error) {
-	return m.store.Get(matchID)
+	return m.loadMigrated(matchID)
+}
+
+// loadMigrated fetches a match from storage and runs Game.Migrate as
+// needed. Internal helper used by every read path (Move, Join, Leave,
+// PlayAgain, Reset, broadcast, …) so a match that crosses a schema bump
+// surfaces in its current shape regardless of which call loaded it.
+func (m *Manager) loadMigrated(matchID string) (*storage.Match, error) {
+	match, err := m.store.Get(matchID)
+	if err != nil {
+		return nil, err
+	}
+	g := m.Game(match.GameName)
+	if g == nil || g.SchemaVersion <= match.SchemaVersion {
+		return match, nil
+	}
+	if g.Migrate == nil {
+		return nil, fmt.Errorf("match %s at schema v%d but Game %q is v%d and has no Migrate fn",
+			matchID, match.SchemaVersion, g.Name, g.SchemaVersion)
+	}
+	from := match.SchemaVersion
+	cur := match.State
+	for v := from; v < g.SchemaVersion; v++ {
+		next, err := g.Migrate(cur, v)
+		if err != nil {
+			return nil, fmt.Errorf("migrate %s: v%d -> v%d: %w", matchID, v, v+1, err)
+		}
+		cur = next
+	}
+	match.State = cur
+	match.SchemaVersion = g.SchemaVersion
+	if err := m.store.Update(match); err != nil {
+		// Don't fail the read just because we couldn't persist the
+		// migrated form — return the migrated state in memory.
+		m.Logger.Warn("match.migrate.persist_failed",
+			"match_id", matchID, "err", err.Error())
+	} else {
+		m.Logger.Info("match.migrated",
+			"match_id", matchID, "from_version", from,
+			"to_version", g.SchemaVersion)
+	}
+	return match, nil
 }
 
 // List returns all matches for a given game (empty gameName lists everything).
@@ -569,7 +632,7 @@ func (m *Manager) DryMoveReq(matchID, playerID, credentials string, req core.Mov
 	unlock := m.lockMatch(matchID)
 	defer unlock()
 
-	match, err := m.store.Get(matchID)
+	match, err := m.loadMigrated(matchID)
 	if err != nil {
 		return core.State{}, err
 	}
@@ -604,7 +667,7 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 		return core.State{}, fmt.Errorf("%w: server requires StateID on every move", core.ErrStaleState)
 	}
 
-	match, err := m.store.Get(matchID)
+	match, err := m.loadMigrated(matchID)
 	if err != nil {
 		return core.State{}, err
 	}
@@ -635,6 +698,7 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 
 	start := m.now()
 	req.PlayerID = seat
+	prevGameover := match.State.Ctx.Gameover
 	next, err := core.ApplyContext(ctx, g, match.State, req)
 	if err != nil {
 		m.Logger.Warn("match.move.rejected",
@@ -657,6 +721,19 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 		"state_id", next.StateID,
 		"dur_us", m.now().Sub(start).Microseconds(),
 		"gameover", next.Ctx.Gameover != nil)
+
+	m.fireLifecycle(LifecycleEvent{
+		Kind: LifecycleMatchMoved, MatchID: matchID,
+		PlayerID: playerID, State: next, Match: match,
+		Move: req.Move, Args: req.Args,
+	})
+	if next.Ctx.Gameover != nil && prevGameover == nil {
+		// Game just ended on this move.
+		m.fireLifecycle(LifecycleEvent{
+			Kind: LifecycleMatchGameOver, MatchID: matchID,
+			PlayerID: playerID, State: next, Match: match,
+		})
+	}
 	return next, nil
 }
 
@@ -686,7 +763,7 @@ func (m *Manager) Subscribe(matchID string, s Subscriber) func() {
 // broadcastMatchData notifies every subscriber that the seated-player list
 // changed. Called after Join/Leave/UpdatePlayer.
 func (m *Manager) broadcastMatchData(matchID string) {
-	match, err := m.store.Get(matchID)
+	match, err := m.loadMigrated(matchID)
 	if err != nil {
 		return
 	}
@@ -725,7 +802,7 @@ func (m *Manager) broadcast(matchID string, state core.State) {
 	}
 	m.subsMu.Unlock()
 
-	match, err := m.store.Get(matchID)
+	match, err := m.loadMigrated(matchID)
 	if err != nil {
 		return
 	}
