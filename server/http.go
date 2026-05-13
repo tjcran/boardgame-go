@@ -114,6 +114,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request, gameName s
 		writeErr(w, err)
 		return
 	}
+	metrics.MatchesCreated.Add(1)
 	writeJSON(w, http.StatusCreated, createResp{MatchID: id})
 }
 
@@ -207,6 +208,7 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request, _, matchID s
 		writeErr(w, err)
 		return
 	}
+	metrics.MatchesJoined.Add(1)
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -321,6 +323,7 @@ type moveReq struct {
 	Credentials string `json:"credentials"`
 	Move        string `json:"move"`
 	Args        []any  `json:"args"`
+	StateID     int    `json:"stateID,omitempty"`
 }
 
 func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, _, matchID string) {
@@ -329,11 +332,17 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, _, matchID s
 		writeErr(w, err)
 		return
 	}
-	state, err := s.Manager.Move(matchID, req.PlayerID, req.Credentials, req.Move, req.Args)
+	state, err := s.Manager.MoveReqCtx(r.Context(), matchID, req.PlayerID, req.Credentials, core.MoveRequest{
+		Move:    req.Move,
+		Args:    req.Args,
+		StateID: req.StateID,
+	})
 	if err != nil {
+		metrics.MovesRejected.Add(1)
 		writeErr(w, err)
 		return
 	}
+	metrics.MovesApplied.Add(1)
 	// Send the requesting player's view back so a REST-only client also
 	// sees redacted state.
 	if m, err := s.Manager.State(matchID); err == nil {

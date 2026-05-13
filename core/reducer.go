@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -28,7 +29,18 @@ var (
 	ErrStaleState     = errors.New("client state is stale")
 )
 
-// Apply runs a move through the full reducer pipeline:
+// Apply runs a move through the full reducer pipeline with a
+// context.Background() context. For request-scoped propagation use
+// ApplyContext.
+func Apply(game *Game, state State, req MoveRequest) (State, error) {
+	return ApplyContext(context.Background(), game, state, req)
+}
+
+// ApplyContext is the context-aware variant of Apply. The context is
+// installed on MoveContext.Context so moves can honour cancellation and
+// deadlines. The reducer itself does not check ctx.Done — moves and
+// plugins are responsible for that, since the reducer is fast (the
+// expensive work is the user's code).
 //
 //  1. Reject if the game is already over.
 //  2. Check the player is allowed to move in the current scope.
@@ -41,7 +53,7 @@ var (
 //  9. Check game.EndIf -> game over.
 //
 // On any error, the returned state equals the input state.
-func Apply(game *Game, state State, req MoveRequest) (State, error) {
+func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest) (State, error) {
 	if state.Ctx.Gameover != nil {
 		return state, ErrGameOver
 	}
@@ -67,6 +79,7 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 		PlayerID: req.PlayerID,
 		Events:   events,
 		Plugins:  plugins,
+		Context:  ctx,
 	}
 	// Ergonomic shortcut: if the Random plugin is registered, expose its
 	// API as mc.Random so moves can write `mc.Random.D6()` instead of

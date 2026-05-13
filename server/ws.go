@@ -123,6 +123,7 @@ type inbound struct {
 	Credentials string `json:"credentials"`
 	Move        string `json:"move"`
 	Args        []any  `json:"args"`
+	StateID     int    `json:"stateID,omitempty"`
 	Payload     any    `json:"payload"` // chat body
 }
 
@@ -138,6 +139,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 		return
 	}
 	defer conn.CloseNow()
+	metrics.WebSocketConns.Add(1)
+	defer metrics.WebSocketConns.Add(-1)
 
 	ctx := r.Context()
 	playerID := r.URL.Query().Get("playerID")
@@ -197,11 +200,20 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 		}
 		switch msg.Type {
 		case "move":
-			if _, err := s.Manager.Move(matchID, msg.PlayerID, msg.Credentials, msg.Move, msg.Args); err != nil {
+			_, err := s.Manager.MoveReqCtx(ctx, matchID, msg.PlayerID, msg.Credentials, core.MoveRequest{
+				Move:    msg.Move,
+				Args:    msg.Args,
+				StateID: msg.StateID,
+			})
+			if err != nil {
+				metrics.MovesRejected.Add(1)
 				client.sendError(err)
+			} else {
+				metrics.MovesApplied.Add(1)
 			}
 		case "chat":
 			s.Manager.Chat(matchID, msg.PlayerID, msg.Payload)
+			metrics.ChatMessages.Add(1)
 		}
 	}
 }

@@ -1,6 +1,9 @@
 package core
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // MoveContext is the single argument passed to every move function and game
 // hook. It mirrors boardgame.io's destructured `{ G, ctx, events, random,
@@ -15,6 +18,14 @@ type MoveContext struct {
 	PlayerID string  // who is making the move
 	Events   *Events // queue side-effecting state transitions
 	Random   *Random // seeded PRNG; will be nil until the Random plugin is wired
+
+	// Context is the request-scoped context.Context propagated by the
+	// transport (or context.Background() when Apply was called without
+	// one). Moves with expensive computation can honour Context.Deadline
+	// or Context.Done — boardgame.io has nothing equivalent. Go's
+	// standard idiom is to thread context.Context through every blocking
+	// call; we do the same.
+	Context context.Context
 
 	// Plugins holds plugin-supplied APIs keyed by Plugin.Name. Use
 	// mc.Plugin("name") to fetch with a type assertion.

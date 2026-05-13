@@ -5,10 +5,13 @@
 package match
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
@@ -88,16 +91,29 @@ type Manager struct {
 	// AuthenticateCredentials checks a supplied token against the stored
 	// one. Replace at construction for custom auth.
 	AuthenticateCredentials AuthenticateCredentialsFn
+
+	// Logger receives structured events (match created, joined, moved,
+	// chat sent, errors). Default is a no-op (slog.New on io.Discard) so
+	// the manager doesn't spam stdout in libraries or tests. Swap for a
+	// JSON or text handler at process start.
+	Logger *slog.Logger
+
+	// RequireStateID, when true, refuses to apply moves whose request
+	// supplied no StateID. Enables strict optimistic-concurrency in
+	// production deployments. Off by default to preserve BGIO's relaxed
+	// dev-mode behaviour.
+	RequireStateID bool
 }
 
 // NewManager builds a manager backed by the given storage. Register games
 // with Register before creating matches.
 func NewManager(store storage.Storage) *Manager {
 	return &Manager{
-		store: store,
-		games: map[string]*core.Game{},
-		subs:  map[string]map[Subscriber]struct{}{},
-		now:   time.Now,
+		store:  store,
+		games:  map[string]*core.Game{},
+		subs:   map[string]map[Subscriber]struct{}{},
+		now:    time.Now,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		GenerateCredentials: func() string {
 			var b [16]byte
 			_, _ = rand.Read(b[:])
@@ -114,11 +130,24 @@ func NewManager(store storage.Storage) *Manager {
 }
 
 // Register makes a game available to clients. Call once at server startup
-// per game.
-func (m *Manager) Register(g *core.Game) {
+// per game. Returns Game.Validate's error if the definition is
+// malformed; if so the game is not registered.
+func (m *Manager) Register(g *core.Game) error {
+	if err := g.Validate(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.games[g.Name] = g
+	return nil
+}
+
+// MustRegister panics if Register returns an error. Convenient for
+// startup code where bad configuration should fail fast.
+func (m *Manager) MustRegister(g *core.Game) {
+	if err := m.Register(g); err != nil {
+		panic(err)
+	}
 }
 
 // Game returns the registered Game for name, or nil if unknown.
@@ -247,6 +276,11 @@ func (m *Manager) Join(matchID, name string, opts JoinOptions) (JoinResult, erro
 		return JoinResult{}, err
 	}
 	m.broadcastMatchData(matchID)
+	m.Logger.Info("match.joined",
+		"match_id", matchID,
+		"player_id", playerID,
+		"seat", seat,
+		"name", name)
 	return JoinResult{
 		PlayerID: playerID, Seat: seat, PlayerCredentials: creds,
 	}, nil
@@ -420,6 +454,11 @@ func (m *Manager) createLocked(gameName string, numPlayers int, setupData any, u
 	if err := m.store.Create(match); err != nil {
 		return "", err
 	}
+	m.Logger.Info("match.created",
+		"match_id", id,
+		"game", gameName,
+		"num_players", match.State.Ctx.NumPlayers,
+		"unlisted", unlisted)
 	return id, nil
 }
 
@@ -438,8 +477,35 @@ func (m *Manager) List(gameName string) ([]*storage.Match, error) {
 // "" to skip auth — useful only for tests). On success the new state is
 // persisted and broadcast.
 func (m *Manager) Move(matchID, playerID, credentials, moveName string, args []any) (core.State, error) {
+	return m.MoveReq(matchID, playerID, credentials, core.MoveRequest{
+		Move: moveName,
+		Args: args,
+	})
+}
+
+// MoveReq is the full-form Move that lets callers pass a MoveRequest
+// directly, including StateID for stale-state checks. The MoveRequest's
+// PlayerID field is ignored — the seat is resolved from the manager's
+// own (matchID, playerID, credentials) tuple.
+//
+// When Manager.RequireStateID is true, MoveReq rejects requests with
+// StateID == 0 (the client must echo back the last state ID they saw).
+//
+// Internally delegates to MoveReqCtx with a Background context; use that
+// variant directly when you have a request-scoped context to propagate.
+func (m *Manager) MoveReq(matchID, playerID, credentials string, req core.MoveRequest) (core.State, error) {
+	return m.MoveReqCtx(context.Background(), matchID, playerID, credentials, req)
+}
+
+// MoveReqCtx is the context-aware MoveReq. The supplied ctx is threaded
+// into MoveContext.Context so moves and plugins can honour deadlines.
+func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials string, req core.MoveRequest) (core.State, error) {
 	unlock := m.lockMatch(matchID)
 	defer unlock()
+
+	if m.RequireStateID && req.StateID == 0 {
+		return core.State{}, fmt.Errorf("%w: server requires StateID on every move", core.ErrStaleState)
+	}
 
 	match, err := m.store.Get(matchID)
 	if err != nil {
@@ -470,12 +536,15 @@ func (m *Manager) Move(matchID, playerID, credentials, moveName string, args []a
 		return core.State{}, ErrSeatRequired
 	}
 
-	next, err := core.Apply(g, match.State, core.MoveRequest{
-		PlayerID: seat,
-		Move:     moveName,
-		Args:     args,
-	})
+	start := m.now()
+	req.PlayerID = seat
+	next, err := core.ApplyContext(ctx, g, match.State, req)
 	if err != nil {
+		m.Logger.Warn("match.move.rejected",
+			"match_id", matchID,
+			"player_id", playerID,
+			"move", req.Move,
+			"err", err.Error())
 		return core.State{}, err
 	}
 	match.State = next
@@ -484,6 +553,13 @@ func (m *Manager) Move(matchID, playerID, credentials, moveName string, args []a
 	}
 
 	m.broadcast(matchID, next)
+	m.Logger.Info("match.move.applied",
+		"match_id", matchID,
+		"player_id", playerID,
+		"move", req.Move,
+		"state_id", next.StateID,
+		"dur_us", m.now().Sub(start).Microseconds(),
+		"gameover", next.Ctx.Gameover != nil)
 	return next, nil
 }
 
