@@ -1,7 +1,10 @@
 # Binaries
-boardgame-server
+/boardgame-server
 /bin/
 /dist/
+
+# Local agent / editor scratch
+.claude/
 
 # Test artifacts
 *.test
