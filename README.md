@@ -363,9 +363,11 @@ go vet -vettool=$(which boardgame-go-vet) ./...
 ### CCG / TCG library
 
 [`ccg/`](ccg/) — entities, zones, layered modifiers, sync event bus,
-target queries. Bookkeeping only; no game semantics. Composes with the
-action queue + Random + Replay. Engine never imports it; importers pay
-nothing if their game isn't card-shaped.
+target queries, plus an optional `Catalog` of `CardDef` templates so
+games can stamp instances with `State.Instantiate(catalog, defID, owner)`
+instead of hand-rolling per-card setup. Bookkeeping only; no game
+semantics. Composes with the action queue + Random + Replay. Engine
+never imports it; importers pay nothing if their game isn't card-shaped.
 
 ## Comparison vs boardgame.io
 

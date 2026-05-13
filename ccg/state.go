@@ -55,6 +55,35 @@ func (s *State) NewEntity(typeName, owner string, attrs map[string]any) EntityID
 	return id
 }
 
+// Instantiate mints a fresh Entity stamped from a CardDef registered
+// in the given Catalog. The new entity's Type and Attrs are copied
+// from the def (BaseAttrs is cloned, so later per-instance attr
+// mutations don't leak back), and Entity.DefID is set to the def's ID
+// so the runtime entity can be linked back to its template.
+//
+// Returns ErrUnknownDef when the def is not registered in the catalog.
+// A nil catalog is treated as an empty one (always returns
+// ErrUnknownDef).
+func (s *State) Instantiate(c *Catalog, def DefID, owner string) (EntityID, error) {
+	if c == nil {
+		return 0, ErrUnknownDef
+	}
+	d, ok := c.Get(def)
+	if !ok {
+		return 0, ErrUnknownDef
+	}
+	s.nextEntityID++
+	id := EntityID(s.nextEntityID)
+	s.Entities[id] = Entity{
+		ID:    id,
+		DefID: d.ID,
+		Type:  d.Type,
+		Owner: owner,
+		Attrs: cloneAttrs(d.BaseAttrs),
+	}
+	return id, nil
+}
+
 // Destroy removes an entity from state — including its current zone
 // and any modifiers targeting it. Use with care; most CCGs move
 // entities through zones rather than destroying them.
