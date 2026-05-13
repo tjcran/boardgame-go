@@ -104,9 +104,27 @@ type Manager struct {
 	// dev-mode behaviour.
 	RequireStateID bool
 
+	// UseOptimisticConcurrency switches Move from "trust the local
+	// per-match write lock" to "race on shared storage via
+	// OptimisticStorage.UpdateIfStateID with bounded retry." Requires
+	// store to satisfy storage.OptimisticStorage; falls back to the
+	// regular path otherwise. Use when running multiple Manager
+	// instances against the same shared backend without sticky-session
+	// load balancing.
+	UseOptimisticConcurrency bool
+
+	// OCCMaxRetries caps the retry loop when UseOptimisticConcurrency
+	// is on. Defaults to 8. Beyond this, MoveReqCtx returns
+	// storage.ErrConflict.
+	OCCMaxRetries int
+
 	// Lifecycle handlers registered via OnLifecycle / OnLifecycleKind.
 	lifecycleMu   sync.Mutex
 	lifecycleSubs map[LifecycleEventKind][]LifecycleHandler
+
+	// timers fires AutoExpire for matches whose active TurnConfig has a
+	// non-zero TimeBudget. One *time.Timer per active match.
+	timers *turnTimers
 }
 
 // NewManager builds a manager backed by the given storage. Register games
@@ -130,6 +148,7 @@ func NewManager(store storage.Storage) *Manager {
 			// production hardening pass.
 			return supplied != "" && supplied == p.Credentials
 		},
+		timers: newTurnTimers(),
 	}
 }
 
@@ -380,6 +399,7 @@ func (m *Manager) Reset(matchID, playerID, credentials string) error {
 		Kind: LifecycleMatchReset, MatchID: matchID,
 		PlayerID: playerID, State: match.State, Match: match,
 	})
+	m.scheduleTurnTimer(matchID, match.State, g)
 	return nil
 }
 
@@ -534,6 +554,7 @@ func (m *Manager) createLocked(gameName string, numPlayers int, setupData any, u
 		Kind: LifecycleMatchCreated, MatchID: id,
 		State: match.State, Match: match,
 	})
+	m.scheduleTurnTimer(id, match.State, g)
 	return id, nil
 }
 
@@ -698,19 +719,60 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 
 	start := m.now()
 	req.PlayerID = seat
-	prevGameover := match.State.Ctx.Gameover
-	next, err := core.ApplyContext(ctx, g, match.State, req)
-	if err != nil {
-		m.Logger.Warn("match.move.rejected",
-			"match_id", matchID,
-			"player_id", playerID,
-			"move", req.Move,
-			"err", err.Error())
-		return core.State{}, err
+
+	// OCC retry loop: when UseOptimisticConcurrency is on and the store
+	// satisfies storage.OptimisticStorage, we run Apply + CAS-Update
+	// against the storage layer, retrying on ErrConflict. The local
+	// match lock ensures we don't spin against ourselves; the CAS
+	// guards against a peer Manager racing on the same row.
+	occ, useOCC := m.store.(storage.OptimisticStorage)
+	useOCC = useOCC && m.UseOptimisticConcurrency
+	maxRetries := m.OCCMaxRetries
+	if maxRetries <= 0 {
+		maxRetries = 8
 	}
-	match.State = next
-	if err := m.store.Update(match); err != nil {
-		return core.State{}, err
+
+	var (
+		next         core.State
+		prevGameover any
+	)
+	for attempt := 0; ; attempt++ {
+		prevGameover = match.State.Ctx.Gameover
+		var err error
+		next, err = core.ApplyContext(ctx, g, match.State, req)
+		if err != nil {
+			m.Logger.Warn("match.move.rejected",
+				"match_id", matchID,
+				"player_id", playerID,
+				"move", req.Move,
+				"err", err.Error())
+			return core.State{}, err
+		}
+		match.State = next
+
+		var writeErr error
+		if useOCC {
+			expected := next.StateID - 1 // we just incremented it
+			writeErr = occ.UpdateIfStateID(match, expected)
+		} else {
+			writeErr = m.store.Update(match)
+		}
+		if writeErr == nil {
+			break
+		}
+		if !errors.Is(writeErr, storage.ErrConflict) {
+			return core.State{}, writeErr
+		}
+		if attempt+1 >= maxRetries {
+			m.Logger.Warn("match.move.occ_exhausted",
+				"match_id", matchID, "attempts", attempt+1)
+			return core.State{}, storage.ErrConflict
+		}
+		// Reload the latest state and try again.
+		match, err = m.loadMigrated(matchID)
+		if err != nil {
+			return core.State{}, err
+		}
 	}
 
 	m.broadcast(matchID, next)
@@ -734,6 +796,9 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 			PlayerID: playerID, State: next, Match: match,
 		})
 	}
+	// Refresh the turn-budget timer for the new turn (or cancel if the
+	// game ended).
+	m.scheduleTurnTimer(matchID, next, g)
 	return next, nil
 }
 

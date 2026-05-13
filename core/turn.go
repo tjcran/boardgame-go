@@ -1,6 +1,9 @@
 package core
 
-import "strconv"
+import (
+	"strconv"
+	"time"
+)
 
 // TurnConfig is the per-turn configuration. It can live on Game (global
 // default), or be overridden inside a PhaseConfig.
@@ -34,6 +37,15 @@ type TurnConfig struct {
 	// MaxMoves auto-ends the turn after this many counting moves. Zero
 	// means no maximum.
 	MaxMoves int
+
+	// TimeBudget caps the wall-clock duration of a turn. The Manager
+	// schedules a timer per active turn; on fire it calls
+	// Manager.AutoExpire which force-ends the turn through the same path
+	// as `events.EndTurn`. Zero disables the timer.
+	//
+	// Note: TimeBudget is server-driven. Clients should still display a
+	// countdown; the server is authoritative.
+	TimeBudget time.Duration
 
 	// ActivePlayers, if set, is applied at the start of every turn in this
 	// scope (equivalent to calling SetActivePlayers in OnBegin).

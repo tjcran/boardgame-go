@@ -72,6 +72,7 @@ func (m *Manager) janitorSweep(opts JanitorOptions) {
 				"match_id", mm.ID, "err", err.Error())
 			continue
 		}
+		m.cancelTurnTimer(mm.ID)
 		wiped++
 		m.Logger.Info("janitor.wiped",
 			"match_id", mm.ID, "game", mm.GameName,

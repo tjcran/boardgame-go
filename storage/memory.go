@@ -66,6 +66,22 @@ func (m *Memory) Wipe(id string) error {
 	return nil
 }
 
+// UpdateIfStateID implements OptimisticStorage. Returns ErrConflict
+// when the stored State.StateID has moved past expectedStateID.
+func (m *Memory) UpdateIfStateID(match *Match, expectedStateID int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.matches[match.ID]
+	if !ok {
+		return ErrNotFound
+	}
+	if cur.State.StateID != expectedStateID {
+		return ErrConflict
+	}
+	m.matches[match.ID] = cloneMatch(match)
+	return nil
+}
+
 // cloneMatch isolates callers from internal mutation. We share the State.G
 // pointer because Apply produces fresh values; the slice of players is copied.
 func cloneMatch(m *Match) *Match {

@@ -54,3 +54,27 @@ type Storage interface {
 	List(gameName string) ([]*Match, error)
 	Wipe(id string) error
 }
+
+// ErrConflict is returned by OptimisticStorage.UpdateIfStateID when the
+// stored State.StateID doesn't match the caller's expected value. The
+// caller should reload, re-apply, and retry.
+var ErrConflict = errors.New("optimistic concurrency conflict")
+
+// OptimisticStorage is implemented by backends that support
+// compare-and-swap Updates keyed on State.StateID. When the Manager
+// detects this interface AND a non-default match.SchemaVersion mode is
+// enabled, it switches Move from "hold the per-match write lock" to
+// "race on shared storage with retry on ErrConflict" — the foundation
+// for running multiple Manager instances against the same database
+// without sticky-session load balancing.
+//
+// Adapters that store the full Match as a single JSON blob can satisfy
+// this by extracting state_id into a real column and tightening the
+// UPDATE: WHERE id = ? AND state_id = ?.
+type OptimisticStorage interface {
+	Storage
+	// UpdateIfStateID writes m only if the persisted row's
+	// State.StateID equals expectedStateID. Returns ErrConflict on
+	// mismatch and any other backend error verbatim.
+	UpdateIfStateID(m *Match, expectedStateID int) error
+}

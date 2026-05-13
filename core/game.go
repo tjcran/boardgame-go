@@ -142,6 +142,12 @@ func (g *Game) startPhase() string {
 	return ""
 }
 
+// ScopeTurn is the exported form of scopeTurn for callers outside core
+// (the match manager's timer scheduler) that need to read the active
+// TurnConfig given a phase. Returns nil when neither the phase nor the
+// global config supplies one.
+func (g *Game) ScopeTurn(phase string) *TurnConfig { return g.scopeTurn(phase) }
+
 // scopeMoves returns the active move table for a given phase. A nil
 // phase-level Moves means "fall back to global". A phase that explicitly
 // sets Moves overrides the global table entirely (parity with BGIO).

@@ -129,6 +129,44 @@ func (s *Storage) Update(m *storage.Match) error {
 	return nil
 }
 
+// UpdateIfStateID implements storage.OptimisticStorage. Uses Postgres
+// JSONB extraction to read the persisted state_id and CAS in one
+// statement.
+//
+// Falls back to non-OCC behaviour when the stored payload has no
+// _stateID (older records): the WHERE clause matches anyway.
+func (s *Storage) UpdateIfStateID(m *storage.Match, expectedStateID int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	payload, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.Exec(
+		`UPDATE matches
+		   SET payload = $1, game_name = $2
+		 WHERE id = $3
+		   AND COALESCE((payload->'state'->>'_stateID')::int, 0) = $4`,
+		string(payload), m.GameName, m.ID, expectedStateID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		// Was it absent, or just a stateID mismatch? Distinguish for
+		// the caller — ErrConflict says "retry", ErrNotFound says
+		// "give up".
+		var dummy string
+		err := s.db.QueryRow(`SELECT id FROM matches WHERE id = $1`, m.ID).Scan(&dummy)
+		if err == sql.ErrNoRows {
+			return storage.ErrNotFound
+		}
+		return storage.ErrConflict
+	}
+	return nil
+}
+
 func (s *Storage) List(gameName string) ([]*storage.Match, error) {
 	var (
 		rows *sql.Rows
