@@ -203,14 +203,15 @@ game over).
 │   Invalidator│
 └──────────────┘
                     │
-   ┌────────────────────────┐  ┌─────────────────┐
-   │ bots/                  │  │ ccg/  (opt-in)  │
-   │   RandomBot            │  │  entities       │
-   │   MCTSBot (Perspective)│  │  zones          │
-   │   AutoPlayer           │  │  modifiers      │
-   │   Simulate             │  │  event bus      │
-   └────────────────────────┘  │  target queries │
-                               └─────────────────┘
+   ┌──────────────────────────────┐  ┌─────────────────┐
+   │ bots/                        │  │ ccg/  (opt-in)  │
+   │   RandomBot                  │  │  entities       │
+   │   MCTSBot (Perspective)      │  │  zones          │
+   │   AutoPlayer                 │  │  modifiers      │
+   │   Simulate                   │  │  event bus      │
+   │   llm/  (OpenAI / OpenRouter │  │  target queries │
+   │          / Anthropic, tools) │  └─────────────────┘
+   └──────────────────────────────┘
 ```
 
 The `core` package has no I/O dependencies. The engine never imports
@@ -281,6 +282,8 @@ for the full boardgame.io feature checklist.
 
 ### Bots
 
+Built-ins ([`bots/`](bots/bots.go)):
+
 - `RandomBot` and `MCTSBot` honour `Game.Enumerate`
 - `MCTSBot.Perspective` runs rollouts against `core.PlayerView` so
   AIs can't read opponent secret state
@@ -288,6 +291,49 @@ for the full boardgame.io feature checklist.
 - `AutoPlayer` runs a bot against a live match as a Subscriber
 - `bots.Simulate` runs N matches between bots and reports aggregate
   stats (wins, draws, errors, avg moves, avg turns)
+
+LLM-backed bots ([`bots/llm/`](bots/llm/)):
+
+- Provider-agnostic `Provider` interface; thin HTTP clients, no vendor
+  SDKs
+- `NewOpenAIProvider` — also serves OpenRouter / Together / Groq /
+  Fireworks via `BaseURL` override. `NewOpenRouterProvider` is a
+  one-liner convenience
+- `NewAnthropicProvider` — translates to Anthropic's Messages API
+  (top-level system, content-array responses, `input_schema`)
+- **Tool-calling first.** Each enumerated `Action` becomes one
+  no-parameter tool; LLM picks one by name; engine parses the choice
+  back into a `bots.Action`. No regex parsing of LLM prose; no
+  injection vector for action choice.
+- `ToolModeRequired` (default) forces a structured choice;
+  `ToolModeAuto` lets the model reason in text first; `ToolModeFree`
+  with a `ParseFreeText` callback for custom flows
+- Hook-based prompting: required `PromptFn(state, playerID, actions)`
+  returns `(system, user)`. `llm.DefaultPrompt` is a starting helper.
+- `MockProvider` + `MockPickAction` for tests; no real API calls in
+  the suite
+- Temperature defaults to 0; `MaxRetries` / `RetryFn` hooks; honours
+  `ctx` cancellation
+- **Not replay-safe.** Model versions and provider batching make
+  byte-identical replay impossible — use `RandomBot` / `MCTSBot` for
+  deterministic replay
+
+```go
+prov := llm.NewAnthropicProvider(llm.AnthropicOpts{APIKey: os.Getenv("ANTHROPIC_API_KEY")})
+bot := &llm.LLMBot{
+    Provider: prov,
+    Model:    "claude-opus-4-7",
+    Game:     myGame,
+    PromptFn: myDomainPrompt,  // render state + cards + threats for the model
+    Describe: myActionDescriber,  // "Play Pilfer targeting opponent's 4/3"
+}
+auto := &bots.AutoPlayer{Bot: bot, Manager: m, MatchID: id,
+    PlayerID: "1", Credentials: cr}
+go auto.Run(ctx)
+```
+
+Composition: write your own `bots.Bot` to chain bots — e.g. MCTS for
+candidate generation + LLM for selection.
 
 ### Storage backends
 
@@ -456,6 +502,8 @@ server/       HTTP REST + WebSocket transport + CORS + admin mux
 plugins/random     seeded splitmix64 PRNG
 plugins/player     BGIO's PluginPlayer (per-seat records)
 bots/         Bot interface, RandomBot, MCTSBot, AutoPlayer, Simulate
+bots/llm/     LLM-backed bots (OpenAI / OpenRouter / Anthropic),
+                tool-calling-first; thin HTTP, no vendor SDKs
 testhelpers/  Scenario builder + MockRandom
 bench/        Cross-match concurrency benchmarks + README
 cmd/boardgame-server     reference binary
