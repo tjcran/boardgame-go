@@ -129,6 +129,12 @@ func PlayerView(game *Game, state State, playerID string) State {
 		view.G = game.PlayerView(state.G, state.Ctx, playerID)
 	}
 	view.Plugins = redactPluginData(game, state, playerID)
+	// Redact per-move args for entries flagged Move.Redact: other seats
+	// see the entry's metadata but not the args. This is the seat-level
+	// contract LogEntry.Args documents; without it, Move.Redact would
+	// be a no-op on the wire.
+	view.Log = redactedLog(state.Log, playerID)
+	view.Undone = redactedLog(state.Undone, playerID)
 	// Engine-private bookkeeping that should never leave the server.
 	view.ActiveStack = nil
 	view.PendingNext = nil

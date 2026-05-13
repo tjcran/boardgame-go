@@ -48,3 +48,50 @@ func TestStripSecretsPassesThroughNonMapG(t *testing.T) {
 		t.Fatalf("non-map G should be passed through")
 	}
 }
+
+// TestPlayerViewRedactsLogArgs guards against a regression where
+// LogEntry.Args slipped through PlayerView for entries marked
+// Move.Redact: true. The args must be visible to the originating
+// player and nilified for everyone else (including spectators).
+func TestPlayerViewRedactsLogArgs(t *testing.T) {
+	game := &Game{Name: "redact-test"}
+	state := State{
+		Log: []LogEntry{
+			{Kind: "move", Move: "peek", PlayerID: "0", Args: []any{"secret"}, Redact: true},
+			{Kind: "move", Move: "open", PlayerID: "1", Args: []any{"public"}, Redact: false},
+		},
+		Undone: []LogEntry{
+			{Kind: "move", Move: "peek", PlayerID: "0", Args: []any{"undone-secret"}, Redact: true},
+		},
+	}
+
+	viewSelf := PlayerView(game, state, "0")
+	if got := viewSelf.Log[0].Args; len(got) != 1 || got[0] != "secret" {
+		t.Fatalf("own redacted args should be visible to originator; got %v", got)
+	}
+	if got := viewSelf.Undone[0].Args; len(got) != 1 || got[0] != "undone-secret" {
+		t.Fatalf("own redacted undone args should be visible to originator; got %v", got)
+	}
+
+	viewOther := PlayerView(game, state, "1")
+	if viewOther.Log[0].Args != nil {
+		t.Fatalf("redacted args leaked to non-originating seat: %v", viewOther.Log[0].Args)
+	}
+	if got := viewOther.Log[1].Args; len(got) != 1 || got[0] != "public" {
+		t.Fatalf("non-redacted args should be visible: got %v", got)
+	}
+	if viewOther.Undone[0].Args != nil {
+		t.Fatalf("redacted undone args leaked: %v", viewOther.Undone[0].Args)
+	}
+
+	viewSpec := PlayerView(game, state, "")
+	if viewSpec.Log[0].Args != nil {
+		t.Fatalf("redacted args leaked to spectator: %v", viewSpec.Log[0].Args)
+	}
+
+	// The redaction must not mutate the source slice — subsequent
+	// views of the same state must still observe the original Args.
+	if len(state.Log[0].Args) != 1 || state.Log[0].Args[0] != "secret" {
+		t.Fatalf("PlayerView mutated source log args: %v", state.Log[0].Args)
+	}
+}
