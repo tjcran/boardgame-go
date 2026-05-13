@@ -9,6 +9,56 @@ package core
 // picked up by the surrounding drain loop. BGIO has a bug (#1237) where
 // these are silently dropped — we explicitly fix it.
 
+// maxChainedMoves caps Events.RunMove recursion per move. Keeps a
+// misbehaving game from infinite-looping the engine.
+const maxChainedMoves = 32
+
+// runChainedMove resolves and applies a move queued via Events.RunMove.
+// It re-uses the surrounding events queue so further events from the
+// chained move land in the same drain loop. Errors (unknown move,
+// invalid args) are dropped; that's the price of "fire-and-forget"
+// dispatch from a move body. Use Apply directly when you need errors.
+func runChainedMove(game *Game, state State, parent *MoveContext, name string, args []any) State {
+	// Resolve from the current scope: phase first, then global. Stage
+	// lookups don't apply here — RunMove is dispatched in the surrounding
+	// move's player context, not a stage's.
+	scope := game.scopeMoves(state.Ctx.Phase)
+	raw, ok := scope[name]
+	if !ok {
+		return state
+	}
+	move, err := asMove(raw)
+	if err != nil {
+		return state
+	}
+	mc := &MoveContext{
+		G:        state.G,
+		Ctx:      state.Ctx,
+		PlayerID: parent.PlayerID,
+		Events:   parent.Events,
+		Plugins:  parent.Plugins,
+		Context:  parent.Context,
+	}
+	mc.chainedMoves = parent.chainedMoves // share counter
+	nextG, err := move.Move(mc, args...)
+	if err != nil {
+		return state
+	}
+	state.G = nextG
+	state.StateID++
+	state.Log = append(state.Log, LogEntry{
+		Kind: "chained-move", Move: name, PlayerID: parent.PlayerID,
+		Args: append([]any(nil), args...), Turn: state.Ctx.Turn,
+		Phase: state.Ctx.Phase,
+	})
+	if mc.extra != nil {
+		state.Log = append(state.Log, mc.extra.entries...)
+	}
+	// Propagate the share-counter back so siblings see the incremented total.
+	parent.chainedMoves = mc.chainedMoves
+	return state
+}
+
 // drainEvents flushes the events queue in order, applying each transition.
 // Some events can in turn enqueue more events (e.g. an OnEnd hook calling
 // SetPhase), so this drains until the queue is empty.
@@ -51,6 +101,14 @@ func drainEvents(game *Game, state State, mc *MoveContext, events *Events) (Stat
 				}
 			case evRemovePlayer:
 				state = removePlayer(game, state, ev.playerID, events)
+			case evRunMove:
+				// Recursion bound: cap chained moves per drain so a
+				// poorly-written game doesn't infinite-loop.
+				mc.chainedMoves++
+				if mc.chainedMoves > maxChainedMoves {
+					continue
+				}
+				state = runChainedMove(game, state, mc, ev.moveName, ev.moveArgs)
 			}
 			// Refresh the working context so subsequent hooks in this
 			// drain see the latest state.

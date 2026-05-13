@@ -103,3 +103,39 @@ var ActivePlayersOthers = ActivePlayersConfig{Others: Stage(StageNull)}
 // ActivePlayersOthersOnce matches BGIO's `ActivePlayers.OTHERS_ONCE`: every
 // player except the current player is active and may play exactly one move.
 var ActivePlayersOthersOnce = ActivePlayersConfig{Others: Stage(StageNull), MinMoves: 1, MaxMoves: 1}
+
+// ActivePlayersInOrder builds an ActivePlayersConfig chain that activates
+// each listed player one at a time, in order. The next player becomes
+// active when the current one drains their move budget (maxMoves) or
+// calls events.EndStage. After the last player, the chain ends and
+// ctx.ActivePlayers returns to nil.
+//
+// Addresses BGIO issue #478 — "setActivePlayers mode that allows cycling
+// through players in order." BGIO's setActivePlayers can activate all
+// players at once or a subset, but not sequentially.
+//
+// stage is the stage name every activated player enters (use StageNull
+// for "active, no stage restriction"). maxMoves is per player — pass 0
+// to allow unbounded moves until each player calls EndStage manually.
+func ActivePlayersInOrder(players []string, stage string, minMoves, maxMoves int) ActivePlayersConfig {
+	if len(players) == 0 {
+		return ActivePlayersConfig{}
+	}
+	// Build the chain from the end backwards so each config's Next
+	// points at the head of the remaining queue.
+	cfg := ActivePlayersConfig{
+		Value:    map[string]string{players[len(players)-1]: stage},
+		MinMoves: minMoves,
+		MaxMoves: maxMoves,
+	}
+	for i := len(players) - 2; i >= 0; i-- {
+		prev := cfg
+		cfg = ActivePlayersConfig{
+			Value:    map[string]string{players[i]: stage},
+			MinMoves: minMoves,
+			MaxMoves: maxMoves,
+			Next:     &prev,
+		}
+	}
+	return cfg
+}

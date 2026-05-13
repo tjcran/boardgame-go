@@ -19,7 +19,23 @@ import "fmt"
 // log should be the full sequence of "move"-kind entries, in order. Custom
 // AddLog entries and engine event entries are skipped.
 func Replay(game *Game, log []LogEntry, numPlayers int, setupData any) (State, error) {
+	return ReplayUntil(game, log, -1, numPlayers, setupData)
+}
+
+// ReplayUntil is the time-travel variant of Replay: re-apply the first
+// `untilSteps` "move"-kind log entries and stop. -1 means "the whole
+// log". Returns the state as it was after exactly that many moves had
+// been applied — useful for debugging ("what did the board look like
+// 3 turns before the bug?") and for log-stepping UIs (BGIO issue #892:
+// "Stepping through log outside of debug?").
+//
+// Non-move entries (custom AddLog) are skipped but not counted.
+func ReplayUntil(game *Game, log []LogEntry, untilSteps int, numPlayers int, setupData any) (State, error) {
 	state := NewMatch(game, numPlayers, setupData)
+	if untilSteps == 0 {
+		return state, nil
+	}
+	step := 0
 	for i, e := range log {
 		if e.Kind != "move" {
 			continue
@@ -33,6 +49,10 @@ func Replay(game *Game, log []LogEntry, numPlayers int, setupData any) (State, e
 			return state, fmt.Errorf("replay step %d (%s by %s): %w", i, e.Move, e.PlayerID, err)
 		}
 		state = next
+		step++
+		if untilSteps >= 0 && step >= untilSteps {
+			break
+		}
 	}
 	return state, nil
 }

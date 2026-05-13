@@ -99,6 +99,15 @@ type Game struct {
 	// PlayOrder is fixed.
 	AllowDynamicPlayers bool
 
+	// SpectatorsAllowed controls whether non-seated WebSocket
+	// connections can subscribe to a match. nil = allow (default;
+	// matches BGIO behaviour). *false = lock the match to seated
+	// players only. Addresses BGIO issue #1007.
+	//
+	// A *bool lets us distinguish "unset (default true)" from "explicit
+	// true" — handy if we ever flip the default.
+	SpectatorsAllowed *bool
+
 	// SchemaVersion identifies the shape of G. Bump it whenever the
 	// schema changes incompatibly. Persisted matches carry the version
 	// they were stored under; on load, Manager.State runs Migrate from

@@ -217,6 +217,19 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 
 	ctx := r.Context()
 	playerID := r.URL.Query().Get("playerID")
+
+	// Spectator gate (BGIO #1007). When playerID is empty and the game
+	// disallows spectators, refuse before any subscribe / sync.
+	if playerID == "" {
+		if m, err := s.Manager.State(matchID); err == nil {
+			if g := s.Manager.Game(m.GameName); g != nil &&
+				g.SpectatorsAllowed != nil && !*g.SpectatorsAllowed {
+				conn.Close(websocket.StatusPolicyViolation, "spectators not allowed")
+				return
+			}
+		}
+	}
+
 	client := newWSClient(ctx, conn, playerID)
 	defer client.close()
 

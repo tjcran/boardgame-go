@@ -1,5 +1,29 @@
 package core
 
+// CanUndo reports whether Undo would succeed against the given state.
+// Useful for clients that want to grey out an "Undo" button without
+// actually invoking it. Mirrors the API ask in BGIO issue #1048.
+func CanUndo(game *Game, state State) bool {
+	if game.DisableUndo {
+		return false
+	}
+	if state.Ctx.Gameover != nil {
+		return false
+	}
+	return len(state.TurnSnapshots) > 0
+}
+
+// CanRedo is the symmetric helper for Redo.
+func CanRedo(game *Game, state State) bool {
+	if game.DisableUndo {
+		return false
+	}
+	if state.Ctx.Gameover != nil {
+		return false
+	}
+	return len(state.Undone) > 0
+}
+
 // Undo reverts the most recent undoable move in the current turn, returning
 // the engine to the state captured just before that move. Calls outside the
 // undoable window (or when undo is disabled) return ErrInvalidMove.

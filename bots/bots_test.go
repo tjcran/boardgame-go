@@ -80,6 +80,42 @@ func TestMCTSBotPrefersWinningCompletion(t *testing.T) {
 	}
 }
 
+// TestBGIO906_MCTSEarlyStopHalts verifies the EarlyStop callback can
+// terminate MCTS before Iterations is exhausted. Addresses BGIO #906.
+func TestBGIO906_MCTSEarlyStopHalts(t *testing.T) {
+	g := tictactoe.New()
+	s := core.NewMatch(g, 0, nil)
+
+	called := 0
+	bot := &bots.MCTSBot{
+		Game:           g,
+		Enumerate:      enumerateTTT,
+		Iterations:     1000,
+		Seed:           int64(42),
+		EarlyStopAfter: 4,
+		EarlyStop: func(_ []bots.Action, _ []float64, visits []int) bool {
+			called++
+			total := 0
+			for _, v := range visits {
+				total += v
+			}
+			return total >= 20 // halt after 20 iterations
+		},
+	}
+	if _, err := bot.Play(context.Background(), s, "0"); err != nil {
+		t.Fatalf("play: %v", err)
+	}
+	if called == 0 {
+		t.Fatal("EarlyStop callback never invoked")
+	}
+	// Past the warmup floor (16) and the halt threshold (20), we expect
+	// called to be in [5, 200] range — not exhaustive proof, just a
+	// floor on "the callback short-circuited the loop."
+	if called > 200 {
+		t.Fatalf("EarlyStop didn't halt the loop (called %d times for 1000 iters)", called)
+	}
+}
+
 func TestAutoPlayerActsOnItsTurn(t *testing.T) {
 	m := match.NewManager(storage.NewMemory())
 	m.MustRegister(tictactoe.New())

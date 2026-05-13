@@ -84,6 +84,17 @@ type MCTSBot struct {
 	Iterations int
 	// Seed seeds the rollout PRNG; deterministic for tests/replay.
 	Seed any
+	// EarlyStop, if set, is called after every iteration past
+	// EarlyStopAfter (default 16) with the current win/visit stats.
+	// Returning true halts the search early — useful for skipping
+	// further rollouts when one branch is already overwhelmingly
+	// winning. Addresses BGIO issue #906.
+	EarlyStop func(actions []Action, wins []float64, visits []int) bool
+	// EarlyStopAfter is the minimum number of iterations before
+	// EarlyStop is consulted. Defaults to 16 — below that we don't
+	// have enough samples to call anything decisive. Ignored when
+	// EarlyStop is nil.
+	EarlyStopAfter int
 }
 
 // Play implements Bot.
@@ -103,6 +114,11 @@ func (b *MCTSBot) Play(ctx context.Context, state core.State, playerID string) (
 
 	wins := make([]float64, len(actions))
 	visits := make([]int, len(actions))
+
+	earlyStopAfter := b.EarlyStopAfter
+	if earlyStopAfter <= 0 {
+		earlyStopAfter = 16
+	}
 
 	for it := 0; it < iters; it++ {
 		// Cooperative cancellation: stop early if the caller's context is done.
@@ -125,6 +141,11 @@ func (b *MCTSBot) Play(ctx context.Context, state core.State, playerID string) (
 		result := b.rollout(afterMove, playerID, &rngState)
 		wins[idx] += result
 		visits[idx]++
+
+		// Early-stop check past the warmup floor.
+		if b.EarlyStop != nil && it+1 >= earlyStopAfter && b.EarlyStop(actions, wins, visits) {
+			break
+		}
 	}
 
 	bestIdx, bestVisits := 0, -1

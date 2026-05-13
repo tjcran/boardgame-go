@@ -35,6 +35,10 @@ type MoveContext struct {
 	// extra holds AddLog entries appended during this MoveContext's
 	// lifetime. Engine-only; not visible to plugins.
 	extra *extraLog
+
+	// chainedMoves counts Events.RunMove invocations within this
+	// MoveContext, capped by maxChainedMoves in the reducer.
+	chainedMoves int
 }
 
 // Plugin returns the API object exposed by the named plugin, or nil if no

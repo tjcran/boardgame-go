@@ -20,6 +20,9 @@ type event struct {
 	turnNext  string
 	activeCfg *ActivePlayersConfig
 	stageOpts *setStageOpts
+	// runMove fields:
+	moveName string
+	moveArgs []any
 }
 
 type eventKind int
@@ -34,6 +37,7 @@ const (
 	evSetActivePlayers
 	evPass
 	evRemovePlayer
+	evRunMove
 )
 
 // setStageOpts carries the optional minMoves/maxMoves for the long-form
@@ -122,6 +126,20 @@ func (e *Events) SetActivePlayers(cfg ActivePlayersConfig) {
 // outside the normal game flow.
 func (e *Events) RemovePlayer(playerID string) {
 	e.queue = append(e.queue, event{kind: evRemovePlayer, playerID: playerID})
+}
+
+// RunMove queues a follow-up move that fires after the current move's
+// G changes apply. The chained move runs with the same PlayerID and
+// goes through the same validation/log/event-drain pipeline as a real
+// move — including phase scoping. Recursion is bounded; see the
+// drainEvents handler.
+//
+// Addresses BGIO issue #1085 ("How to dispatch move from another move
+// automatically?"). BGIO's answer was "call the function directly,"
+// which bypasses framework bookkeeping; this primitive does it
+// properly.
+func (e *Events) RunMove(name string, args ...any) {
+	e.queue = append(e.queue, event{kind: evRunMove, moveName: name, moveArgs: args})
 }
 
 // drain pops queued events into a slice and clears the queue. Used by the
