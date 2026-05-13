@@ -642,6 +642,32 @@ func (m *Manager) State(matchID string) (*storage.Match, error) {
 	return m.loadMigrated(matchID)
 }
 
+// Authenticate reports whether the supplied credentials match the
+// stored secret for the named seat in the named match. Used by the
+// transport to gate player-specific operations that don't already
+// pass through Move/Reset/Leave (e.g. WebSocket sync, chat,
+// connection-presence updates).
+//
+// Returns false for spectators (empty playerID), unseated playerIDs,
+// missing matches, and credential mismatches.
+func (m *Manager) Authenticate(matchID, playerID, credentials string) bool {
+	if playerID == "" {
+		return false
+	}
+	unlock := m.lockMatch(matchID)
+	defer unlock()
+	match, err := m.loadMigrated(matchID)
+	if err != nil {
+		return false
+	}
+	for _, p := range match.Players {
+		if p.ID == playerID {
+			return m.AuthenticateCredentials(credentials, p)
+		}
+	}
+	return false
+}
+
 // loadMigrated fetches a match from storage and runs Game.Migrate as
 // needed. Internal helper used by every read path (Move, Join, Leave,
 // PlayAgain, Reset, broadcast, …) so a match that crosses a schema bump

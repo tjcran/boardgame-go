@@ -29,7 +29,9 @@ func TestWSConnectFlipsIsConnected(t *testing.T) {
 	alice := joinByHTTP(t, srv.URL, "tic-tac-toe", created.MatchID, "alice")
 
 	wsURL := strings.Replace(srv.URL, "http://", "ws://", 1) +
-		"/games/tic-tac-toe/" + created.MatchID + "/ws?playerID=" + alice.PlayerID
+		"/games/tic-tac-toe/" + created.MatchID +
+		"/ws?playerID=" + alice.PlayerID +
+		"&credentials=" + alice.PlayerCredentials
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

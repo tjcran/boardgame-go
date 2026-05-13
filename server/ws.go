@@ -204,7 +204,47 @@ type inbound struct {
 
 // handleWS upgrades the connection, sends the current state immediately,
 // and then loops on incoming move messages.
+//
+// Authentication contract:
+//
+//   - The Origin header is checked against the server's configured
+//     allow-list before the upgrade. Mismatched origins get 403, which
+//     blocks cross-site WebSocket hijacking (an attacker page can open
+//     a WS without CORS preflight; the only gate is the Origin check).
+//
+//   - A seat-bound connection (playerID query param non-empty) must
+//     supply matching credentials via the `credentials` query param.
+//     Unauthenticated requests for a specific seat are rejected; this
+//     prevents unauthenticated readers from receiving that seat's
+//     PlayerView (hidden hand, private plugin payloads, redacted log
+//     args) and prevents spoofed presence / chat as that seat.
+//
+//   - Spectators connect with no playerID. They receive the spectator
+//     view (PlayerID="" → PlayerView strips hidden state).
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matchID string) {
+	// Origin gate. An empty Origin header is allowed (non-browser
+	// clients — direct WS libraries don't set Origin and aren't
+	// subject to the cross-site attack this guards against).
+	if origin := r.Header.Get("Origin"); origin != "" && !s.originAllowed(origin) {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		return
+	}
+
+	playerID := r.URL.Query().Get("playerID")
+	credentials := r.URL.Query().Get("credentials")
+
+	// Seat-bound connections must authenticate. Reject before the
+	// upgrade so the failure surfaces as an HTTP 401 the client can
+	// see, rather than an opaque WS close.
+	if playerID != "" {
+		if !s.Manager.Authenticate(matchID, playerID, credentials) {
+			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	// We've already validated the Origin and credentials ourselves; the
+	// library's own same-origin check is now redundant.
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
@@ -216,7 +256,6 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 	defer metrics.WebSocketConns.Add(-1)
 
 	ctx := r.Context()
-	playerID := r.URL.Query().Get("playerID")
 
 	// Spectator gate (BGIO #1007). When playerID is empty and the game
 	// disallows spectators, refuse before any subscribe / sync.
@@ -276,6 +315,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 		}
 		switch msg.Type {
 		case "move":
+			// MoveReqCtx revalidates msg.Credentials against
+			// msg.PlayerID, so move-time auth doesn't rely on
+			// the connection-level binding.
 			_, err := s.Manager.MoveReqCtx(ctx, matchID, msg.PlayerID, msg.Credentials, core.MoveRequest{
 				Move:    msg.Move,
 				Args:    msg.Args,
@@ -288,6 +330,15 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 				metrics.MovesApplied.Add(1)
 			}
 		case "chat":
+			// Chat carries no built-in credential check inside the
+			// Manager, so the transport enforces it. A client may
+			// send chat as a different seat from the one this
+			// socket authenticated as, provided they prove
+			// possession of that seat's credentials.
+			if msg.PlayerID != "" && !s.Manager.Authenticate(matchID, msg.PlayerID, msg.Credentials) {
+				client.sendError(match.ErrBadCredentials)
+				continue
+			}
 			s.Manager.Chat(matchID, msg.PlayerID, msg.Payload)
 			metrics.ChatMessages.Add(1)
 		}

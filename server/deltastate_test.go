@@ -65,7 +65,9 @@ func TestDeltaStateSendsPatchFrame(t *testing.T) {
 	joinByHTTP(t, srv.URL, "delta", created.MatchID, "bob")
 
 	wsURL := strings.Replace(srv.URL, "http://", "ws://", 1) +
-		"/games/delta/" + created.MatchID + "/ws?playerID=0"
+		"/games/delta/" + created.MatchID +
+		"/ws?playerID=" + alice.PlayerID +
+		"&credentials=" + alice.PlayerCredentials
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
