@@ -45,8 +45,9 @@ type Server struct {
 	Info         ServerInfo
 	Instructions string
 
-	mu    sync.RWMutex
-	tools map[string]registeredTool
+	mu      sync.RWMutex
+	tools   map[string]registeredTool
+	prompts map[string]registeredPrompt
 }
 
 type registeredTool struct {
@@ -129,8 +130,9 @@ func (s *Server) dispatch(ctx context.Context, msg *rpcMessage, writeJSON func(a
 	case "tools/call":
 		writeJSON(s.handleToolsCall(ctx, msg))
 	case "prompts/list":
-		// No prompts in PR 1; respond with empty list so clients don't error.
-		writeJSON(rpcResult(msg.ID, map[string]any{"prompts": []any{}}))
+		writeJSON(s.handlePromptsList(msg))
+	case "prompts/get":
+		writeJSON(s.handlePromptsGet(ctx, msg))
 	case "resources/list":
 		writeJSON(rpcResult(msg.ID, map[string]any{"resources": []any{}}))
 	default:
@@ -151,7 +153,8 @@ func (s *Server) handleInitialize(msg *rpcMessage) any {
 	return rpcResult(msg.ID, map[string]any{
 		"protocolVersion": ProtocolVersion,
 		"capabilities": map[string]any{
-			"tools": map[string]any{"listChanged": false},
+			"tools":   map[string]any{"listChanged": false},
+			"prompts": map[string]any{"listChanged": false},
 		},
 		"serverInfo":   s.Info,
 		"instructions": s.Instructions,

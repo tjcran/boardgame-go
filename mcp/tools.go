@@ -18,6 +18,13 @@ import (
 // and lets us swap the SDK locally if needed.
 type Tools struct {
 	Manager *match.Manager
+
+	// Ownership scopes match access by authenticated user. Leave nil for
+	// single-tenant mode (stdio, local dev). In hosted/HTTP mode the
+	// transport layer sets Ownership and threads the userID through
+	// context via WithUserID; create_match claims, every other
+	// match-scoped tool verifies via requireOwnership.
+	Ownership OwnershipStore
 }
 
 // ----- list_games -----
@@ -67,9 +74,15 @@ type CreateMatchResult struct {
 	NumPlayers int    `json:"numPlayers"`
 }
 
-func (t *Tools) CreateMatch(_ context.Context, args CreateMatchArgs) (CreateMatchResult, error) {
+func (t *Tools) CreateMatch(ctx context.Context, args CreateMatchArgs) (CreateMatchResult, error) {
 	if args.Game == "" {
 		return CreateMatchResult{}, errors.New("game is required")
+	}
+	// With ownership scoping on, the caller must have a userID before we
+	// create anything — otherwise we'd leak an orphan match into the
+	// shared store on auth misconfiguration.
+	if t.Ownership != nil && UserIDFromContext(ctx) == "" {
+		return CreateMatchResult{}, errors.New("not authenticated: no userID on request context")
 	}
 	matchID, err := t.Manager.Create(args.Game, match.CreateOptions{
 		NumPlayers: args.NumPlayers,
@@ -78,6 +91,11 @@ func (t *Tools) CreateMatch(_ context.Context, args CreateMatchArgs) (CreateMatc
 	})
 	if err != nil {
 		return CreateMatchResult{}, err
+	}
+	if t.Ownership != nil {
+		if err := t.Ownership.Claim(ctx, UserIDFromContext(ctx), matchID); err != nil {
+			return CreateMatchResult{}, fmt.Errorf("claim ownership: %w", err)
+		}
 	}
 	m, err := t.Manager.State(matchID)
 	if err != nil {
@@ -105,9 +123,12 @@ type JoinMatchResult struct {
 	Credentials string `json:"credentials"`
 }
 
-func (t *Tools) JoinMatch(_ context.Context, args JoinMatchArgs) (JoinMatchResult, error) {
+func (t *Tools) JoinMatch(ctx context.Context, args JoinMatchArgs) (JoinMatchResult, error) {
 	if args.MatchID == "" {
 		return JoinMatchResult{}, errors.New("matchID is required")
+	}
+	if err := t.requireOwnership(ctx, args.MatchID); err != nil {
+		return JoinMatchResult{}, err
 	}
 	res, err := t.Manager.Join(args.MatchID, args.Name, match.JoinOptions{
 		PlayerID: args.PlayerID,
@@ -151,9 +172,12 @@ type PlayerInfo struct {
 // GetState returns the current state as visible to the given playerID. An
 // empty playerID gets the spectator view (whatever Game.PlayerView returns
 // for "").
-func (t *Tools) GetState(_ context.Context, args GetStateArgs) (GetStateResult, error) {
+func (t *Tools) GetState(ctx context.Context, args GetStateArgs) (GetStateResult, error) {
 	if args.MatchID == "" {
 		return GetStateResult{}, errors.New("matchID is required")
+	}
+	if err := t.requireOwnership(ctx, args.MatchID); err != nil {
+		return GetStateResult{}, err
 	}
 	m, err := t.Manager.State(args.MatchID)
 	if err != nil {
@@ -207,12 +231,15 @@ type ListLegalMovesResult struct {
 // legally play right now. Powered by Game.Enumerate. Games without an
 // Enumerate function return an explicit error so the LLM client can
 // surface the limitation rather than guessing a move schema.
-func (t *Tools) ListLegalMoves(_ context.Context, args ListLegalMovesArgs) (ListLegalMovesResult, error) {
+func (t *Tools) ListLegalMoves(ctx context.Context, args ListLegalMovesArgs) (ListLegalMovesResult, error) {
 	if args.MatchID == "" {
 		return ListLegalMovesResult{}, errors.New("matchID is required")
 	}
 	if args.PlayerID == "" {
 		return ListLegalMovesResult{}, errors.New("playerID is required")
+	}
+	if err := t.requireOwnership(ctx, args.MatchID); err != nil {
+		return ListLegalMovesResult{}, err
 	}
 	m, err := t.Manager.State(args.MatchID)
 	if err != nil {
@@ -265,6 +292,9 @@ func (t *Tools) MakeMove(ctx context.Context, args MakeMoveArgs) (MakeMoveResult
 	}
 	if args.Move == "" {
 		return MakeMoveResult{}, errors.New("move is required")
+	}
+	if err := t.requireOwnership(ctx, args.MatchID); err != nil {
+		return MakeMoveResult{}, err
 	}
 	state, err := t.Manager.MoveReqCtx(ctx, args.MatchID, args.PlayerID, args.Credentials, core.MoveRequest{
 		PlayerID: args.PlayerID,
