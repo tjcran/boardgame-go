@@ -378,8 +378,12 @@ hand-rolling the strip-opponent-hand dance, and a typed counter API
 `{kind, delta, total_after}` on every mutation so triggered abilities
 can subscribe, and one-shot helpers `Transition` / `MoveAllTo` (pre-
 flight all-or-nothing batch moves), `Top` / `Bottom`, `Mulligan`
-(empty hand → shuffle deck → redraw), and `Deal` (per-player ×
-per-def opening-hand setup). Bookkeeping only; no game semantics.
+(empty hand → shuffle deck → redraw), `Deal` (per-player × per-def
+opening-hand setup), and a `DeckPile{DeckZone, DiscardZone}`
+composite with `Draw` / `Discard` / `Mill` / `ReshuffleDiscardIntoDeck`
+methods and an opt-in `AutoReshuffleOnEmpty` policy (default off, so
+MTG-style "empty deck loses" stays as the un-opinionated default).
+Bookkeeping only; no game semantics.
 Composes with the action queue + Random + Replay. Engine never
 imports it; importers pay nothing if their game isn't card-shaped.
 
