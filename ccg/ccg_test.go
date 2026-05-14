@@ -966,3 +966,298 @@ func TestDestroyClearsZonesAndModifiers(t *testing.T) {
 		}
 	}
 }
+
+func TestAddCounterIncrementsAndPublishes(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", nil)
+
+	var seen []ccg.Event
+	s.Subscribe(ccg.MatchType(ccg.EventCounterChanged), func(_ *ccg.State, e ccg.Event) {
+		seen = append(seen, e)
+	})
+
+	s.AddCounter(id, "+1/+1", 2)
+	if got := s.Counters(id, "+1/+1"); got != 2 {
+		t.Fatalf("after +2: want 2, got %d", got)
+	}
+	s.AddCounter(id, "+1/+1", 3)
+	if got := s.Counters(id, "+1/+1"); got != 5 {
+		t.Fatalf("after +3 more: want 5, got %d", got)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(seen))
+	}
+	last := seen[1]
+	if last.Source != id {
+		t.Fatalf("event Source: want %d, got %d", id, last.Source)
+	}
+	if last.Data["kind"] != "+1/+1" {
+		t.Fatalf("event kind: %v", last.Data["kind"])
+	}
+	if last.Data["delta"] != 3 {
+		t.Fatalf("event delta: want 3, got %v", last.Data["delta"])
+	}
+	if last.Data["total_after"] != 5 {
+		t.Fatalf("event total_after: want 5, got %v", last.Data["total_after"])
+	}
+}
+
+func TestAddCounterClampsAtZero(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", nil)
+	s.AddCounter(id, "x", 3)
+
+	var events []ccg.Event
+	s.Subscribe(ccg.MatchType(ccg.EventCounterChanged), func(_ *ccg.State, e ccg.Event) {
+		events = append(events, e)
+	})
+
+	// Try to remove 10 from a total of 3 — delta should report as -3.
+	s.AddCounter(id, "x", -10)
+	if got := s.Counters(id, "x"); got != 0 {
+		t.Fatalf("clamp at 0: got %d", got)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Data["delta"] != -3 {
+		t.Fatalf("applied delta: want -3, got %v", events[0].Data["delta"])
+	}
+	if events[0].Data["total_after"] != 0 {
+		t.Fatalf("total_after: want 0, got %v", events[0].Data["total_after"])
+	}
+}
+
+func TestAddCounterNoOpDoesNotPublish(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", nil)
+
+	var fires int
+	s.Subscribe(ccg.MatchType(ccg.EventCounterChanged), func(_ *ccg.State, _ ccg.Event) {
+		fires++
+	})
+
+	s.AddCounter(id, "x", 0)
+	// Removing from zero clamps to zero — applied delta is 0, no event.
+	s.AddCounter(id, "x", -5)
+
+	if fires != 0 {
+		t.Fatalf("expected 0 events on no-op, got %d", fires)
+	}
+}
+
+func TestAddCounterUnknownEntityIsNoOp(t *testing.T) {
+	s := ccg.NewState()
+	var fires int
+	s.Subscribe(ccg.MatchType(ccg.EventCounterChanged), func(_ *ccg.State, _ ccg.Event) {
+		fires++
+	})
+
+	s.AddCounter(ccg.EntityID(9999), "x", 5)
+	if fires != 0 {
+		t.Fatalf("unknown entity: expected 0 events, got %d", fires)
+	}
+}
+
+func TestRemoveCounterSugar(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", nil)
+	s.AddCounter(id, "loyalty", 4)
+	s.RemoveCounter(id, "loyalty", 1)
+	if got := s.Counters(id, "loyalty"); got != 3 {
+		t.Fatalf("after -1: want 3, got %d", got)
+	}
+	// Negative-n argument: no-op (does not silently add).
+	s.RemoveCounter(id, "loyalty", -5)
+	if got := s.Counters(id, "loyalty"); got != 3 {
+		t.Fatalf("negative arg should be no-op, got %d", got)
+	}
+}
+
+func TestCountersZeroForUnknown(t *testing.T) {
+	s := ccg.NewState()
+	if got := s.Counters(ccg.EntityID(9999), "x"); got != 0 {
+		t.Fatalf("unknown entity: want 0, got %d", got)
+	}
+	id := s.NewEntity("creature", "0", nil)
+	if got := s.Counters(id, "unset"); got != 0 {
+		t.Fatalf("unset counter: want 0, got %d", got)
+	}
+}
+
+func TestAllCountersReturnsCopy(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", nil)
+	if got := s.AllCounters(id); got != nil {
+		t.Fatalf("empty: want nil, got %v", got)
+	}
+	s.AddCounter(id, "a", 2)
+	s.AddCounter(id, "b", 5)
+	got := s.AllCounters(id)
+	if got["a"] != 2 || got["b"] != 5 {
+		t.Fatalf("AllCounters returned wrong values: %+v", got)
+	}
+	// Mutating the returned map must not affect state.
+	got["a"] = 99
+	if s.Counters(id, "a") != 2 {
+		t.Fatalf("AllCounters did not return a copy")
+	}
+}
+
+func TestCounterRemovedWhenTotalReachesZero(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", nil)
+	s.AddCounter(id, "x", 1)
+	s.RemoveCounter(id, "x", 1)
+	// AllCounters should be nil (sub-map cleared) or at least not
+	// contain "x".
+	got := s.AllCounters(id)
+	if _, ok := got["x"]; ok {
+		t.Fatalf("zero counter should be removed from map: %+v", got)
+	}
+	// And the reserved attr key should be gone entirely so Entity.Attrs
+	// is back to its pre-counter shape.
+	e, _ := s.Get(id)
+	if _, present := e.Attrs[ccg.CountersAttrKey]; present {
+		t.Fatalf("CountersAttrKey should be removed when no counters remain: %+v", e.Attrs)
+	}
+}
+
+func TestTransferCountersHappyPath(t *testing.T) {
+	s := ccg.NewState()
+	from := s.NewEntity("creature", "0", nil)
+	to := s.NewEntity("creature", "0", nil)
+	s.AddCounter(from, "+1/+1", 3)
+
+	var events []ccg.Event
+	s.Subscribe(ccg.MatchType(ccg.EventCounterChanged), func(_ *ccg.State, e ccg.Event) {
+		events = append(events, e)
+	})
+
+	if err := s.TransferCounters(from, to, "+1/+1", 2); err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+	if s.Counters(from, "+1/+1") != 1 {
+		t.Fatalf("from after transfer: want 1, got %d", s.Counters(from, "+1/+1"))
+	}
+	if s.Counters(to, "+1/+1") != 2 {
+		t.Fatalf("to after transfer: want 2, got %d", s.Counters(to, "+1/+1"))
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	// First event is the removal from `from`; second is addition to `to`.
+	if events[0].Source != from || events[0].Data["delta"] != -2 {
+		t.Fatalf("first event should debit from: %+v", events[0])
+	}
+	if events[1].Source != to || events[1].Data["delta"] != 2 {
+		t.Fatalf("second event should credit to: %+v", events[1])
+	}
+}
+
+func TestTransferCountersInsufficientFails(t *testing.T) {
+	s := ccg.NewState()
+	from := s.NewEntity("creature", "0", nil)
+	to := s.NewEntity("creature", "0", nil)
+	s.AddCounter(from, "x", 1)
+
+	var fires int
+	s.Subscribe(ccg.MatchType(ccg.EventCounterChanged), func(_ *ccg.State, _ ccg.Event) {
+		fires++
+	})
+
+	err := s.TransferCounters(from, to, "x", 5)
+	if !errors.Is(err, ccg.ErrInsufficientCounters) {
+		t.Fatalf("want ErrInsufficientCounters, got %v", err)
+	}
+	if s.Counters(from, "x") != 1 || s.Counters(to, "x") != 0 {
+		t.Fatalf("state mutated on failed transfer: from=%d to=%d",
+			s.Counters(from, "x"), s.Counters(to, "x"))
+	}
+	if fires != 0 {
+		t.Fatalf("no events should fire on failed transfer, got %d", fires)
+	}
+}
+
+func TestTransferCountersUnknownEntities(t *testing.T) {
+	s := ccg.NewState()
+	known := s.NewEntity("creature", "0", nil)
+	s.AddCounter(known, "x", 1)
+	if err := s.TransferCounters(9999, known, "x", 1); !errors.Is(err, ccg.ErrUnknownEntity) {
+		t.Fatalf("unknown from: want ErrUnknownEntity, got %v", err)
+	}
+	if err := s.TransferCounters(known, 9999, "x", 1); !errors.Is(err, ccg.ErrUnknownEntity) {
+		t.Fatalf("unknown to: want ErrUnknownEntity, got %v", err)
+	}
+}
+
+func TestTransferCountersNoOps(t *testing.T) {
+	s := ccg.NewState()
+	a := s.NewEntity("creature", "0", nil)
+	b := s.NewEntity("creature", "0", nil)
+	s.AddCounter(a, "x", 3)
+
+	var fires int
+	s.Subscribe(ccg.MatchType(ccg.EventCounterChanged), func(_ *ccg.State, _ ccg.Event) {
+		fires++
+	})
+
+	if err := s.TransferCounters(a, b, "x", 0); err != nil {
+		t.Fatalf("zero transfer: %v", err)
+	}
+	if err := s.TransferCounters(a, b, "x", -1); err != nil {
+		t.Fatalf("negative transfer: %v", err)
+	}
+	if err := s.TransferCounters(a, a, "x", 2); err != nil {
+		t.Fatalf("self transfer: %v", err)
+	}
+	if fires != 0 {
+		t.Fatalf("no events should fire on no-op transfers, got %d", fires)
+	}
+}
+
+func TestCountersRoundTripThroughJSON(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", map[string]any{"power": 2})
+	s.AddCounter(id, "+1/+1", 3)
+	s.AddCounter(id, "loyalty", 7)
+
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var got ccg.State
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Read via Counters — coerces map[string]any back to int.
+	if v := got.Counters(id, "+1/+1"); v != 3 {
+		t.Fatalf("post-roundtrip Counters(+1/+1): want 3, got %d", v)
+	}
+	if v := got.Counters(id, "loyalty"); v != 7 {
+		t.Fatalf("post-roundtrip Counters(loyalty): want 7, got %d", v)
+	}
+	// AllCounters returns int-typed copy.
+	all := got.AllCounters(id)
+	if all["+1/+1"] != 3 || all["loyalty"] != 7 {
+		t.Fatalf("post-roundtrip AllCounters: %+v", all)
+	}
+	// Mutating after roundtrip canonicalises the inner map back to
+	// map[string]int and fires a normal event.
+	got.AddCounter(id, "+1/+1", 1)
+	if v := got.Counters(id, "+1/+1"); v != 4 {
+		t.Fatalf("post-roundtrip AddCounter: want 4, got %d", v)
+	}
+}
+
+func TestCountersDoNotPolluteOtherAttrs(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", map[string]any{"power": 2, "toughness": 2})
+	s.AddCounter(id, "+1/+1", 1)
+
+	e, _ := s.Get(id)
+	if e.AttrInt("power", 0) != 2 || e.AttrInt("toughness", 0) != 2 {
+		t.Fatalf("counter mutations should not touch other Attrs: %+v", e.Attrs)
+	}
+}
