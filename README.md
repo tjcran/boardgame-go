@@ -376,9 +376,12 @@ hand-rolling the strip-opponent-hand dance, and a typed counter API
 (`AddCounter` / `RemoveCounter` / `Counters` / `AllCounters` /
 `TransferCounters`) that publishes a `counter_changed` event with
 `{kind, delta, total_after}` on every mutation so triggered abilities
-can subscribe. Bookkeeping only; no game semantics. Composes with the
-action queue + Random + Replay. Engine never imports it; importers pay
-nothing if their game isn't card-shaped.
+can subscribe, and one-shot helpers `Transition` / `MoveAllTo` (pre-
+flight all-or-nothing batch moves), `Top` / `Bottom`, `Mulligan`
+(empty hand → shuffle deck → redraw), and `Deal` (per-player ×
+per-def opening-hand setup). Bookkeeping only; no game semantics.
+Composes with the action queue + Random + Replay. Engine never
+imports it; importers pay nothing if their game isn't card-shaped.
 
 ## Comparison vs boardgame.io
 
