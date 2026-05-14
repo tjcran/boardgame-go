@@ -387,7 +387,11 @@ style "empty deck loses" stays as the un-opinionated default), and
 event subscription that auto-unbinds when the entity leaves the
 listed zones or is destroyed, closing the classic "creature still
 triggers from the graveyard because someone forgot Unsubscribe"
-bug. Bookkeeping only; no game semantics.
+bug. The optional [`ccg/typed`](ccg/typed/) sub-package adds generic
+`CardDef[A]` / `Catalog[A]` so games can author card templates whose
+Attrs is a typed struct; the underlying untyped `ccg.Catalog` is
+reachable via `cat.Untyped()` and flows through `State.Instantiate`
+/ `LoadDeckList` unchanged. Bookkeeping only; no game semantics.
 Composes with the action queue + Random + Replay. Engine never
 imports it; importers pay nothing if their game isn't card-shaped.
 
