@@ -372,9 +372,13 @@ DefID order, and per-entity `Visibility` (`Public` / `OwnerOnly` /
 `Hidden`) plus `State.RedactForViewer(viewer)` that returns a deep-copied
 state with hidden entities, their modifiers, and events that reference
 them stripped — drop it into your game's `PlayerView` instead of
-hand-rolling the strip-opponent-hand dance. Bookkeeping only; no game
-semantics. Composes with the action queue + Random + Replay. Engine
-never imports it; importers pay nothing if their game isn't card-shaped.
+hand-rolling the strip-opponent-hand dance, and a typed counter API
+(`AddCounter` / `RemoveCounter` / `Counters` / `AllCounters` /
+`TransferCounters`) that publishes a `counter_changed` event with
+`{kind, delta, total_after}` on every mutation so triggered abilities
+can subscribe. Bookkeeping only; no game semantics. Composes with the
+action queue + Random + Replay. Engine never imports it; importers pay
+nothing if their game isn't card-shaped.
 
 ## Comparison vs boardgame.io
 
