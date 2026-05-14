@@ -1,0 +1,60 @@
+# Sample Cloud Run service spec for the hosted boardgame-mcp.
+#
+# Replace PROJECT, VERSION, JWKS_URL, ISSUER, AUDIENCE before applying.
+# Apply with:
+#
+#   gcloud run services replace mcp/deploy/cloudrun.yaml --region=us-central1
+#
+# Scales to zero when idle; one CPU + 256 MiB is plenty for the synchronous
+# JSON-RPC workload. Replace SQLite with Postgres (Neon DATABASE_URL) once
+# the Postgres ownership store lands.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: boardgame-mcp
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "10"
+        run.googleapis.com/cpu-throttling: "true"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 60
+      containers:
+      - image: gcr.io/PROJECT/boardgame-mcp:VERSION
+        args:
+        - serve
+        - --transport=http
+        - --port=8080
+        - --jwks-url=$(JWKS_URL)
+        - --issuer=$(ISSUER)
+        - --audience=$(AUDIENCE)
+        ports:
+        - name: http1
+          containerPort: 8080
+        env:
+        - name: JWKS_URL
+          value: "https://your-issuer.example/.well-known/jwks.json"
+        - name: ISSUER
+          value: "https://your-issuer.example/"
+        - name: AUDIENCE
+          value: "boardgame-mcp"
+        resources:
+          limits:
+            cpu: "1"
+            memory: 256Mi
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          failureThreshold: 5
+          periodSeconds: 2
+          timeoutSeconds: 2
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          periodSeconds: 30
+          timeoutSeconds: 2

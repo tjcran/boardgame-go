@@ -53,3 +53,38 @@ jobs:
           cache: true
       - name: build
         run: go build -o /tmp/boardgame-server ./cmd/boardgame-server
+
+  build-mcp:
+    name: build mcp binary (optional plugin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - name: build
+        # Building via go.work; verifies the sub-module compiles and
+        # picks up the local replace of the root module.
+        run: go build -o /tmp/boardgame-mcp ./mcp/cmd/boardgame-mcp
+
+  root-isolation:
+    name: root module isolation (GOWORK=off)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+      - name: build root only
+        # With GOWORK=off the mcp/ sub-module is invisible to root.
+        # This confirms downstream consumers of github.com/tjcran/boardgame-go
+        # never pull MCP-only deps (mcp SDK, JWT lib, OAuth machinery).
+        env:
+          GOWORK: "off"
+        run: go build ./...
+      - name: test root only
+        env:
+          GOWORK: "off"
+        run: go test -count=1 ./...
