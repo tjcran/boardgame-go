@@ -1580,3 +1580,163 @@ func TestDealUnknownDefStopsEarly(t *testing.T) {
 		t.Fatalf("partial deal: hand:0=%d (expected 1 from the pre-failure card)", s.Size("hand:0"))
 	}
 }
+
+func TestNewDeckPileEnsuresZones(t *testing.T) {
+	s := ccg.NewState()
+	pile := s.NewDeckPile("d", "g")
+	if pile.DeckZone != "d" || pile.DiscardZone != "g" {
+		t.Fatalf("DeckPile labels: %+v", pile)
+	}
+	if _, ok := s.Zones["d"]; !ok {
+		t.Fatalf("deck zone not created")
+	}
+	if _, ok := s.Zones["g"]; !ok {
+		t.Fatalf("discard zone not created")
+	}
+	pile2 := s.NewDeckPile("d", "g")
+	if pile2.DeckZone != pile.DeckZone || pile2.DiscardZone != pile.DiscardZone {
+		t.Fatalf("re-call should return matching labels")
+	}
+}
+
+func TestDeckPileDrawAndDiscard(t *testing.T) {
+	s := ccg.NewState()
+	pile := s.NewDeckPile("deck", "discard")
+	for i := 0; i < 5; i++ {
+		_ = s.Add("deck", s.NewEntity("card", "0", nil))
+	}
+	drawn, err := pile.Draw(s, 2, testRandom(1))
+	if err != nil {
+		t.Fatalf("draw: %v", err)
+	}
+	if len(drawn) != 2 {
+		t.Fatalf("draw count: want 2, got %d", len(drawn))
+	}
+	if pile.DeckSize(s) != 3 {
+		t.Fatalf("deck size after draw: want 3, got %d", pile.DeckSize(s))
+	}
+	if err := pile.Discard(s, drawn...); err != nil {
+		t.Fatalf("discard: %v", err)
+	}
+	if pile.DiscardSize(s) != 2 {
+		t.Fatalf("discard size: want 2, got %d", pile.DiscardSize(s))
+	}
+}
+
+func TestDeckPileDrawEmptyNoAutoReshuffle(t *testing.T) {
+	s := ccg.NewState()
+	pile := s.NewDeckPile("deck", "discard")
+	_ = s.Add("discard", s.NewEntity("card", "0", nil))
+	_, err := pile.Draw(s, 1, testRandom(1))
+	if !errors.Is(err, ccg.ErrZoneEmpty) {
+		t.Fatalf("want ErrZoneEmpty, got %v", err)
+	}
+	if pile.DeckSize(s) != 0 || pile.DiscardSize(s) != 1 {
+		t.Fatalf("default policy should not auto-reshuffle: deck=%d discard=%d",
+			pile.DeckSize(s), pile.DiscardSize(s))
+	}
+}
+
+func TestDeckPileDrawAutoReshuffle(t *testing.T) {
+	s := ccg.NewState()
+	pile := s.NewDeckPile("deck", "discard")
+	pile.AutoReshuffleOnEmpty = true
+	for i := 0; i < 3; i++ {
+		_ = s.Add("discard", s.NewEntity("card", "0", nil))
+	}
+	drawn, err := pile.Draw(s, 2, testRandom(7))
+	if err != nil {
+		t.Fatalf("auto-reshuffled draw: %v", err)
+	}
+	if len(drawn) != 2 {
+		t.Fatalf("drawn count: want 2, got %d", len(drawn))
+	}
+	if pile.DeckSize(s) != 1 || pile.DiscardSize(s) != 0 {
+		t.Fatalf("after reshuffle+draw 2: deck=%d discard=%d (want 1 / 0)",
+			pile.DeckSize(s), pile.DiscardSize(s))
+	}
+}
+
+func TestDeckPileMillUsesReshuffle(t *testing.T) {
+	s := ccg.NewState()
+	pile := s.NewDeckPile("deck", "discard")
+	pile.AutoReshuffleOnEmpty = true
+	for i := 0; i < 2; i++ {
+		_ = s.Add("deck", s.NewEntity("card", "0", nil))
+	}
+	milled, err := pile.Mill(s, 2, testRandom(1))
+	if err != nil {
+		t.Fatalf("mill: %v", err)
+	}
+	if len(milled) != 2 {
+		t.Fatalf("milled count: %d", len(milled))
+	}
+	for _, id := range milled {
+		if !s.Contains("discard", id) {
+			t.Fatalf("milled %d not in discard", id)
+		}
+	}
+}
+
+func TestDeckPileReshuffleDiscardIntoDeck(t *testing.T) {
+	s := ccg.NewState()
+	pile := s.NewDeckPile("deck", "discard")
+	for i := 0; i < 4; i++ {
+		_ = s.Add("discard", s.NewEntity("card", "0", nil))
+	}
+	if err := pile.ReshuffleDiscardIntoDeck(s, testRandom(1)); err != nil {
+		t.Fatalf("reshuffle: %v", err)
+	}
+	if pile.DeckSize(s) != 4 || pile.DiscardSize(s) != 0 {
+		t.Fatalf("post-reshuffle: deck=%d discard=%d (want 4 / 0)",
+			pile.DeckSize(s), pile.DiscardSize(s))
+	}
+}
+
+func TestDeckPileReshuffleEmptyIsNoOp(t *testing.T) {
+	s := ccg.NewState()
+	pile := s.NewDeckPile("deck", "discard")
+	if err := pile.ReshuffleDiscardIntoDeck(s, testRandom(1)); err != nil {
+		t.Fatalf("empty reshuffle should be no-op: %v", err)
+	}
+}
+
+func TestDeckPileDeterministic(t *testing.T) {
+	build := func() (*ccg.State, *ccg.DeckPile) {
+		s := ccg.NewState()
+		pile := s.NewDeckPile("deck", "discard")
+		pile.AutoReshuffleOnEmpty = true
+		for i := 0; i < 4; i++ {
+			_ = s.Add("discard", s.NewEntity("card", "0", nil))
+		}
+		return s, pile
+	}
+	s1, p1 := build()
+	a, _ := p1.Draw(s1, 3, testRandom(99))
+	s2, p2 := build()
+	b, _ := p2.Draw(s2, 3, testRandom(99))
+	if len(a) != len(b) {
+		t.Fatalf("draw length mismatch")
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("pile.Draw not deterministic at %d: %v vs %v", i, a, b)
+		}
+	}
+}
+
+func TestDeckPileDiscardPropagatesCapacityError(t *testing.T) {
+	s := ccg.NewState()
+	pile := s.NewDeckPile("deck", "discard")
+	s.Zones["discard"].Capacity = 1
+	a := s.NewEntity("card", "0", nil)
+	b := s.NewEntity("card", "0", nil)
+	_ = s.Add("deck", a)
+	_ = s.Add("deck", b)
+	if err := pile.Discard(s, a, b); !errors.Is(err, ccg.ErrZoneFull) {
+		t.Fatalf("want ErrZoneFull, got %v", err)
+	}
+	if pile.DeckSize(s) != 2 {
+		t.Fatalf("deck partially emptied on rejected discard: %d", pile.DeckSize(s))
+	}
+}
