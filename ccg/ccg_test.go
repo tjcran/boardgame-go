@@ -1740,3 +1740,202 @@ func TestDeckPileDiscardPropagatesCapacityError(t *testing.T) {
 		t.Fatalf("deck partially emptied on rejected discard: %d", pile.DeckSize(s))
 	}
 }
+
+func TestBindAbilityFiresWhileInZone(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	id := s.NewEntity("creature", "0", nil)
+	_ = s.Add("battlefield", id)
+
+	var fires int
+	s.BindAbility(id, []ccg.ZoneName{"battlefield"},
+		ccg.MatchType("ping"),
+		func(_ *ccg.State, _ ccg.Event) { fires++ },
+	)
+	s.Publish(ccg.Event{Type: "ping"})
+	s.Publish(ccg.Event{Type: "ping"})
+	if fires != 2 {
+		t.Fatalf("expected 2 fires while in zone, got %d", fires)
+	}
+}
+
+func TestBindAbilityAutoUnbindsOnZoneLeave(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	s.NewZone("graveyard", false)
+	id := s.NewEntity("creature", "0", nil)
+	_ = s.Add("battlefield", id)
+
+	var fires int
+	s.BindAbility(id, []ccg.ZoneName{"battlefield"},
+		ccg.MatchType("ping"),
+		func(_ *ccg.State, _ ccg.Event) { fires++ },
+	)
+	s.Publish(ccg.Event{Type: "ping"})
+	_ = s.MoveTo(id, "graveyard")
+	s.Publish(ccg.Event{Type: "ping"})
+	s.Publish(ccg.Event{Type: "ping"})
+
+	if fires != 1 {
+		t.Fatalf("expected 1 fire before zone-out, got %d", fires)
+	}
+	// Re-entry does NOT auto-rebind.
+	_ = s.MoveTo(id, "battlefield")
+	s.Publish(ccg.Event{Type: "ping"})
+	if fires != 1 {
+		t.Fatalf("re-entry should not auto-rebind, got %d fires", fires)
+	}
+}
+
+func TestBindAbilityAutoUnbindsOnDestroy(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	id := s.NewEntity("creature", "0", nil)
+	_ = s.Add("battlefield", id)
+
+	var fires int
+	s.BindAbility(id, []ccg.ZoneName{"battlefield"},
+		ccg.MatchType("ping"),
+		func(_ *ccg.State, _ ccg.Event) { fires++ },
+	)
+	s.Destroy(id)
+	s.Publish(ccg.Event{Type: "ping"})
+	if fires != 0 {
+		t.Fatalf("expected 0 fires after destroy, got %d", fires)
+	}
+}
+
+func TestBindAbilityMultiZone(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	s.NewZone("graveyard", false)
+	s.NewZone("exile", false)
+	id := s.NewEntity("creature", "0", nil)
+	_ = s.Add("battlefield", id)
+
+	var fires int
+	s.BindAbility(id, []ccg.ZoneName{"battlefield", "graveyard"},
+		ccg.MatchType("ping"),
+		func(_ *ccg.State, _ ccg.Event) { fires++ },
+	)
+	s.Publish(ccg.Event{Type: "ping"})
+	_ = s.MoveTo(id, "graveyard")
+	s.Publish(ccg.Event{Type: "ping"})
+	_ = s.MoveTo(id, "exile")
+	s.Publish(ccg.Event{Type: "ping"})
+	if fires != 2 {
+		t.Fatalf("multi-zone: want 2 fires, got %d", fires)
+	}
+}
+
+func TestBindAbilityExplicitUnbind(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	id := s.NewEntity("creature", "0", nil)
+	_ = s.Add("battlefield", id)
+
+	var fires int
+	aid := s.BindAbility(id, []ccg.ZoneName{"battlefield"},
+		ccg.MatchType("ping"),
+		func(_ *ccg.State, _ ccg.Event) { fires++ },
+	)
+	s.Publish(ccg.Event{Type: "ping"})
+	s.UnbindAbility(aid)
+	s.Publish(ccg.Event{Type: "ping"})
+	if fires != 1 {
+		t.Fatalf("expected 1 fire before explicit unbind, got %d", fires)
+	}
+	// Re-unbinding is a no-op; unknown ids too.
+	s.UnbindAbility(aid)
+	s.UnbindAbility(ccg.AbilityID(9999))
+}
+
+func TestBindAbilityIndependentBindingsPerEntity(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	s.NewZone("graveyard", false)
+	a := s.NewEntity("creature", "0", nil)
+	b := s.NewEntity("creature", "0", nil)
+	_ = s.Add("battlefield", a)
+	_ = s.Add("battlefield", b)
+
+	var aFires, bFires int
+	s.BindAbility(a, []ccg.ZoneName{"battlefield"},
+		ccg.MatchType("ping"),
+		func(_ *ccg.State, _ ccg.Event) { aFires++ },
+	)
+	s.BindAbility(b, []ccg.ZoneName{"battlefield"},
+		ccg.MatchType("ping"),
+		func(_ *ccg.State, _ ccg.Event) { bFires++ },
+	)
+	s.Publish(ccg.Event{Type: "ping"})
+	_ = s.MoveTo(a, "graveyard")
+	s.Publish(ccg.Event{Type: "ping"})
+
+	if aFires != 1 {
+		t.Fatalf("aFires: want 1, got %d", aFires)
+	}
+	if bFires != 2 {
+		t.Fatalf("bFires: want 2, got %d", bFires)
+	}
+}
+
+func TestBindAbilityMultipleBindingsOnSameEntity(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	id := s.NewEntity("creature", "0", nil)
+	_ = s.Add("battlefield", id)
+
+	var pingFires, summonFires int
+	s.BindAbility(id, []ccg.ZoneName{"battlefield"},
+		ccg.MatchType("ping"),
+		func(_ *ccg.State, _ ccg.Event) { pingFires++ },
+	)
+	s.BindAbility(id, []ccg.ZoneName{"battlefield"},
+		ccg.MatchType("summon"),
+		func(_ *ccg.State, _ ccg.Event) { summonFires++ },
+	)
+	s.Publish(ccg.Event{Type: "ping"})
+	s.Publish(ccg.Event{Type: "summon"})
+	s.Publish(ccg.Event{Type: "unrelated"})
+
+	if pingFires != 1 || summonFires != 1 {
+		t.Fatalf("independent triggers: ping=%d summon=%d", pingFires, summonFires)
+	}
+}
+
+func TestBindAbilityIgnoresNonMatchingPredicate(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	id := s.NewEntity("creature", "0", nil)
+	_ = s.Add("battlefield", id)
+
+	var fires int
+	s.BindAbility(id, []ccg.ZoneName{"battlefield"},
+		ccg.MatchType("ping"),
+		func(_ *ccg.State, _ ccg.Event) { fires++ },
+	)
+	s.Publish(ccg.Event{Type: "irrelevant"})
+	if fires != 0 {
+		t.Fatalf("non-matching predicate fired anyway: %d", fires)
+	}
+}
+
+func TestBindAbilityBoundZonesDefensiveCopy(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	s.NewZone("graveyard", false)
+	id := s.NewEntity("creature", "0", nil)
+	_ = s.Add("battlefield", id)
+
+	zones := []ccg.ZoneName{"battlefield"}
+	var fires int
+	s.BindAbility(id, zones, ccg.MatchType("ping"),
+		func(_ *ccg.State, _ ccg.Event) { fires++ },
+	)
+	zones[0] = "graveyard" // caller mutates after binding
+	s.Publish(ccg.Event{Type: "ping"})
+	if fires != 1 {
+		t.Fatalf("defensive-copy failed; got %d fires", fires)
+	}
+}

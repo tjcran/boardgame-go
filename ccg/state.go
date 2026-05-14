@@ -23,15 +23,20 @@ type State struct {
 	Modifiers map[ModifierID]Modifier  `json:"modifiers,omitempty"`
 	Events    []Event                  `json:"events,omitempty"`
 
-	// nextEntityID / nextModID / nextSubID are monotonic counters for
-	// stable IDs. Replay-safe: equal Setup + equal moves → equal IDs.
+	// nextEntityID / nextModID / nextSubID / nextAbilityID are
+	// monotonic counters for stable IDs. Replay-safe: equal Setup +
+	// equal moves → equal IDs.
 	nextEntityID   uint64
 	nextModID      uint64
 	nextInsertion  int
 	nextSubID      uint64
+	nextAbilityID  uint64
 
-	// subs is the in-memory subscription table. Not serialised.
-	subs []subscription
+	// subs / abilities are in-memory tables (not serialised). The
+	// engine re-registers them at process start the same way it
+	// re-registers subs.
+	subs      []subscription
+	abilities []ability
 }
 
 // NewState builds an empty State.
