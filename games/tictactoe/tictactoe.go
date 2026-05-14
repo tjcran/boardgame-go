@@ -32,8 +32,27 @@ func New() *core.Game {
 			MinMoves: 1,
 			MaxMoves: 1,
 		},
-		EndIf: endIf,
+		EndIf:     endIf,
+		Enumerate: enumerate,
 	}
+}
+
+// enumerate lists every empty cell as a legal clickCell move for the
+// current player. Returning nil for non-current players matches the
+// expectation of the bots and MCP layers — only the player on turn has
+// legal actions to choose from.
+func enumerate(g core.G, ctx core.Ctx, playerID string) []core.EnumerateAction {
+	if playerID != ctx.CurrentPlayer {
+		return nil
+	}
+	s := g.(*State)
+	out := make([]core.EnumerateAction, 0, 9)
+	for i, c := range s.Cells {
+		if c == "" {
+			out = append(out, core.EnumerateAction{Move: "clickCell", Args: []any{i}})
+		}
+	}
+	return out
 }
 
 // clickCell expects one int argument: the cell index (0..8). The current
