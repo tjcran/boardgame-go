@@ -105,6 +105,7 @@ func runServe(argv []string) error {
 		Version: version,
 	}, mcppkg.DefaultInstructions)
 	mcppkg.RegisterTools(srv, tools)
+	mcppkg.RegisterDefaultPrompts(srv)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
