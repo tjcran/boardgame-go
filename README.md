@@ -545,3 +545,21 @@ games/tictactoe          reference game
 - [GO_LEVERAGE.md](GO_LEVERAGE.md) — wins from Go's type system / stdlib
 - [JS_LIMITATIONS.md](JS_LIMITATIONS.md) — flaws in BGIO Go solves
 - [PLAN.md](PLAN.md) — original MVP plan (historical)
+
+## Acknowledgments
+
+The public API surface — `Game`, `Setup`, `Moves`, `Phases`, `Turn`,
+`EndIf`, the Lobby contract, the plugin interface — deliberately mirrors
+[boardgame.io](https://github.com/boardgameio/boardgame.io) so that game
+logic translates between the two frameworks with mechanical changes.
+boardgame.io is the original work of Nicolo Davis and the wider BGIO
+contributor community; this Go port stands on top of years of their
+design thinking. No upstream source is included in this repo — the Go
+implementation is freshly authored — but the upstream MIT license is
+reproduced verbatim in [NOTICE](NOTICE) as a courtesy and to remove any
+ambiguity for downstream users.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Upstream attribution lives in
+[NOTICE](NOTICE).
