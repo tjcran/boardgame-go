@@ -7,7 +7,15 @@ import (
 	"testing"
 
 	"github.com/tjcran/boardgame-go/ccg"
+	"github.com/tjcran/boardgame-go/core"
 )
+
+// testRandom returns a deterministic *core.Random seeded with the
+// given value. Helper for tests that exercise shuffle-dependent
+// behaviour and want byte-identical repeats.
+func testRandom(seed uint64) *core.Random {
+	return core.NewRandomFromState(&seed)
+}
 
 // fixture returns a State pre-populated with two players and three
 // entities — enough to exercise zones, modifiers, queries.
@@ -1259,5 +1267,316 @@ func TestCountersDoNotPolluteOtherAttrs(t *testing.T) {
 	e, _ := s.Get(id)
 	if e.AttrInt("power", 0) != 2 || e.AttrInt("toughness", 0) != 2 {
 		t.Fatalf("counter mutations should not touch other Attrs: %+v", e.Attrs)
+	}
+}
+
+func TestTransitionMovesBatch(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("hand", false)
+	s.NewZone("discard", false)
+	a := s.NewEntity("card", "0", nil)
+	b := s.NewEntity("card", "0", nil)
+	c := s.NewEntity("card", "0", nil)
+	_ = s.Add("hand", a)
+	_ = s.Add("hand", b)
+	_ = s.Add("hand", c)
+
+	if err := s.Transition([]ccg.EntityID{a, b, c}, "discard"); err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	if s.Size("hand") != 0 || s.Size("discard") != 3 {
+		t.Fatalf("post-transition: hand=%d discard=%d", s.Size("hand"), s.Size("discard"))
+	}
+}
+
+func TestTransitionPreFlightZoneFull(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("hand", false)
+	z := s.NewZone("battlefield", false)
+	z.Capacity = 2
+	a := s.NewEntity("creature", "0", nil)
+	b := s.NewEntity("creature", "0", nil)
+	c := s.NewEntity("creature", "0", nil)
+	_ = s.Add("hand", a)
+	_ = s.Add("hand", b)
+	_ = s.Add("hand", c)
+
+	err := s.Transition([]ccg.EntityID{a, b, c}, "battlefield")
+	if !errors.Is(err, ccg.ErrZoneFull) {
+		t.Fatalf("want ErrZoneFull, got %v", err)
+	}
+	// State must be untouched (pre-flight all-or-nothing).
+	if s.Size("hand") != 3 || s.Size("battlefield") != 0 {
+		t.Fatalf("partial mutation on rejected transition: hand=%d battlefield=%d",
+			s.Size("hand"), s.Size("battlefield"))
+	}
+}
+
+func TestTransitionPreFlightUnknownEntity(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("hand", false)
+	s.NewZone("discard", false)
+	a := s.NewEntity("card", "0", nil)
+	_ = s.Add("hand", a)
+
+	err := s.Transition([]ccg.EntityID{a, ccg.EntityID(9999)}, "discard")
+	if !errors.Is(err, ccg.ErrUnknownEntity) {
+		t.Fatalf("want ErrUnknownEntity, got %v", err)
+	}
+	if s.Size("hand") != 1 || s.Size("discard") != 0 {
+		t.Fatalf("partial mutation on rejected transition")
+	}
+}
+
+func TestTransitionPreFlightUnknownZone(t *testing.T) {
+	s := ccg.NewState()
+	if err := s.Transition(nil, "missing"); !errors.Is(err, ccg.ErrUnknownZone) {
+		t.Fatalf("want ErrUnknownZone, got %v", err)
+	}
+}
+
+func TestTransitionIgnoresAlreadyInTarget(t *testing.T) {
+	// ids already in `to` shouldn't count for capacity — moving them
+	// is effectively a no-op.
+	s := ccg.NewState()
+	z := s.NewZone("lane", false)
+	z.Capacity = 2
+	a := s.NewEntity("creature", "0", nil)
+	b := s.NewEntity("creature", "0", nil)
+	_ = s.Add("lane", a)
+	_ = s.Add("lane", b)
+	// Both ids are already in `lane`; capacity 2; transition should succeed.
+	if err := s.Transition([]ccg.EntityID{a, b}, "lane"); err != nil {
+		t.Fatalf("self-targeting transition: %v", err)
+	}
+}
+
+func TestMoveAllToSweepsSources(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("battlefield", false)
+	s.NewZone("aura", false)
+	s.NewZone("graveyard", false)
+	for i := 0; i < 3; i++ {
+		_ = s.Add("battlefield", s.NewEntity("creature", "0", nil))
+	}
+	for i := 0; i < 2; i++ {
+		_ = s.Add("aura", s.NewEntity("enchantment", "0", nil))
+	}
+
+	if err := s.MoveAllTo("graveyard", "battlefield", "aura"); err != nil {
+		t.Fatalf("MoveAllTo: %v", err)
+	}
+	if s.Size("battlefield") != 0 || s.Size("aura") != 0 || s.Size("graveyard") != 5 {
+		t.Fatalf("post-sweep: bf=%d aura=%d gy=%d",
+			s.Size("battlefield"), s.Size("aura"), s.Size("graveyard"))
+	}
+}
+
+func TestMoveAllToPreFlightCapacity(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("hand", false)
+	z := s.NewZone("discard", false)
+	z.Capacity = 2
+	for i := 0; i < 3; i++ {
+		_ = s.Add("hand", s.NewEntity("card", "0", nil))
+	}
+	err := s.MoveAllTo("discard", "hand")
+	if !errors.Is(err, ccg.ErrZoneFull) {
+		t.Fatalf("want ErrZoneFull, got %v", err)
+	}
+	if s.Size("hand") != 3 || s.Size("discard") != 0 {
+		t.Fatalf("partial sweep on rejected MoveAllTo: hand=%d discard=%d",
+			s.Size("hand"), s.Size("discard"))
+	}
+}
+
+func TestMoveAllToUnknownZones(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("hand", false)
+	if err := s.MoveAllTo("missing", "hand"); !errors.Is(err, ccg.ErrUnknownZone) {
+		t.Fatalf("unknown target: want ErrUnknownZone, got %v", err)
+	}
+	if err := s.MoveAllTo("hand", "missing"); !errors.Is(err, ccg.ErrUnknownZone) {
+		t.Fatalf("unknown source: want ErrUnknownZone, got %v", err)
+	}
+}
+
+func TestMoveAllToSelfSourceSkipped(t *testing.T) {
+	s := ccg.NewState()
+	z := s.NewZone("lane", false)
+	z.Capacity = 1
+	_ = s.Add("lane", s.NewEntity("c", "0", nil))
+	// Source equals target — capacity check should ignore those entities.
+	if err := s.MoveAllTo("lane", "lane"); err != nil {
+		t.Fatalf("self-source MoveAllTo should be a no-op: %v", err)
+	}
+}
+
+func TestTopAndBottom(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("deck", true)
+	if _, ok := s.Top("deck"); ok {
+		t.Fatalf("empty zone Top should return (_, false)")
+	}
+	if _, ok := s.Bottom("deck"); ok {
+		t.Fatalf("empty zone Bottom should return (_, false)")
+	}
+	if _, ok := s.Top("missing"); ok {
+		t.Fatalf("unknown zone Top should return (_, false)")
+	}
+	a := s.NewEntity("card", "0", nil)
+	b := s.NewEntity("card", "0", nil)
+	c := s.NewEntity("card", "0", nil)
+	_ = s.Add("deck", a) // bottom
+	_ = s.Add("deck", b)
+	_ = s.Add("deck", c) // top
+	top, ok := s.Top("deck")
+	if !ok || top != c {
+		t.Fatalf("Top: want %d, got %d (ok=%v)", c, top, ok)
+	}
+	bot, ok := s.Bottom("deck")
+	if !ok || bot != a {
+		t.Fatalf("Bottom: want %d, got %d (ok=%v)", a, bot, ok)
+	}
+}
+
+func TestMulliganReshufflesAndRedraws(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("hand", false)
+	s.NewZone("deck", true)
+	var hand []ccg.EntityID
+	for i := 0; i < 3; i++ {
+		id := s.NewEntity("card", "0", nil)
+		_ = s.Add("hand", id)
+		hand = append(hand, id)
+	}
+	for i := 0; i < 5; i++ {
+		_ = s.Add("deck", s.NewEntity("card", "0", nil))
+	}
+
+	drawn, err := s.Mulligan("hand", "deck", 3, testRandom(42))
+	if err != nil {
+		t.Fatalf("mulligan: %v", err)
+	}
+	if len(drawn) != 3 {
+		t.Fatalf("drawn count: want 3, got %d", len(drawn))
+	}
+	if s.Size("hand") != 3 {
+		t.Fatalf("hand size: want 3, got %d", s.Size("hand"))
+	}
+	// Deck previously had 5 + 3 (from hand) = 8; we drew 3, so deck = 5.
+	if s.Size("deck") != 5 {
+		t.Fatalf("deck size: want 5, got %d", s.Size("deck"))
+	}
+	// All drawn ids must now be in hand.
+	for _, id := range drawn {
+		if !s.Contains("hand", id) {
+			t.Fatalf("drawn id %d not in hand", id)
+		}
+	}
+}
+
+func TestMulliganZeroJustReshuffles(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("hand", false)
+	s.NewZone("deck", true)
+	for i := 0; i < 3; i++ {
+		_ = s.Add("hand", s.NewEntity("card", "0", nil))
+	}
+	for i := 0; i < 5; i++ {
+		_ = s.Add("deck", s.NewEntity("card", "0", nil))
+	}
+	drawn, err := s.Mulligan("hand", "deck", 0, testRandom(1))
+	if err != nil {
+		t.Fatalf("mulligan(0): %v", err)
+	}
+	if len(drawn) != 0 {
+		t.Fatalf("drawn: want 0, got %d", len(drawn))
+	}
+	if s.Size("hand") != 0 || s.Size("deck") != 8 {
+		t.Fatalf("mulligan(0) should empty hand into deck: hand=%d deck=%d",
+			s.Size("hand"), s.Size("deck"))
+	}
+}
+
+func TestMulliganDeterministic(t *testing.T) {
+	build := func() *ccg.State {
+		s := ccg.NewState()
+		s.NewZone("hand", false)
+		s.NewZone("deck", true)
+		for i := 0; i < 3; i++ {
+			_ = s.Add("hand", s.NewEntity("card", "0", nil))
+		}
+		for i := 0; i < 5; i++ {
+			_ = s.Add("deck", s.NewEntity("card", "0", nil))
+		}
+		return s
+	}
+	a, _ := build().Mulligan("hand", "deck", 3, testRandom(99))
+	b, _ := build().Mulligan("hand", "deck", 3, testRandom(99))
+	if len(a) != len(b) {
+		t.Fatalf("Mulligan length mismatch")
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("Mulligan not deterministic at %d: %v vs %v", i, a, b)
+		}
+	}
+}
+
+func TestDealInstantiatesPerPlayerPerDef(t *testing.T) {
+	c := ccg.NewCatalog()
+	_ = c.Register(ccg.CardDef{ID: "x", Type: "creature"})
+	_ = c.Register(ccg.CardDef{ID: "y", Type: "spell"})
+
+	s := ccg.NewState()
+	s.NewZone("hand:0", false)
+	s.NewZone("hand:1", false)
+
+	defs := []ccg.DefID{"x", "y", "x"}
+	ids, err := s.Deal(c, defs, []string{"0", "1"}, func(p string) ccg.ZoneName {
+		return ccg.ZoneName("hand:" + p)
+	})
+	if err != nil {
+		t.Fatalf("deal: %v", err)
+	}
+	if len(ids) != 6 {
+		t.Fatalf("expected 6 entities, got %d", len(ids))
+	}
+	// First 3 belong to player 0 in defs order.
+	for i := 0; i < 3; i++ {
+		e, _ := s.Get(ids[i])
+		if e.Owner != "0" || e.DefID != defs[i] {
+			t.Fatalf("player-0 slot %d: owner=%q def=%q want owner=0 def=%s",
+				i, e.Owner, e.DefID, defs[i])
+		}
+	}
+	for i := 0; i < 3; i++ {
+		e, _ := s.Get(ids[3+i])
+		if e.Owner != "1" || e.DefID != defs[i] {
+			t.Fatalf("player-1 slot %d: owner=%q def=%q want owner=1 def=%s",
+				i, e.Owner, e.DefID, defs[i])
+		}
+	}
+	if s.Size("hand:0") != 3 || s.Size("hand:1") != 3 {
+		t.Fatalf("hand sizes: 0=%d 1=%d", s.Size("hand:0"), s.Size("hand:1"))
+	}
+}
+
+func TestDealUnknownDefStopsEarly(t *testing.T) {
+	c := ccg.NewCatalog()
+	_ = c.Register(ccg.CardDef{ID: "x"})
+
+	s := ccg.NewState()
+	s.NewZone("hand:0", false)
+	_, err := s.Deal(c, []ccg.DefID{"x", "ghost"}, []string{"0"}, func(p string) ccg.ZoneName {
+		return ccg.ZoneName("hand:" + p)
+	})
+	if !errors.Is(err, ccg.ErrUnknownDef) {
+		t.Fatalf("want ErrUnknownDef, got %v", err)
+	}
+	// The first card ("x") was dealt before the failure on "ghost".
+	if s.Size("hand:0") != 1 {
+		t.Fatalf("partial deal: hand:0=%d (expected 1 from the pre-failure card)", s.Size("hand:0"))
 	}
 }
