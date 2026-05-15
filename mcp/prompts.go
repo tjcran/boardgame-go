@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 )
@@ -158,3 +159,21 @@ Rules:
 - Never invent move arguments. Use exactly what list_legal_moves returned.
 - Never call make_move when it isn't that seat's turn.
 - If the human asks for an opening (e.g. "play 0"), follow their guidance.`
+
+//go:embed prompts/design_a_game.md
+var designAGameBody string
+
+// RegisterDesignAGamePrompt installs the design-a-game prompt that
+// walks Claude through co-designing a new board game with the user
+// and registering it via register_game.
+func RegisterDesignAGamePrompt(s *Server) {
+	s.RegisterPrompt(PromptSpec{
+		Name:        "design-a-game",
+		Description: "Co-design a brand-new board game with the user, playtest it, and register it so you can play immediately.",
+	}, func(ctx context.Context, _ json.RawMessage) ([]PromptMessage, error) {
+		return []PromptMessage{{
+			Role:    "user",
+			Content: map[string]interface{}{"type": "text", "text": designAGameBody},
+		}}, nil
+	})
+}
