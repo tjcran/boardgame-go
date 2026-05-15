@@ -436,6 +436,28 @@ func (t *Tools) PlaytestDraft(ctx context.Context, args PlaytestDraftArgs) (Play
 	return res, nil
 }
 
+// ----- delete_game -----
+
+type DeleteGameArgs struct {
+	Name string `json:"name"`
+}
+type DeleteGameResult struct {
+	Deleted bool `json:"deleted"`
+}
+
+// DeleteGame removes a user-designed game. Built-ins are protected by
+// UserAwareRegistry.DeleteUserGame (which only knows about user games).
+func (t *Tools) DeleteGame(ctx context.Context, args DeleteGameArgs) (DeleteGameResult, error) {
+	if t.Registry == nil {
+		return DeleteGameResult{}, fmt.Errorf("registry not configured")
+	}
+	userID := UserIDFromContext(ctx)
+	if err := t.Registry.DeleteUserGame(ctx, userID, args.Name); err != nil {
+		return DeleteGameResult{}, err
+	}
+	return DeleteGameResult{Deleted: true}, nil
+}
+
 // deepCopyMap shallow-copies the top level; nested values are shared.
 // Sufficient for the trace, which is reported once per step.
 func deepCopyMap(m map[string]any) map[string]any {

@@ -177,6 +177,23 @@ func RegisterTools(s *Server, t *Tools) {
 	}))
 
 	s.RegisterTool(ToolSpec{
+		Name:        "delete_game",
+		Description: "Delete a game you previously designed. You can only delete games you own; built-ins are protected.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {"name": {"type": "string"}},
+			"required": ["name"],
+			"additionalProperties": false
+		}`),
+	}, wrap(func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args DeleteGameArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		return t.DeleteGame(ctx, args)
+	}))
+
+	s.RegisterTool(ToolSpec{
 		Name:        "playtest_draft",
 		Description: "Dry-run a draft game spec. Returns validation errors, the initial state, and a per-step trace (state before/after, end_if result, legal moves) for the optional scenario. Side-effect-free; no DB write.",
 		InputSchema: json.RawMessage(`{
