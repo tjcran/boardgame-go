@@ -537,7 +537,25 @@ bench/        Cross-match concurrency benchmarks + README
 cmd/boardgame-server     reference binary
 cmd/boardgame-go-vet     determinism analyser
 games/tictactoe          reference game
+mcp/                     (opt-in sub-module) MCP server exposing
+                           matches to Claude Desktop / Claude Code /
+                           Cursor / any MCP-capable LLM client
 ```
+
+## Play against an LLM
+
+The `mcp/` sub-module ships a Model Context Protocol server that
+exposes any registered game to LLM clients. Local play (Claude Desktop,
+Claude Code, Cursor): grab a release binary or `docker pull`, drop a
+snippet into the client's config, and Claude becomes your opponent.
+
+See [mcp/README.md](mcp/README.md) for the install paths and
+copy-pasteable Claude Desktop / Claude Code configs.
+
+This is **opt-in**: `mcp/` is its own Go sub-module, so the root
+engine's dependency graph is unchanged for library consumers who don't
+want it (`go build ./...` from the repo root never pulls MCP code or
+its deps — enforced by a CI job).
 
 ## Related docs
 
@@ -545,6 +563,9 @@ games/tictactoe          reference game
 - [GO_LEVERAGE.md](GO_LEVERAGE.md) — wins from Go's type system / stdlib
 - [JS_LIMITATIONS.md](JS_LIMITATIONS.md) — flaws in BGIO Go solves
 - [PLAN.md](PLAN.md) — original MVP plan (historical)
+- [mcp/README.md](mcp/README.md) — MCP server (LLM gameplay)
+- [mcp/docs/local-mcp.md](mcp/docs/local-mcp.md) — local Claude Desktop / Code setup
+- [mcp/docs/hosted-app.md](mcp/docs/hosted-app.md) — hosted Claude.ai connector deploy
 
 ## Acknowledgments
 
