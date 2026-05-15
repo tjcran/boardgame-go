@@ -36,6 +36,7 @@ import (
 	"github.com/tjcran/boardgame-go/match"
 	mcppkg "github.com/tjcran/boardgame-go/mcp"
 	"github.com/tjcran/boardgame-go/storage"
+	pgstore "github.com/tjcran/boardgame-go/storage/postgres"
 	sqlitestore "github.com/tjcran/boardgame-go/storage/sqlite"
 )
 
@@ -101,12 +102,13 @@ EXAMPLES:
 }
 
 type serveFlags struct {
-	transport string
-	dbPath    string
-	port      int
-	jwksURL   string
-	issuer    string
-	audience  string
+	transport   string
+	dbPath      string
+	databaseURL string
+	port        int
+	jwksURL     string
+	issuer      string
+	audience    string
 }
 
 func runServe(argv []string) error {
@@ -115,6 +117,7 @@ func runServe(argv []string) error {
 	cfg := serveFlags{}
 	fs.StringVar(&cfg.transport, "transport", "stdio", "Transport: stdio | http")
 	fs.StringVar(&cfg.dbPath, "db", "", "Path to SQLite database file (default: in-memory)")
+	fs.StringVar(&cfg.databaseURL, "database-url", "", "Postgres DSN. When set, overrides --db and is used for both match state AND ownership. Falls back to $DATABASE_URL if empty.")
 	fs.IntVar(&cfg.port, "port", 8080, "HTTP listen port (http transport only)")
 	fs.StringVar(&cfg.jwksURL, "jwks-url", "", "OIDC JWKS URL for OAuth verification (http transport only)")
 	fs.StringVar(&cfg.issuer, "issuer", "", "Required JWT issuer (http transport only)")
@@ -122,11 +125,16 @@ func runServe(argv []string) error {
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
+	// $DATABASE_URL is the Cloud Run / 12-factor convention — fall back
+	// to it if --database-url wasn't explicitly passed.
+	if cfg.databaseURL == "" {
+		cfg.databaseURL = os.Getenv("DATABASE_URL")
+	}
 
 	// Logger goes to stderr — in stdio mode, stdout is reserved for JSON-RPC.
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	store, closeStore, err := openStorage(cfg.dbPath, logger)
+	store, closeStore, err := openStorage(cfg, logger)
 	if err != nil {
 		return fmt.Errorf("open storage: %w", err)
 	}
@@ -136,13 +144,13 @@ func runServe(argv []string) error {
 	mgr.Logger = logger
 	mgr.MustRegister(tictactoe.New())
 
-	tools := &mcppkg.Tools{Manager: mgr}
-	// Multi-tenant scoping is enabled whenever auth is configured. Without
-	// auth, every request shares the same data (acceptable for stdio and
-	// HTTP-dev; not for production).
-	if cfg.transport == "http" && cfg.jwksURL != "" {
-		tools.Ownership = mcppkg.NewMemoryOwnership()
+	ownership, closeOwnership, err := openOwnership(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("open ownership store: %w", err)
 	}
+	defer closeOwnership()
+
+	tools := &mcppkg.Tools{Manager: mgr, Ownership: ownership}
 
 	srv := mcppkg.NewServer(mcppkg.ServerInfo{
 		Name:    "boardgame-mcp",
@@ -219,18 +227,32 @@ func anonymousMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// openStorage returns a Storage backed by SQLite when dbPath is non-empty,
-// otherwise an in-memory store. The closer is a no-op for memory storage.
-func openStorage(dbPath string, logger *slog.Logger) (storage.Storage, func(), error) {
-	if dbPath == "" {
+// openStorage picks a Storage backend based on flags, in precedence order:
+//
+//	--database-url  (or $DATABASE_URL)  → Postgres
+//	--db PATH                           → SQLite
+//	neither                             → in-memory
+func openStorage(cfg serveFlags, logger *slog.Logger) (storage.Storage, func(), error) {
+	if cfg.databaseURL != "" {
+		s, err := pgstore.Open(cfg.databaseURL)
+		if err != nil {
+			return nil, nil, fmt.Errorf("postgres match store: %w", err)
+		}
+		return s, func() {
+			if err := s.Close(); err != nil {
+				logger.Warn("close postgres match store", "err", err)
+			}
+		}, nil
+	}
+	if cfg.dbPath == "" {
 		return storage.NewMemory(), func() {}, nil
 	}
-	if dir := filepath.Dir(dbPath); dir != "" {
+	if dir := filepath.Dir(cfg.dbPath); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, nil, fmt.Errorf("mkdir %s: %w", dir, err)
 		}
 	}
-	s, err := sqlitestore.Open(dbPath)
+	s, err := sqlitestore.Open(cfg.dbPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -239,6 +261,35 @@ func openStorage(dbPath string, logger *slog.Logger) (storage.Storage, func(), e
 			logger.Warn("close sqlite", "err", err)
 		}
 	}, nil
+}
+
+// openOwnership picks an OwnershipStore based on flags.
+//
+//   - HTTP + Postgres: PostgresOwnership (durable, multi-instance safe)
+//   - HTTP + JWT auth (no Postgres): MemoryOwnership (durable for the life
+//     of the container — fine for single-instance dev deployments)
+//   - everything else: nil (single-tenant mode — no scoping enforced)
+func openOwnership(cfg serveFlags, logger *slog.Logger) (mcppkg.OwnershipStore, func(), error) {
+	if cfg.transport != "http" {
+		return nil, func() {}, nil
+	}
+	if cfg.databaseURL != "" {
+		o, err := mcppkg.OpenPostgresOwnership(cfg.databaseURL)
+		if err != nil {
+			return nil, nil, fmt.Errorf("postgres ownership: %w", err)
+		}
+		return o, func() {
+			if err := o.Close(); err != nil {
+				logger.Warn("close postgres ownership", "err", err)
+			}
+		}, nil
+	}
+	if cfg.jwksURL != "" {
+		// JWT auth on but no DB — scope by in-memory store. Loses state
+		// on restart; only sound for single-instance deployments.
+		return mcppkg.NewMemoryOwnership(), func() {}, nil
+	}
+	return nil, func() {}, nil
 }
 
 func dbDescriptor(p string) string {

@@ -90,12 +90,31 @@ Before promoting a deployment:
 - [ ] Logs go to stderr (the binary's default — Cloud Run picks them up automatically).
 - [ ] Billing alert set.
 
-## Limitations (this PR)
+## Persistence
 
-- **`MemoryOwnership` in-memory.** Match ownership is lost on container restart. A Postgres-backed `OwnershipStore` is queued for a quick follow-up PR; until that lands, run with `minScale: 1` if persistence across instance shutdowns matters.
-- **`MemoryStorage` default.** Match state itself is in-memory. Use `--db /tmp/state.sqlite` to persist (Cloud Run gives you a writable `/tmp`, gone on restart) or wait for the Postgres-everything PR.
+For real hosted deployments, point the binary at a Postgres database with `--database-url` (or set `$DATABASE_URL`, the 12-factor / Cloud Run default). One DSN drives both the match state and the per-user ownership table:
+
+```sh
+boardgame-mcp serve --transport=http --port=8080 \
+    --database-url=postgres://USER:PASS@HOST:5432/DB?sslmode=require \
+    --jwks-url=https://issuer/.well-known/jwks.json \
+    --issuer=https://issuer/ --audience=boardgame-mcp
+```
+
+[Neon](https://neon.tech) Postgres works well: free tier, branching for staging, generous limits. The schema migrations (`matches`, `match_ownership`) are applied automatically on first boot.
+
+**Without `--database-url`**, the binary falls back to:
+
+- **Match state** — `--db PATH` if set (SQLite, persists across the container's lifetime); otherwise in-memory.
+- **Ownership** — `MemoryOwnership` if `--jwks-url` is set (per-instance, lost on restart); otherwise no scoping at all.
+
+Use this fallback for single-instance dev deployments only; for any multi-instance Cloud Run service set `--database-url`.
+
+## Limitations (current state)
+
 - **No rate limiting** beyond Cloud Run's defaults. Add a layer once you have real usage.
 - **No metrics endpoint** yet. Cloud Run's built-in request metrics cover the basics.
+- **Single Postgres pool per store.** Match storage and ownership store each open their own connection pool. Fine at hosted-MCP scale; revisit when load justifies sharing a pool.
 
 ## Troubleshooting
 
