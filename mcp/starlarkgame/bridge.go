@@ -45,12 +45,5 @@ func (c *BridgeCtx) asStarlark() starlark.Value {
 	return starlarkstruct.FromStringDict(starlark.String("ctx"), attrs)
 }
 
-// bridgeRandom is a placeholder for the Task 5 random bridge. The type is
-// declared here so bridge.go compiles standalone; Task 5 will fill it in.
-type bridgeRandom struct{}
-
-func (r *bridgeRandom) asStarlark() starlark.Value {
-	return starlark.NewBuiltin("random", func(_ *starlark.Thread, _ *starlark.Builtin, _ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
-		return nil, fmt.Errorf("ctx.random not yet implemented")
-	})
-}
+// bridgeRandom is defined in random.go (Task 5). It wraps core.Random and
+// exposes ctx.random.range/shuffle/choice to Starlark.
