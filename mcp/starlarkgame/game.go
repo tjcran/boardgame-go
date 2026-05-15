@@ -19,6 +19,12 @@ func BuildCoreGame(s *Spec) *core.Game {
 		Name:       s.Meta.Name,
 		MinPlayers: s.Meta.MinPlayers,
 		MaxPlayers: s.Meta.MaxPlayers,
+		// Starlark games are turn-based: each move ends the current
+		// player's turn and hands control to the next player. MaxMoves:1
+		// triggers the engine's auto-endTurn logic after a single move so
+		// round-robin turn rotation works without games needing to call
+		// events.EndTurn() explicitly.
+		Turn: &core.TurnConfig{MaxMoves: 1},
 	}
 
 	g.Setup = func(ctx core.Ctx, _ any) core.G {
