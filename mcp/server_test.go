@@ -80,7 +80,7 @@ func TestInitializeHandshake(t *testing.T) {
 	}
 }
 
-func TestToolsListReturnsAllSix(t *testing.T) {
+func TestToolsListReturnsAllRegisteredTools(t *testing.T) {
 	srv, _ := serverHarness(t)
 	resps := run(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
@@ -93,6 +93,7 @@ func TestToolsListReturnsAllSix(t *testing.T) {
 	want := map[string]bool{
 		"list_games": true, "create_match": true, "join_match": true,
 		"get_state": true, "list_legal_moves": true, "make_move": true,
+		"register_game": true, "playtest_draft": true, "delete_game": true,
 	}
 	for _, tIface := range tools {
 		tMap := tIface.(map[string]any)

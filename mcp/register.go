@@ -35,7 +35,7 @@ Rules:
 - If a tool returns an error, read it carefully — the message tells you what
   went wrong (occupied cell, out of turn, bad credentials, etc.).`
 
-// RegisterTools installs the six gameplay tools on a Server.
+// RegisterTools installs the gameplay tools on a Server.
 //
 // JSON Schemas describe each tool's arguments so MCP clients can render
 // argument pickers and pre-validate calls. They are deliberately tight:
