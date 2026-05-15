@@ -8,6 +8,7 @@ import (
 
 	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/match"
+	"github.com/tjcran/boardgame-go/mcp/starlarkgame"
 )
 
 // Tools is the set of MCP tool handlers backed by a match.Manager.
@@ -325,6 +326,36 @@ type MakeMoveResult struct {
 	State         core.State `json:"state"`
 	CurrentPlayer string     `json:"currentPlayer"`
 	Gameover      any        `json:"gameover,omitempty"`
+}
+
+// ----- register_game -----
+
+type RegisterGameArgs struct {
+	Source   string `json:"source"`
+	LLMGuide string `json:"llm_guide,omitempty"`
+}
+
+type RegisterGameResult struct {
+	Name string `json:"name"`
+}
+
+// RegisterGame validates a Starlark game spec, persists it under the
+// caller's user ID, and installs it on the Manager so it can be played
+// like a built-in.
+func (t *Tools) RegisterGame(ctx context.Context, args RegisterGameArgs) (RegisterGameResult, error) {
+	if t.Registry == nil {
+		return RegisterGameResult{}, fmt.Errorf("registry not configured")
+	}
+	userID := UserIDFromContext(ctx)
+	if err := t.Registry.RegisterUserGame(ctx, userID, args.Source, args.LLMGuide); err != nil {
+		return RegisterGameResult{}, err
+	}
+	// Read META back to return the canonical name.
+	spec, err := starlarkgame.LoadSpec(args.Source)
+	if err != nil {
+		return RegisterGameResult{}, err
+	}
+	return RegisterGameResult{Name: spec.Meta.Name}, nil
 }
 
 // MakeMove applies a move and returns the resulting state (player-view

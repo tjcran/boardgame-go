@@ -155,6 +155,26 @@ func RegisterTools(s *Server, t *Tools) {
 		}
 		return t.MakeMove(ctx, args)
 	}))
+
+	s.RegisterTool(ToolSpec{
+		Name:        "register_game",
+		Description: "Register a brand-new game designed in this session. The source is a Starlark module following the spec defined in the design-a-game prompt; llm_guide is optional markdown surfaced as a game://owner/name/guide MCP resource. Returns the canonical name from META.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"source":    {"type": "string", "description": "Starlark module source (UTF-8)."},
+				"llm_guide": {"type": "string", "description": "Optional markdown explaining the rules and strategy hints."}
+			},
+			"required": ["source"],
+			"additionalProperties": false
+		}`),
+	}, wrap(func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args RegisterGameArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		return t.RegisterGame(ctx, args)
+	}))
 }
 
 // wrap is a tiny adapter so handler bodies above can return (any, error)
