@@ -29,6 +29,13 @@ func UserIDFromContext(ctx context.Context) string {
 	return ""
 }
 
+// contextWithUser is a test helper that stamps a userID onto ctx the same
+// way the production HTTP transport does. Production code uses WithUserID
+// directly; tests use this name to make intent clear.
+func contextWithUser(ctx context.Context, userID string) context.Context {
+	return WithUserID(ctx, userID)
+}
+
 // ErrNotOwned is returned by Tools when the authenticated user doesn't
 // own the match they're trying to act on. Surfaced to MCP clients as an
 // isError tool result, which the LLM can read and react to.

@@ -19,6 +19,12 @@ import (
 type Tools struct {
 	Manager *match.Manager
 
+	// Registry layers per-user game scoping on top of Manager. When set,
+	// list_games / create_match route through it so user-designed games are
+	// visible to their owner. When nil, the pre-existing Manager-only path
+	// is used (stdio mode, tests without a Registry).
+	Registry *UserAwareRegistry
+
 	// Ownership scopes match access by authenticated user. Leave nil for
 	// single-tenant mode (stdio, local dev). In hosted/HTTP mode the
 	// transport layer sets Ownership and threads the userID through
@@ -37,14 +43,39 @@ type GameInfo struct {
 	Name       string `json:"name"`
 	MinPlayers int    `json:"minPlayers,omitempty"`
 	MaxPlayers int    `json:"maxPlayers,omitempty"`
+	UserOwned  bool   `json:"userOwned,omitempty"`
 }
 
-// ListGames returns metadata for every game registered on the Manager.
-// Sorted by name for deterministic output.
-func (t *Tools) ListGames(_ context.Context) (ListGamesResult, error) {
+// ListGames returns metadata for every game visible to the caller.
+// When a Registry is configured, per-user games are included for the
+// authenticated user; otherwise every built-in game registered on the
+// Manager is returned. Sorted by name for deterministic output.
+func (t *Tools) ListGames(ctx context.Context) (ListGamesResult, error) {
+	if t.Registry != nil {
+		userID := UserIDFromContext(ctx)
+		listings, err := t.Registry.ListForUser(ctx, userID)
+		if err != nil {
+			return ListGamesResult{}, err
+		}
+		out := ListGamesResult{Games: make([]GameInfo, 0, len(listings))}
+		for _, l := range listings {
+			out.Games = append(out.Games, GameInfo{
+				Name:       l.Name,
+				MinPlayers: l.MinPlayers,
+				MaxPlayers: l.MaxPlayers,
+				UserOwned:  l.UserOwned,
+			})
+		}
+		return out, nil
+	}
+	// Fallback: Manager-only path (stdio mode, tests without Registry).
+	// Suppress any usergame-prefixed keys that may have been registered.
 	names := t.Manager.GameNames()
 	out := ListGamesResult{Games: make([]GameInfo, 0, len(names))}
 	for _, name := range names {
+		if hasUserGameKeyPrefix(name) {
+			continue
+		}
 		g := t.Manager.Game(name)
 		if g == nil {
 			continue
@@ -84,7 +115,22 @@ func (t *Tools) CreateMatch(ctx context.Context, args CreateMatchArgs) (CreateMa
 	if t.Ownership != nil && UserIDFromContext(ctx) == "" {
 		return CreateMatchResult{}, errors.New("not authenticated: no userID on request context")
 	}
-	matchID, err := t.Manager.Create(args.Game, match.CreateOptions{
+
+	// Translate the public game name to the Manager-internal key. When the
+	// Registry is present, user-owned games are scoped by userID. Without a
+	// Registry, the public name is used as-is (Manager key == public name for
+	// built-ins).
+	managerKey := args.Game
+	if t.Registry != nil {
+		userID := UserIDFromContext(ctx)
+		key, _, err := t.Registry.LookupForUser(ctx, userID, args.Game)
+		if err != nil {
+			return CreateMatchResult{}, fmt.Errorf("game %q: %w", args.Game, err)
+		}
+		managerKey = key
+	}
+
+	matchID, err := t.Manager.Create(managerKey, match.CreateOptions{
 		NumPlayers: args.NumPlayers,
 		SetupData:  args.SetupData,
 		Name:       args.Name,
@@ -103,7 +149,7 @@ func (t *Tools) CreateMatch(ctx context.Context, args CreateMatchArgs) (CreateMa
 	}
 	return CreateMatchResult{
 		MatchID:    matchID,
-		Game:       args.Game,
+		Game:       args.Game, // return the public name the caller used
 		NumPlayers: m.State.Ctx.NumPlayers,
 	}, nil
 }
