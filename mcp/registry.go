@@ -201,3 +201,18 @@ func (r *UserAwareRegistry) UserGame(ctx context.Context, userID, publicName str
 func hasUserGameKeyPrefix(s string) bool {
 	return strings.HasPrefix(s, userGameKeyPrefix)
 }
+
+// publicGameName strips the user-owned-game manager prefix if present,
+// returning the public name as the user originally wrote it.
+// For built-in games (no prefix) the key is returned unchanged.
+func publicGameName(managerKey string) string {
+	if !hasUserGameKeyPrefix(managerKey) {
+		return managerKey
+	}
+	// Format: usergame:<owner>:<publicName>
+	rest := strings.TrimPrefix(managerKey, userGameKeyPrefix)
+	if i := strings.Index(rest, ":"); i >= 0 {
+		return rest[i+1:]
+	}
+	return managerKey
+}

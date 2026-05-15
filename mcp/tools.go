@@ -245,7 +245,7 @@ func (t *Tools) GetState(ctx context.Context, args GetStateArgs) (GetStateResult
 	}
 	return GetStateResult{
 		MatchID:       m.ID,
-		Game:          m.GameName,
+		Game:          publicGameName(m.GameName),
 		State:         state,
 		CurrentPlayer: state.Ctx.CurrentPlayer,
 		Phase:         state.Ctx.Phase,

@@ -85,6 +85,42 @@ def legal_moves(state, ctx): return []
 	}
 }
 
+// TestGetState_ReturnsPublicGameName verifies that GetState.Game is the
+// public name (e.g. "hex"), not the internal manager key
+// ("usergame:alice:hex"), for user-designed games.
+func TestGetState_ReturnsPublicGameName(t *testing.T) {
+	mgr := match.NewManager(storage.NewMemory())
+	store := NewInMemoryUserGames()
+	reg := NewUserAwareRegistry(mgr, store)
+	const src = `
+META = {"name":"hex","min_players":2,"max_players":2}
+def setup(ctx): return {"cells": []}
+MOVES = {"noop": {"args":[], "apply": lambda s, c: None}}
+def end_if(state, ctx): return None
+def legal_moves(state, ctx): return []
+`
+	if err := reg.RegisterUserGame(context.Background(), "alice", src, ""); err != nil {
+		t.Fatalf("RegisterUserGame: %v", err)
+	}
+	tools := &Tools{Manager: mgr, Registry: reg}
+	ctx := contextWithUser(context.Background(), "alice")
+	cm, err := tools.CreateMatch(ctx, CreateMatchArgs{Game: "hex", NumPlayers: 2})
+	if err != nil {
+		t.Fatalf("CreateMatch: %v", err)
+	}
+	if cm.Game != "hex" {
+		t.Errorf("CreateMatch.Game = %q, want hex", cm.Game)
+	}
+
+	gs, err := tools.GetState(ctx, GetStateArgs{MatchID: cm.MatchID})
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if gs.Game != "hex" {
+		t.Errorf("GetState.Game = %q, want hex (got the internal manager key?)", gs.Game)
+	}
+}
+
 // TestListGames_NoRegistry ensures that without a Registry, ListGames still
 // works and does not expose usergame-prefixed Manager keys.
 func TestListGames_NoRegistry(t *testing.T) {
