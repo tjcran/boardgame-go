@@ -3,7 +3,6 @@ package starlarkgame
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"go.starlark.net/starlark"
 	"go.starlark.net/syntax"
@@ -85,51 +84,3 @@ func evalSandbox(ctx context.Context, src string, lim Limits) (map[string]any, e
 	return out, nil
 }
 
-// Spec is a compiled game spec ready to be invoked. The full Spec type
-// lands in spec.go (Task 6); this minimal stub exists so bridge_test.go
-// can drive the bridge in isolation.
-type Spec struct {
-	globals starlark.StringDict
-}
-
-func compileSpecForTest(src string) (*Spec, error) {
-	thread := &starlark.Thread{
-		Name: "compile-test",
-		Load: func(*starlark.Thread, string) (starlark.StringDict, error) {
-			return nil, fmt.Errorf("load disabled")
-		},
-	}
-	g, err := starlark.ExecFile(thread, "spec.star", src, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &Spec{globals: g}, nil
-}
-
-func (s *Spec) callForTest(name string, args []any) (any, error) {
-	fn, ok := s.globals[name]
-	if !ok {
-		return nil, fmt.Errorf("no global %q", name)
-	}
-	thread := &starlark.Thread{Name: "call-test"}
-	sargs := make(starlark.Tuple, len(args))
-	for i, a := range args {
-		switch v := a.(type) {
-		case BridgeCtx:
-			sargs[i] = v.asStarlark()
-		case *BridgeCtx:
-			sargs[i] = v.asStarlark()
-		default:
-			sv, err := ToStarlark(a)
-			if err != nil {
-				return nil, err
-			}
-			sargs[i] = sv
-		}
-	}
-	res, err := starlark.Call(thread, fn, sargs, nil)
-	if err != nil {
-		return nil, err
-	}
-	return ToGo(res)
-}
