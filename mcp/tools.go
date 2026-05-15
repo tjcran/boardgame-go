@@ -358,6 +358,94 @@ func (t *Tools) RegisterGame(ctx context.Context, args RegisterGameArgs) (Regist
 	return RegisterGameResult{Name: spec.Meta.Name}, nil
 }
 
+// ----- playtest_draft -----
+
+type PlaytestStep struct {
+	PlayerID string `json:"player_id"`
+	Move     string `json:"move"`
+	Args     []any  `json:"args,omitempty"`
+}
+
+type PlaytestDraftArgs struct {
+	Source   string         `json:"source"`
+	Scenario []PlaytestStep `json:"scenario,omitempty"`
+}
+
+type PlaytestTrace struct {
+	PlayerID        string           `json:"player_id"`
+	Move            string           `json:"move"`
+	Args            []any            `json:"args,omitempty"`
+	StateBefore     map[string]any   `json:"state_before"`
+	StateAfter      map[string]any   `json:"state_after,omitempty"`
+	EndIfResult     any              `json:"end_if_result,omitempty"`
+	LegalMovesAfter []map[string]any `json:"legal_moves_after,omitempty"`
+	Error           string           `json:"error,omitempty"`
+}
+
+type PlaytestDraftResult struct {
+	ValidationErrors []string        `json:"validation_errors,omitempty"`
+	SetupState       map[string]any  `json:"setup_state,omitempty"`
+	Trace            []PlaytestTrace `json:"trace,omitempty"`
+}
+
+// PlaytestDraft dry-runs a draft spec without registering it. It returns
+// any validation errors, the initial state, and a per-step trace for the
+// optional scenario. Side-effect-free; no DB write.
+func (t *Tools) PlaytestDraft(ctx context.Context, args PlaytestDraftArgs) (PlaytestDraftResult, error) {
+	var res PlaytestDraftResult
+	spec, err := starlarkgame.LoadSpec(args.Source)
+	if err != nil {
+		res.ValidationErrors = []string{"parse: " + err.Error()}
+		return res, nil
+	}
+	if err := starlarkgame.Validate(ctx, spec); err != nil {
+		res.ValidationErrors = []string{"validate: " + err.Error()}
+		return res, nil
+	}
+	bc := &starlarkgame.BridgeCtx{NumPlayers: spec.Meta.MinPlayers}
+	bc.AttachSeededRandom(0)
+	state, err := spec.CallSetup(ctx, bc)
+	if err != nil {
+		return res, err
+	}
+	res.SetupState = state
+
+	for _, step := range args.Scenario {
+		bc.PlayerID = step.PlayerID
+		tr := PlaytestTrace{
+			PlayerID:    step.PlayerID,
+			Move:        step.Move,
+			Args:        step.Args,
+			StateBefore: deepCopyMap(state),
+		}
+		next, err := spec.CallMove(ctx, bc, step.Move, state, step.Args)
+		if err != nil {
+			tr.Error = err.Error()
+			res.Trace = append(res.Trace, tr)
+			break
+		}
+		state = next
+		tr.StateAfter = deepCopyMap(state)
+		if end, _ := spec.CallEndIf(ctx, bc, state); end != nil {
+			tr.EndIfResult = end
+		}
+		lm, _ := spec.CallLegalMoves(ctx, bc, state)
+		tr.LegalMovesAfter = lm
+		res.Trace = append(res.Trace, tr)
+	}
+	return res, nil
+}
+
+// deepCopyMap shallow-copies the top level; nested values are shared.
+// Sufficient for the trace, which is reported once per step.
+func deepCopyMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 // MakeMove applies a move and returns the resulting state (player-view
 // redacted for the mover). When the match ends, Gameover is non-nil.
 func (t *Tools) MakeMove(ctx context.Context, args MakeMoveArgs) (MakeMoveResult, error) {

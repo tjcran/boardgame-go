@@ -175,6 +175,37 @@ func RegisterTools(s *Server, t *Tools) {
 		}
 		return t.RegisterGame(ctx, args)
 	}))
+
+	s.RegisterTool(ToolSpec{
+		Name:        "playtest_draft",
+		Description: "Dry-run a draft game spec. Returns validation errors, the initial state, and a per-step trace (state before/after, end_if result, legal moves) for the optional scenario. Side-effect-free; no DB write.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"source":   {"type": "string"},
+				"scenario": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"player_id": {"type": "string"},
+							"move":      {"type": "string"},
+							"args":      {"type": "array"}
+						},
+						"required": ["player_id", "move"]
+					}
+				}
+			},
+			"required": ["source"],
+			"additionalProperties": false
+		}`),
+	}, wrap(func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args PlaytestDraftArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		return t.PlaytestDraft(ctx, args)
+	}))
 }
 
 // wrap is a tiny adapter so handler bodies above can return (any, error)
