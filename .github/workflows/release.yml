@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  # Both upload-release-asset and ghcr.io push need broader perms than
+  # the read-only default the CI workflow uses.
+  contents: write
+  packages: write
+
+jobs:
+  binaries:
+    name: build + publish release binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: true
+
+      - name: cross-compile boardgame-mcp
+        run: |
+          mkdir -p dist
+          for combo in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os="${combo%/*}"
+            arch="${combo#*/}"
+            ext=""
+            [ "$os" = "windows" ] && ext=".exe"
+            echo "→ building $os/$arch"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+              go build -ldflags="-s -w" \
+                -o "dist/boardgame-mcp$ext" \
+                ./mcp/cmd/boardgame-mcp
+            tar -czf "dist/boardgame-mcp-${os}-${arch}.tar.gz" -C dist "boardgame-mcp$ext"
+            rm -f "dist/boardgame-mcp$ext"
+          done
+          ls -la dist/
+
+      - name: create release + upload binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # gh release create errors if the release already exists; we let
+        # the operator pre-create the release with notes if they want and
+        # only upload here. `create-or-edit` semantics keep the workflow
+        # forgiving.
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --notes "Automated release. See CHANGELOG for details."
+          fi
+          gh release upload "${GITHUB_REF_NAME}" dist/boardgame-mcp-*.tar.gz --clobber
+
+  docker:
+    name: build + push multi-arch docker image
+    runs-on: ubuntu-latest
+    # Gate the docker push on binaries succeeding — same code path, no
+    # point publishing an image if the cross-compile matrix failed.
+    needs: binaries
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: set up buildx (with QEMU for cross-arch)
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt --install all
+          docker buildx create --use --name boardgame-builder
+
+      - name: build + push linux/amd64 + linux/arm64
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/boardgame-mcp
+          TAG: ${{ github.ref_name }}
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --file mcp/deploy/Dockerfile \
+            --tag "${IMAGE}:${TAG}" \
+            --tag "${IMAGE}:latest" \
+            --push \
+            .
