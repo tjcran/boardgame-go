@@ -74,3 +74,61 @@ def legal_moves(state, ctx): return []
 		t.Fatalf("expected 'nope' error, got %v", err)
 	}
 }
+
+func TestCallEndIfNone(t *testing.T) {
+	spec, _ := LoadSpec(goodSpec)
+	bc := &BridgeCtx{NumPlayers: 2}
+	state, _ := spec.CallSetup(context.Background(), bc)
+	out, err := spec.CallEndIf(context.Background(), bc, state)
+	if err != nil { t.Fatalf("CallEndIf: %v", err) }
+	if out != nil { t.Fatalf("expected nil, got %v", out) }
+}
+
+func TestCallEndIfWinner(t *testing.T) {
+	spec, _ := LoadSpec(`
+META = {"name":"w","min_players":2,"max_players":2}
+def setup(ctx): return {"done": True}
+MOVES = {"noop": {"args":[], "apply": lambda state, ctx: None}}
+def end_if(state, ctx):
+    if state["done"]: return {"winner": "0"}
+    return None
+def legal_moves(state, ctx): return []
+`)
+	bc := &BridgeCtx{NumPlayers: 2}
+	state, _ := spec.CallSetup(context.Background(), bc)
+	out, _ := spec.CallEndIf(context.Background(), bc, state)
+	m := out.(map[string]any)
+	if m["winner"] != "0" { t.Fatalf("winner = %v", m["winner"]) }
+}
+
+func TestCallLegalMoves(t *testing.T) {
+	spec, _ := LoadSpec(`
+META = {"name":"l","min_players":2,"max_players":2}
+def setup(ctx): return {"cells": [None]*3}
+MOVES = {"click": {"args":[{"name":"i","type":"int"}], "apply": lambda state, ctx, i: None}}
+def end_if(state, ctx): return None
+def legal_moves(state, ctx):
+    return [{"name":"click","args":[i]} for i in range(3) if state["cells"][i] == None]
+`)
+	bc := &BridgeCtx{NumPlayers: 2}
+	state, _ := spec.CallSetup(context.Background(), bc)
+	out, err := spec.CallLegalMoves(context.Background(), bc, state)
+	if err != nil { t.Fatalf("CallLegalMoves: %v", err) }
+	if len(out) != 3 { t.Fatalf("got %d moves, want 3", len(out)) }
+	if out[0]["name"] != "click" { t.Fatalf("name: %v", out[0]["name"]) }
+}
+
+func TestCallPlayerViewIdentityWhenMissing(t *testing.T) {
+	spec, _ := LoadSpec(`
+META = {"name":"p","min_players":2,"max_players":2}
+def setup(ctx): return {"x": 1}
+MOVES = {"noop": {"args":[], "apply": lambda state, ctx: None}}
+def end_if(state, ctx): return None
+def legal_moves(state, ctx): return []
+`)
+	bc := &BridgeCtx{NumPlayers: 2}
+	state, _ := spec.CallSetup(context.Background(), bc)
+	v, err := spec.CallPlayerView(context.Background(), bc, state, "0")
+	if err != nil { t.Fatalf("CallPlayerView: %v", err) }
+	if v["x"] != int64(1) { t.Fatalf("identity view broken: %v", v) }
+}
