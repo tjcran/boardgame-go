@@ -185,11 +185,20 @@ func TestJWT_RejectsMissingSubject(t *testing.T) {
 func TestJWT_RejectsTamperedSignature(t *testing.T) {
 	iss := newTestIssuer(t)
 	tok := iss.sign(t, validClaims(iss, "user"), "RS256")
-	// Tamper with the last char of the signature.
-	tampered := tok[:len(tok)-1] + "A"
-	if tampered == tok {
-		tampered = tok[:len(tok)-1] + "B"
+	// Flip a base64 char at the start of the signature segment. The
+	// LAST char encodes trailing bits that the lenient decoder ignores
+	// — ~25% of the alphabet shares data bits with 'A', so tampering
+	// there is unreliable.
+	dot := strings.LastIndex(tok, ".")
+	if dot < 0 || dot+1 >= len(tok) {
+		t.Fatalf("malformed token from sign(): %q", tok)
 	}
+	sigFirst := tok[dot+1]
+	repl := byte('A')
+	if sigFirst == 'A' {
+		repl = 'B'
+	}
+	tampered := tok[:dot+1] + string(repl) + tok[dot+2:]
 	_, err := iss.verifier().Verify(context.Background(), tampered)
 	if err == nil || !strings.Contains(err.Error(), "signature") {
 		t.Errorf("expected signature error, got %v", err)
