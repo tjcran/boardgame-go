@@ -34,8 +34,18 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" \
     -o /out/boardgame-mcp ./mcp/cmd/boardgame-mcp
 
+# Pre-create /data with nonroot ownership so a Docker volume mounted there
+# inherits the right ownership on first use. Without this, the volume gets
+# root:root permissions by default and the nonroot runtime user can't write
+# matches.db — SQLite then surfaces a misleading "out of memory (14)" error
+# (it's actually SQLITE_CANTOPEN from a permission denial).
+#
+# 65532 is distroless/nonroot's UID/GID.
+RUN mkdir -p /data && chown -R 65532:65532 /data
+
 FROM gcr.io/distroless/static:nonroot
 COPY --from=builder /out/boardgame-mcp /boardgame-mcp
+COPY --from=builder --chown=65532:65532 /data /data
 USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/boardgame-mcp"]
