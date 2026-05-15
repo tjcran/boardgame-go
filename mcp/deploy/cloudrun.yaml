@@ -1,13 +1,13 @@
 # Sample Cloud Run service spec for the hosted boardgame-mcp.
 #
-# Replace PROJECT, VERSION, JWKS_URL, ISSUER, AUDIENCE before applying.
-# Apply with:
+# Replace PROJECT, VERSION, DATABASE_URL, JWKS_URL, ISSUER, AUDIENCE
+# before applying. Apply with:
 #
 #   gcloud run services replace mcp/deploy/cloudrun.yaml --region=us-central1
 #
 # Scales to zero when idle; one CPU + 256 MiB is plenty for the synchronous
-# JSON-RPC workload. Replace SQLite with Postgres (Neon DATABASE_URL) once
-# the Postgres ownership store lands.
+# JSON-RPC workload. DATABASE_URL points at any Postgres-compatible
+# instance (Neon, Cloud SQL, RDS, …); schema migrations run on boot.
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
@@ -35,6 +35,10 @@ spec:
         - name: http1
           containerPort: 8080
         env:
+        - name: DATABASE_URL
+          # Treat as a secret in real deployments: reference a Secret
+          # Manager entry rather than inlining the connection string.
+          value: "postgres://USER:PASS@HOST:5432/DB?sslmode=require"
         - name: JWKS_URL
           value: "https://your-issuer.example/.well-known/jwks.json"
         - name: ISSUER
