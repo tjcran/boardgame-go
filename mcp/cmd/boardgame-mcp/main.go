@@ -165,7 +165,7 @@ func runServe(argv []string) error {
 	switch cfg.transport {
 	case "stdio":
 		logger.Info("boardgame-mcp serving stdio",
-			"games", mgr.GameNames(), "db", dbDescriptor(cfg.dbPath))
+			"games", mgr.GameNames(), "db", dbDescriptor(cfg))
 		return srv.ServeStdio(ctx, os.Stdin, os.Stdout, os.Stderr)
 	case "http":
 		return runHTTP(ctx, srv, mgr, cfg, logger)
@@ -213,7 +213,7 @@ func runHTTP(ctx context.Context, srv *mcppkg.Server, mgr *match.Manager, cfg se
 
 	logger.Info("boardgame-mcp serving http",
 		"addr", addr, "auth", authMode,
-		"games", mgr.GameNames(), "db", dbDescriptor(cfg.dbPath))
+		"games", mgr.GameNames(), "db", dbDescriptor(cfg))
 
 	if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -292,9 +292,16 @@ func openOwnership(cfg serveFlags, logger *slog.Logger) (mcppkg.OwnershipStore, 
 	return nil, func() {}, nil
 }
 
-func dbDescriptor(p string) string {
-	if p == "" {
-		return "in-memory"
+// dbDescriptor produces a short string for the startup log so operators
+// can confirm at a glance which storage backend is active. The full
+// Postgres DSN is intentionally elided — credentials shouldn't land in
+// logs even when the operator passed them on the command line.
+func dbDescriptor(cfg serveFlags) string {
+	if cfg.databaseURL != "" {
+		return "postgres"
 	}
-	return p
+	if cfg.dbPath != "" {
+		return cfg.dbPath
+	}
+	return "in-memory"
 }
