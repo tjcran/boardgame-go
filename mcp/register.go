@@ -199,7 +199,7 @@ func RegisterTools(s *Server, t *Tools) {
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
-				"source":   {"type": "string"},
+				"source":   {"type": "string", "description": "Starlark module source (UTF-8) of a draft spec."},
 				"scenario": {
 					"type": "array",
 					"items": {
@@ -209,7 +209,8 @@ func RegisterTools(s *Server, t *Tools) {
 							"move":      {"type": "string"},
 							"args":      {"type": "array"}
 						},
-						"required": ["player_id", "move"]
+						"required": ["player_id", "move"],
+						"additionalProperties": false
 					}
 				}
 			},
