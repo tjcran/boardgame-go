@@ -24,6 +24,34 @@ func (s *Spec) newThread(ctx context.Context) *starlark.Thread {
 	return t
 }
 
+// CallMove invokes MOVES[moveName].apply(state, ctx, *args). It hands
+// the apply function a mutable Starlark dict view of state, so script-
+// side mutations write through; on success the (potentially mutated)
+// state is converted back to a Go map. fail(msg) in the spec surfaces
+// as a Go error.
+func (s *Spec) CallMove(ctx context.Context, bc *BridgeCtx, moveName string, state map[string]any, args []any) (map[string]any, error) {
+	mv, ok := s.Moves[moveName]
+	if !ok { return nil, fmt.Errorf("unknown move %q", moveName) }
+
+	stateSV, err := ToStarlark(state)
+	if err != nil { return nil, err }
+
+	sargs := starlark.Tuple{stateSV, bc.asStarlark()}
+	for _, a := range args {
+		sv, err := ToStarlark(a)
+		if err != nil { return nil, err }
+		sargs = append(sargs, sv)
+	}
+	if _, err := starlark.Call(s.newThread(ctx), mv.Apply, sargs, nil); err != nil {
+		return nil, err
+	}
+	g, err := ToGo(stateSV)
+	if err != nil { return nil, err }
+	out, ok := g.(map[string]any)
+	if !ok { return nil, fmt.Errorf("post-move state is not a dict") }
+	return out, nil
+}
+
 // CallSetup invokes setup(ctx) and returns the initial state as
 // map[string]any. Returns an error if setup returns a non-dict value or
 // the spec raises.
