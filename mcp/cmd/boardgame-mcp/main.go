@@ -150,7 +150,28 @@ func runServe(argv []string) error {
 	}
 	defer closeOwnership()
 
-	tools := &mcppkg.Tools{Manager: mgr, Ownership: ownership}
+	// Open the user-games store. In hosted mode (Postgres DSN set) it's
+	// PG-backed; otherwise in-memory (single-user / stdio mode).
+	var ugStore mcppkg.UserGameStore
+	if cfg.databaseURL != "" {
+		pgUG, err := mcppkg.OpenPostgresUserGames(cfg.databaseURL)
+		if err != nil {
+			return fmt.Errorf("open user_games: %w", err)
+		}
+		defer pgUG.Close()
+		ugStore = pgUG
+	} else {
+		ugStore = mcppkg.NewInMemoryUserGames()
+	}
+	registry := mcppkg.NewUserAwareRegistry(mgr, ugStore)
+	if err := registry.ReplayFromStore(context.Background()); err != nil {
+		return fmt.Errorf("replay user games: %w", err)
+	}
+	if all, err := ugStore.ListAll(context.Background()); err == nil {
+		logger.Info("user games replayed", "count", len(all))
+	}
+
+	tools := &mcppkg.Tools{Manager: mgr, Ownership: ownership, Registry: registry}
 
 	srv := mcppkg.NewServer(mcppkg.ServerInfo{
 		Name:    "boardgame-mcp",
@@ -158,6 +179,8 @@ func runServe(argv []string) error {
 	}, mcppkg.DefaultInstructions)
 	mcppkg.RegisterTools(srv, tools)
 	mcppkg.RegisterDefaultPrompts(srv)
+	mcppkg.RegisterDesignAGamePrompt(srv)
+	srv.WireGuideResources(registry)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
