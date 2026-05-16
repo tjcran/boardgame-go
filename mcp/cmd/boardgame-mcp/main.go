@@ -105,10 +105,23 @@ type serveFlags struct {
 	transport   string
 	dbPath      string
 	databaseURL string
+	skillsDir   string
 	port        int
 	jwksURL     string
 	issuer      string
 	audience    string
+}
+
+// defaultSkillsDir is the on-disk location designed games are written to
+// in stdio mode when no --database-url and no explicit --skills-dir is
+// set. Each game lives at <root>/<name>/{SKILL.md,spec.star}. Returns ""
+// if $HOME can't be resolved — caller falls back to in-memory.
+func defaultSkillsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".claude", "skills", "games")
 }
 
 func runServe(argv []string) error {
@@ -118,6 +131,7 @@ func runServe(argv []string) error {
 	fs.StringVar(&cfg.transport, "transport", "stdio", "Transport: stdio | http")
 	fs.StringVar(&cfg.dbPath, "db", "", "Path to SQLite database file (default: in-memory)")
 	fs.StringVar(&cfg.databaseURL, "database-url", "", "Postgres DSN. When set, overrides --db and is used for both match state AND ownership. Falls back to $DATABASE_URL if empty.")
+	fs.StringVar(&cfg.skillsDir, "skills-dir", defaultSkillsDir(), "Directory holding designed games as on-disk skills (stdio mode only; ignored when --database-url is set). Pass an empty string to keep designed games in memory only (not persistent).")
 	fs.IntVar(&cfg.port, "port", 8080, "HTTP listen port (http transport only)")
 	fs.StringVar(&cfg.jwksURL, "jwks-url", "", "OIDC JWKS URL for OAuth verification (http transport only)")
 	fs.StringVar(&cfg.issuer, "issuer", "", "Required JWT issuer (http transport only)")
@@ -150,18 +164,31 @@ func runServe(argv []string) error {
 	}
 	defer closeOwnership()
 
-	// Open the user-games store. In hosted mode (Postgres DSN set) it's
-	// PG-backed; otherwise in-memory (single-user / stdio mode).
+	// Open the user-games store. Selection (highest precedence first):
+	//   1. --database-url set  → Postgres (hosted / multi-tenant deployments)
+	//   2. --skills-dir non-empty → skills-on-disk (stdio default; human-
+	//      readable, hand-editable files at $HOME/.claude/skills/games)
+	//   3. otherwise → in-memory (ephemeral; usually only when --skills-dir
+	//      was explicitly emptied)
 	var ugStore mcppkg.UserGameStore
-	if cfg.databaseURL != "" {
+	switch {
+	case cfg.databaseURL != "":
 		pgUG, err := mcppkg.OpenPostgresUserGames(cfg.databaseURL)
 		if err != nil {
 			return fmt.Errorf("open user_games: %w", err)
 		}
 		defer pgUG.Close()
 		ugStore = pgUG
-	} else {
+	case cfg.skillsDir != "":
+		sk, err := mcppkg.OpenSkillsDirUserGames(cfg.skillsDir)
+		if err != nil {
+			return fmt.Errorf("open skills dir: %w", err)
+		}
+		ugStore = sk
+		logger.Info("user games store", "kind", "skills-dir", "path", cfg.skillsDir)
+	default:
 		ugStore = mcppkg.NewInMemoryUserGames()
+		logger.Info("user games store", "kind", "in-memory", "note", "designed games will not persist across restarts")
 	}
 	registry := mcppkg.NewUserAwareRegistry(mgr, ugStore)
 	if err := registry.ReplayFromStore(context.Background()); err != nil {
