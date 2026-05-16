@@ -13,7 +13,10 @@ The boardgame-mcp server lets Claude help you design and play your own board gam
 ## Where games live
 
 - Built-ins (tic-tac-toe, love-letter) come from the server binary.
-- Designed games are stored in the `user_games` Postgres table (or in memory in stdio mode). Scoped to the registering user — others can't see them.
+- **Stdio mode (default):** each designed game lives as an on-disk skill at `$HOME/.claude/skills/games/<game-name>/`, containing a human-readable `SKILL.md` (frontmatter + your `llm_guide` markdown) and a `spec.star` (the Starlark spec the server runs). Override the root with `--skills-dir=PATH`; pass `--skills-dir=""` to keep games in memory only (ephemeral).
+- **Hosted mode (`--database-url` set):** designed games go to the `user_games` Postgres table, scoped to the registering user.
+
+You can browse, hand-edit, copy between machines, or back up your designed games like any other files. The server scans the skills directory on startup and registers every game it finds.
 
 ## Deleting a game
 
