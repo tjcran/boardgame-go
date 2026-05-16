@@ -56,3 +56,9 @@ If a game has a sibling skill (e.g. `tictactoe-strategy`), let that skill drive 
 - aim for a clear winning line
 
 When in doubt, narrate your reasoning so the user can correct you.
+
+## Designed games (user-authored)
+
+The server may expose user-designed games alongside built-ins. They appear in `list_games` with `userOwned: true`. If the active match's game has a `game://<owner>/<name>/guide` resource available via `resources/list`, **read it once before your first move**. The guide is the designer's rules-and-strategy notes; treat it the way you treat a `*-strategy` sibling skill for built-in games.
+
+To design a new game with the user, invoke the `design-a-game` prompt.

@@ -45,9 +45,10 @@ type Server struct {
 	Info         ServerInfo
 	Instructions string
 
-	mu      sync.RWMutex
-	tools   map[string]registeredTool
-	prompts map[string]registeredPrompt
+	mu             sync.RWMutex
+	tools          map[string]registeredTool
+	prompts        map[string]registeredPrompt
+	guideResources *guideResources
 }
 
 type registeredTool struct {
@@ -134,7 +135,32 @@ func (s *Server) dispatch(ctx context.Context, msg *rpcMessage, writeJSON func(a
 	case "prompts/get":
 		writeJSON(s.handlePromptsGet(ctx, msg))
 	case "resources/list":
-		writeJSON(rpcResult(msg.ID, map[string]any{"resources": []any{}}))
+		list, err := s.listGuideResources(ctx)
+		if err != nil {
+			writeJSON(rpcError(msg.ID, codeInternalError, err.Error()))
+			return
+		}
+		writeJSON(rpcResult(msg.ID, map[string]any{"resources": list}))
+	case "resources/read":
+		var params struct {
+			URI string `json:"uri"`
+		}
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			writeJSON(rpcError(msg.ID, codeInvalidParams, err.Error()))
+			return
+		}
+		body, err := s.readGuideResource(ctx, params.URI)
+		if err != nil {
+			writeJSON(rpcError(msg.ID, codeInternalError, err.Error()))
+			return
+		}
+		writeJSON(rpcResult(msg.ID, map[string]any{
+			"contents": []any{map[string]any{
+				"uri":      params.URI,
+				"mimeType": "text/markdown",
+				"text":     body,
+			}},
+		}))
 	default:
 		if msg.ID != nil {
 			writeJSON(rpcError(msg.ID, codeMethodNotFound, "method not supported: "+msg.Method))

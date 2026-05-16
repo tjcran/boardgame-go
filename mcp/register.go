@@ -35,7 +35,7 @@ Rules:
 - If a tool returns an error, read it carefully — the message tells you what
   went wrong (occupied cell, out of turn, bad credentials, etc.).`
 
-// RegisterTools installs the six gameplay tools on a Server.
+// RegisterTools installs the gameplay tools on a Server.
 //
 // JSON Schemas describe each tool's arguments so MCP clients can render
 // argument pickers and pre-validate calls. They are deliberately tight:
@@ -154,6 +154,75 @@ func RegisterTools(s *Server, t *Tools) {
 			return nil, err
 		}
 		return t.MakeMove(ctx, args)
+	}))
+
+	s.RegisterTool(ToolSpec{
+		Name:        "register_game",
+		Description: "Register a brand-new game designed in this session. The source is a Starlark module following the spec defined in the design-a-game prompt; llm_guide is optional markdown surfaced as a game://owner/name/guide MCP resource. Returns the canonical name from META.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"source":    {"type": "string", "description": "Starlark module source (UTF-8)."},
+				"llm_guide": {"type": "string", "description": "Optional markdown explaining the rules and strategy hints."}
+			},
+			"required": ["source"],
+			"additionalProperties": false
+		}`),
+	}, wrap(func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args RegisterGameArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		return t.RegisterGame(ctx, args)
+	}))
+
+	s.RegisterTool(ToolSpec{
+		Name:        "delete_game",
+		Description: "Delete a game you previously designed. You can only delete games you own; built-ins are protected.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {"name": {"type": "string"}},
+			"required": ["name"],
+			"additionalProperties": false
+		}`),
+	}, wrap(func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args DeleteGameArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		return t.DeleteGame(ctx, args)
+	}))
+
+	s.RegisterTool(ToolSpec{
+		Name:        "playtest_draft",
+		Description: "Dry-run a draft game spec. Returns validation errors, the initial state, and a per-step trace (state before/after, end_if result, legal moves) for the optional scenario. Side-effect-free; no DB write.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"source":   {"type": "string", "description": "Starlark module source (UTF-8) of a draft spec."},
+				"scenario": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"player_id": {"type": "string"},
+							"move":      {"type": "string"},
+							"args":      {"type": "array"}
+						},
+						"required": ["player_id", "move"],
+						"additionalProperties": false
+					}
+				}
+			},
+			"required": ["source"],
+			"additionalProperties": false
+		}`),
+	}, wrap(func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args PlaytestDraftArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		return t.PlaytestDraft(ctx, args)
 	}))
 }
 

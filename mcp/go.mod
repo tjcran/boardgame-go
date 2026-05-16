@@ -5,6 +5,7 @@ go 1.23.4
 require (
 	github.com/jackc/pgx/v5 v5.7.1
 	github.com/tjcran/boardgame-go v0.0.0
+	go.starlark.net v0.0.0-20240520160348-046347dcd104
 )
 
 require (

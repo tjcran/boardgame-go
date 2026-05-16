@@ -8,6 +8,7 @@ import (
 
 	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/match"
+	"github.com/tjcran/boardgame-go/mcp/starlarkgame"
 )
 
 // Tools is the set of MCP tool handlers backed by a match.Manager.
@@ -18,6 +19,12 @@ import (
 // and lets us swap the SDK locally if needed.
 type Tools struct {
 	Manager *match.Manager
+
+	// Registry layers per-user game scoping on top of Manager. When set,
+	// list_games / create_match route through it so user-designed games are
+	// visible to their owner. When nil, the pre-existing Manager-only path
+	// is used (stdio mode, tests without a Registry).
+	Registry *UserAwareRegistry
 
 	// Ownership scopes match access by authenticated user. Leave nil for
 	// single-tenant mode (stdio, local dev). In hosted/HTTP mode the
@@ -37,14 +44,39 @@ type GameInfo struct {
 	Name       string `json:"name"`
 	MinPlayers int    `json:"minPlayers,omitempty"`
 	MaxPlayers int    `json:"maxPlayers,omitempty"`
+	UserOwned  bool   `json:"userOwned,omitempty"`
 }
 
-// ListGames returns metadata for every game registered on the Manager.
-// Sorted by name for deterministic output.
-func (t *Tools) ListGames(_ context.Context) (ListGamesResult, error) {
+// ListGames returns metadata for every game visible to the caller.
+// When a Registry is configured, per-user games are included for the
+// authenticated user; otherwise every built-in game registered on the
+// Manager is returned. Sorted by name for deterministic output.
+func (t *Tools) ListGames(ctx context.Context) (ListGamesResult, error) {
+	if t.Registry != nil {
+		userID := UserIDFromContext(ctx)
+		listings, err := t.Registry.ListForUser(ctx, userID)
+		if err != nil {
+			return ListGamesResult{}, err
+		}
+		out := ListGamesResult{Games: make([]GameInfo, 0, len(listings))}
+		for _, l := range listings {
+			out.Games = append(out.Games, GameInfo{
+				Name:       l.Name,
+				MinPlayers: l.MinPlayers,
+				MaxPlayers: l.MaxPlayers,
+				UserOwned:  l.UserOwned,
+			})
+		}
+		return out, nil
+	}
+	// Fallback: Manager-only path (stdio mode, tests without Registry).
+	// Suppress any usergame-prefixed keys that may have been registered.
 	names := t.Manager.GameNames()
 	out := ListGamesResult{Games: make([]GameInfo, 0, len(names))}
 	for _, name := range names {
+		if hasUserGameKeyPrefix(name) {
+			continue
+		}
 		g := t.Manager.Game(name)
 		if g == nil {
 			continue
@@ -84,7 +116,22 @@ func (t *Tools) CreateMatch(ctx context.Context, args CreateMatchArgs) (CreateMa
 	if t.Ownership != nil && UserIDFromContext(ctx) == "" {
 		return CreateMatchResult{}, errors.New("not authenticated: no userID on request context")
 	}
-	matchID, err := t.Manager.Create(args.Game, match.CreateOptions{
+
+	// Translate the public game name to the Manager-internal key. When the
+	// Registry is present, user-owned games are scoped by userID. Without a
+	// Registry, the public name is used as-is (Manager key == public name for
+	// built-ins).
+	managerKey := args.Game
+	if t.Registry != nil {
+		userID := UserIDFromContext(ctx)
+		key, _, err := t.Registry.LookupForUser(ctx, userID, args.Game)
+		if err != nil {
+			return CreateMatchResult{}, fmt.Errorf("game %q: %w", args.Game, err)
+		}
+		managerKey = key
+	}
+
+	matchID, err := t.Manager.Create(managerKey, match.CreateOptions{
 		NumPlayers: args.NumPlayers,
 		SetupData:  args.SetupData,
 		Name:       args.Name,
@@ -103,7 +150,7 @@ func (t *Tools) CreateMatch(ctx context.Context, args CreateMatchArgs) (CreateMa
 	}
 	return CreateMatchResult{
 		MatchID:    matchID,
-		Game:       args.Game,
+		Game:       args.Game, // return the public name the caller used
 		NumPlayers: m.State.Ctx.NumPlayers,
 	}, nil
 }
@@ -199,7 +246,7 @@ func (t *Tools) GetState(ctx context.Context, args GetStateArgs) (GetStateResult
 	}
 	return GetStateResult{
 		MatchID:       m.ID,
-		Game:          m.GameName,
+		Game:          publicGameName(m.GameName),
 		State:         state,
 		CurrentPlayer: state.Ctx.CurrentPlayer,
 		Phase:         state.Ctx.Phase,
@@ -279,6 +326,146 @@ type MakeMoveResult struct {
 	State         core.State `json:"state"`
 	CurrentPlayer string     `json:"currentPlayer"`
 	Gameover      any        `json:"gameover,omitempty"`
+}
+
+// ----- register_game -----
+
+type RegisterGameArgs struct {
+	Source   string `json:"source"`
+	LLMGuide string `json:"llm_guide,omitempty"`
+}
+
+type RegisterGameResult struct {
+	Name string `json:"name"`
+}
+
+// RegisterGame validates a Starlark game spec, persists it under the
+// caller's user ID, and installs it on the Manager so it can be played
+// like a built-in.
+func (t *Tools) RegisterGame(ctx context.Context, args RegisterGameArgs) (RegisterGameResult, error) {
+	if t.Registry == nil {
+		return RegisterGameResult{}, fmt.Errorf("registry not configured")
+	}
+	userID := UserIDFromContext(ctx)
+	if err := t.Registry.RegisterUserGame(ctx, userID, args.Source, args.LLMGuide); err != nil {
+		return RegisterGameResult{}, err
+	}
+	// Read META back to return the canonical name.
+	spec, err := starlarkgame.LoadSpec(args.Source)
+	if err != nil {
+		return RegisterGameResult{}, err
+	}
+	return RegisterGameResult{Name: spec.Meta.Name}, nil
+}
+
+// ----- playtest_draft -----
+
+type PlaytestStep struct {
+	PlayerID string `json:"player_id"`
+	Move     string `json:"move"`
+	Args     []any  `json:"args,omitempty"`
+}
+
+type PlaytestDraftArgs struct {
+	Source   string         `json:"source"`
+	Scenario []PlaytestStep `json:"scenario,omitempty"`
+}
+
+type PlaytestTrace struct {
+	PlayerID        string           `json:"player_id"`
+	Move            string           `json:"move"`
+	Args            []any            `json:"args,omitempty"`
+	StateBefore     map[string]any   `json:"state_before"`
+	StateAfter      map[string]any   `json:"state_after,omitempty"`
+	EndIfResult     any              `json:"end_if_result,omitempty"`
+	LegalMovesAfter []map[string]any `json:"legal_moves_after,omitempty"`
+	Error           string           `json:"error,omitempty"`
+}
+
+type PlaytestDraftResult struct {
+	ValidationErrors []string        `json:"validation_errors,omitempty"`
+	SetupState       map[string]any  `json:"setup_state,omitempty"`
+	Trace            []PlaytestTrace `json:"trace,omitempty"`
+}
+
+// PlaytestDraft dry-runs a draft spec without registering it. It returns
+// any validation errors, the initial state, and a per-step trace for the
+// optional scenario. Side-effect-free; no DB write.
+func (t *Tools) PlaytestDraft(ctx context.Context, args PlaytestDraftArgs) (PlaytestDraftResult, error) {
+	var res PlaytestDraftResult
+	spec, err := starlarkgame.LoadSpec(args.Source)
+	if err != nil {
+		res.ValidationErrors = []string{"parse: " + err.Error()}
+		return res, nil
+	}
+	if err := starlarkgame.Validate(ctx, spec); err != nil {
+		res.ValidationErrors = []string{"validate: " + err.Error()}
+		return res, nil
+	}
+	bc := &starlarkgame.BridgeCtx{NumPlayers: spec.Meta.MinPlayers}
+	bc.AttachSeededRandom(0)
+	state, err := spec.CallSetup(ctx, bc)
+	if err != nil {
+		return res, err
+	}
+	res.SetupState = state
+
+	for _, step := range args.Scenario {
+		bc.PlayerID = step.PlayerID
+		tr := PlaytestTrace{
+			PlayerID:    step.PlayerID,
+			Move:        step.Move,
+			Args:        step.Args,
+			StateBefore: deepCopyMap(state),
+		}
+		next, err := spec.CallMove(ctx, bc, step.Move, state, step.Args)
+		if err != nil {
+			tr.Error = err.Error()
+			res.Trace = append(res.Trace, tr)
+			break
+		}
+		state = next
+		tr.StateAfter = deepCopyMap(state)
+		if end, _ := spec.CallEndIf(ctx, bc, state); end != nil {
+			tr.EndIfResult = end
+		}
+		lm, _ := spec.CallLegalMoves(ctx, bc, state)
+		tr.LegalMovesAfter = lm
+		res.Trace = append(res.Trace, tr)
+	}
+	return res, nil
+}
+
+// ----- delete_game -----
+
+type DeleteGameArgs struct {
+	Name string `json:"name"`
+}
+type DeleteGameResult struct {
+	Deleted bool `json:"deleted"`
+}
+
+// DeleteGame removes a user-designed game. Built-ins are protected by
+// UserAwareRegistry.DeleteUserGame (which only knows about user games).
+func (t *Tools) DeleteGame(ctx context.Context, args DeleteGameArgs) (DeleteGameResult, error) {
+	if t.Registry == nil {
+		return DeleteGameResult{}, fmt.Errorf("registry not configured")
+	}
+	userID := UserIDFromContext(ctx)
+	if err := t.Registry.DeleteUserGame(ctx, userID, args.Name); err != nil {
+		return DeleteGameResult{}, err
+	}
+	return DeleteGameResult{Deleted: true}, nil
+}
+
+// deepCopyMap shallow-copies the top level; nested values are shared.
+// Sufficient for the trace, which is reported once per step.
+func deepCopyMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // MakeMove applies a move and returns the resulting state (player-view
