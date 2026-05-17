@@ -81,7 +81,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 		}
 		acts := make([]core.EnumerateAction, 0, len(out))
 		for _, m := range out {
-			name, _ := m["name"].(string)
+			name := legalMoveName(m)
 			args, _ := m["args"].([]any)
 			acts = append(acts, core.EnumerateAction{Move: name, Args: args})
 		}

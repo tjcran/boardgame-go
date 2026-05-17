@@ -71,3 +71,23 @@ func (c Ctx) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(w)
 }
+
+// UnmarshalJSON is the inverse of MarshalJSON: clients always see
+// ActivePlayers as a JSON object (never null), but on the way back the
+// "no one is gated" sentinel is a Go nil map. Without this, an empty
+// {} on the wire would deserialise to a non-nil empty map, which the
+// authorisation rules interpret as "stages are active, gate every
+// player on the map" — and the map is empty, so all moves are rejected
+// with ErrInactivePlayer. Surfaces on every roundtrip through
+// persistent storage (SQLite / Postgres).
+func (c *Ctx) UnmarshalJSON(data []byte) error {
+	type alias Ctx
+	a := (*alias)(c)
+	if err := json.Unmarshal(data, a); err != nil {
+		return err
+	}
+	if len(c.ActivePlayers) == 0 {
+		c.ActivePlayers = nil
+	}
+	return nil
+}
