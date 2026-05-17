@@ -35,7 +35,7 @@ func Validate(ctx context.Context, s *Spec) error {
 			return fmt.Errorf("legal_moves smoke (n=%d): %w", n, err)
 		}
 		for i, mv := range lm {
-			name, _ := mv["name"].(string)
+			name := legalMoveName(mv)
 			if _, ok := s.Moves[name]; !ok {
 				return fmt.Errorf("legal_moves[%d] names %q not in MOVES", i, name)
 			}

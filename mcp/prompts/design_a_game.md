@@ -10,7 +10,7 @@ A **Starlark module** that the server will validate, store, and run as a real ga
 | `setup(ctx)` | function | Returns initial state as a dict. |
 | `MOVES` | dict | `{"move_name": {"args": [{"name":"x","type":"int","min":0,"max":8}], "apply": fn}}`. |
 | `end_if(state, ctx)` | function | Returns `{"winner": "0"}` / `{"draw": True}` / `None`. |
-| `legal_moves(state, ctx)` | function | Returns list of `{"name": ..., "args": [...]}`. |
+| `legal_moves(state, ctx)` | function | Returns list of `{"move": ..., "args": [...]}` — same shape the server returns to clients. (`"name"` is also accepted for back-compat.) |
 | `player_view(state, player_id)` | function (optional) | Redact hidden info for one player. Default: identity. |
 
 # The `ctx` you receive
@@ -57,7 +57,7 @@ def end_if(state, ctx):
     return None
 
 def legal_moves(state, ctx):
-    return [{"name":"click","args":[i]} for i in range(9) if state["cells"][i] == None]
+    return [{"move":"click","args":[i]} for i in range(9) if state["cells"][i] == None]
 ```
 
 # Your design conversation
