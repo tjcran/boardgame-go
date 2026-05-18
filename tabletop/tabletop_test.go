@@ -87,3 +87,109 @@ func TestLineOfSightIgnoresEndpoints(t *testing.T) {
 		t.Fatalf("endpoints must not block their own LOS")
 	}
 }
+
+func TestSquareBoardInBounds(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 8)
+	cases := []struct {
+		p    tabletop.Pos
+		want bool
+	}{
+		{tabletop.Pos{0, 0}, true},
+		{tabletop.Pos{9, 7}, true},
+		{tabletop.Pos{10, 0}, false},
+		{tabletop.Pos{0, 8}, false},
+		{tabletop.Pos{-1, 0}, false},
+		{tabletop.Pos{0, -1}, false},
+	}
+	for _, c := range cases {
+		if got := b.InBounds(c.p); got != c.want {
+			t.Errorf("InBounds(%v) = %v, want %v", c.p, got, c.want)
+		}
+	}
+}
+
+func TestSquareBoardDistanceIsChebyshev(t *testing.T) {
+	b := tabletop.NewSquareBoard(20, 20)
+	// Chebyshev (king's move) distance: max(|dx|, |dy|). Diagonal moves
+	// cost the same as orthogonal — standard for square-grid wargames.
+	cases := []struct {
+		a, b tabletop.Pos
+		want int
+	}{
+		{tabletop.Pos{0, 0}, tabletop.Pos{3, 0}, 3},
+		{tabletop.Pos{0, 0}, tabletop.Pos{0, 5}, 5},
+		{tabletop.Pos{0, 0}, tabletop.Pos{3, 5}, 5}, // diagonal
+		{tabletop.Pos{2, 7}, tabletop.Pos{2, 7}, 0},
+		{tabletop.Pos{5, 5}, tabletop.Pos{2, 2}, 3},
+	}
+	for _, c := range cases {
+		if got := b.Distance(c.a, c.b); got != c.want {
+			t.Errorf("Distance(%v,%v) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+func TestSquareBoardNeighborsEightWay(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	got := b.Neighbors(tabletop.Pos{5, 5})
+	if len(got) != 8 {
+		t.Fatalf("expected 8 neighbors for interior cell, got %d: %v", len(got), got)
+	}
+	// Corner — only 3 in-bounds neighbors.
+	corner := b.Neighbors(tabletop.Pos{0, 0})
+	if len(corner) != 3 {
+		t.Fatalf("expected 3 neighbors at corner, got %d: %v", len(corner), corner)
+	}
+}
+
+func TestSquareBoardLineIncludesEndpoints(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	line := b.Line(tabletop.Pos{0, 0}, tabletop.Pos{3, 0})
+	want := []tabletop.Pos{{0, 0}, {1, 0}, {2, 0}, {3, 0}}
+	if len(line) != len(want) {
+		t.Fatalf("line length = %d, want %d: %v", len(line), len(want), line)
+	}
+	for i, p := range want {
+		if line[i] != p {
+			t.Errorf("line[%d] = %v, want %v", i, line[i], p)
+		}
+	}
+}
+
+func TestSquareBoardLineDiagonal(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	line := b.Line(tabletop.Pos{0, 0}, tabletop.Pos{3, 3})
+	// Bresenham on a pure diagonal: every cell is on the line.
+	want := []tabletop.Pos{{0, 0}, {1, 1}, {2, 2}, {3, 3}}
+	if len(line) != len(want) {
+		t.Fatalf("diagonal line length = %d, want %d: %v", len(line), len(want), line)
+	}
+	for i, p := range want {
+		if line[i] != p {
+			t.Errorf("diagonal line[%d] = %v, want %v", i, line[i], p)
+		}
+	}
+}
+
+func TestSquareBoardLineReverseSwapsEndpoints(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	// Line a→b and b→a should both start at the first arg and end at the
+	// second arg. We don't require the interior cells to be identical
+	// (Bresenham is not symmetric on near-diagonals) — but the endpoints
+	// MUST be where the caller said.
+	line := b.Line(tabletop.Pos{3, 0}, tabletop.Pos{0, 0})
+	if line[0] != (tabletop.Pos{3, 0}) || line[len(line)-1] != (tabletop.Pos{0, 0}) {
+		t.Fatalf("Line endpoints must match args: got %v", line)
+	}
+}
+
+func TestLineOfSightOnSquareBoardWithCoverBetween(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	cover := map[tabletop.Pos]bool{{X: 2, Y: 0}: true}
+	clear := tabletop.LineOfSight(b, tabletop.Pos{0, 0}, tabletop.Pos{4, 0}, func(p tabletop.Pos) bool {
+		return cover[p]
+	})
+	if clear {
+		t.Fatalf("expected blocked LOS through cover cell (2,0)")
+	}
+}
