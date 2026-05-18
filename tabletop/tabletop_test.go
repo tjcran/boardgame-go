@@ -516,3 +516,60 @@ func TestRerollBelowReplacesMatchingDice(t *testing.T) {
 		t.Errorf("RerollBelow should not mutate input, got %v", original)
 	}
 }
+
+func TestResolveChainReducesPoolHitToWoundToUnsaved(t *testing.T) {
+	// With a deterministic seed, the exact counts are reproducible. We
+	// assert the SHAPE (hits ≤ attacks, wounds ≤ hits, unsaved ≤ wounds)
+	// and that determinism holds, rather than pinning specific numbers
+	// that the RNG implementation could legitimately change.
+	r := tabletop.Resolve{Attacks: 20, HitOn: 4, WoundOn: 4, SaveOn: 4}
+	a := r.Run(rng(1234))
+	b := r.Run(rng(1234))
+
+	if a.Hits != b.Hits || a.Wounds != b.Wounds || a.Unsaved != b.Unsaved {
+		t.Fatalf("Resolve should be deterministic given a seed: %+v vs %+v", a, b)
+	}
+	if a.Hits > 20 || a.Hits < 0 {
+		t.Errorf("hits out of range: %d", a.Hits)
+	}
+	if a.Wounds > a.Hits || a.Wounds < 0 {
+		t.Errorf("wounds must be ≤ hits: hits=%d wounds=%d", a.Hits, a.Wounds)
+	}
+	if a.Unsaved > a.Wounds || a.Unsaved < 0 {
+		t.Errorf("unsaved must be ≤ wounds: wounds=%d unsaved=%d", a.Wounds, a.Unsaved)
+	}
+}
+
+func TestResolveAlwaysHitsWhenHitOnIsOne(t *testing.T) {
+	r := tabletop.Resolve{Attacks: 30, HitOn: 1, WoundOn: 7, SaveOn: 7}
+	// HitOn=1 → every d6 hits. WoundOn=7 → no wound rolls succeed
+	// (d6 maxes at 6). SaveOn=7 → no saves succeed. So we expect
+	// Hits=30, Wounds=0, Unsaved=0.
+	got := r.Run(rng(1))
+	if got.Hits != 30 {
+		t.Errorf("HitOn=1 should hit every attack, got %d/30", got.Hits)
+	}
+	if got.Wounds != 0 {
+		t.Errorf("WoundOn=7 should yield zero wounds, got %d", got.Wounds)
+	}
+	if got.Unsaved != 0 {
+		t.Errorf("Unsaved should be zero when wounds=0, got %d", got.Unsaved)
+	}
+}
+
+func TestResolveAlwaysWoundsWhenSaveOnIsSeven(t *testing.T) {
+	r := tabletop.Resolve{Attacks: 10, HitOn: 1, WoundOn: 1, SaveOn: 7}
+	got := r.Run(rng(7))
+	// Everything hits, everything wounds, nothing saves → 10 unsaved.
+	if got.Unsaved != 10 {
+		t.Errorf("expected 10 unsaved with HitOn=WoundOn=1 and SaveOn=7, got %d", got.Unsaved)
+	}
+}
+
+func TestResolveZeroAttacksProducesZero(t *testing.T) {
+	r := tabletop.Resolve{Attacks: 0, HitOn: 4, WoundOn: 4, SaveOn: 4}
+	got := r.Run(rng(1))
+	if got != (tabletop.ResolveResult{}) {
+		t.Errorf("zero attacks should yield zero result, got %+v", got)
+	}
+}
