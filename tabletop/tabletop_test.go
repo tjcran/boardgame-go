@@ -273,3 +273,76 @@ func TestHexBoardLineLengthEqualsDistancePlusOne(t *testing.T) {
 		}
 	}
 }
+
+func TestTerrainMapTagAndHasTag(t *testing.T) {
+	tm := tabletop.NewTerrainMap()
+	p := tabletop.Pos{3, 4}
+
+	if tm.HasTag(p, "cover") {
+		t.Fatalf("fresh terrain map should have no tags")
+	}
+	tm.Tag(p, "cover")
+	tm.Tag(p, "blocks_los")
+	if !tm.HasTag(p, "cover") {
+		t.Errorf("expected cover tag after Tag")
+	}
+	if !tm.HasTag(p, "blocks_los") {
+		t.Errorf("expected blocks_los tag after Tag")
+	}
+	if tm.HasTag(p, "missing") {
+		t.Errorf("HasTag should report false for un-set tag")
+	}
+}
+
+func TestTerrainMapUntag(t *testing.T) {
+	tm := tabletop.NewTerrainMap()
+	p := tabletop.Pos{1, 1}
+	tm.Tag(p, "cover")
+	tm.Untag(p, "cover")
+	if tm.HasTag(p, "cover") {
+		t.Fatalf("Untag should remove the tag")
+	}
+}
+
+func TestTerrainMapBlocksIsSugar(t *testing.T) {
+	tm := tabletop.NewTerrainMap()
+	p := tabletop.Pos{2, 2}
+	if tm.Blocks(p) {
+		t.Fatalf("fresh cell should not block")
+	}
+	tm.Tag(p, "blocks_los")
+	if !tm.Blocks(p) {
+		t.Fatalf("Blocks should be true once blocks_los tag is set")
+	}
+}
+
+func TestTerrainMapTagAtMultipleCells(t *testing.T) {
+	tm := tabletop.NewTerrainMap()
+	tm.Tag(tabletop.Pos{0, 0}, "cover")
+	tm.Tag(tabletop.Pos{1, 1}, "cover")
+	if !tm.HasTag(tabletop.Pos{0, 0}, "cover") || !tm.HasTag(tabletop.Pos{1, 1}, "cover") {
+		t.Fatalf("multiple cells should each carry their own tags")
+	}
+	if tm.HasTag(tabletop.Pos{2, 2}, "cover") {
+		t.Fatalf("untagged cell should not report tagged")
+	}
+}
+
+func TestLineOfSightWithTerrainMap(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	terrain := tabletop.NewTerrainMap()
+	terrain.Tag(tabletop.Pos{2, 2}, tabletop.TerrainTagBlocksLOS)
+
+	clear := tabletop.LineOfSight(b, tabletop.Pos{0, 0}, tabletop.Pos{4, 4}, terrain.Blocks)
+	if clear {
+		t.Fatalf("expected (2,2) blocker to break diagonal LOS (0,0)→(4,4)")
+	}
+
+	// Move the blocker off the line.
+	terrain.Untag(tabletop.Pos{2, 2}, tabletop.TerrainTagBlocksLOS)
+	terrain.Tag(tabletop.Pos{9, 9}, tabletop.TerrainTagBlocksLOS)
+	clear = tabletop.LineOfSight(b, tabletop.Pos{0, 0}, tabletop.Pos{4, 4}, terrain.Blocks)
+	if !clear {
+		t.Fatalf("expected LOS clear when blocker is off the line")
+	}
+}
