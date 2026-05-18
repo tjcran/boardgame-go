@@ -193,3 +193,83 @@ func TestLineOfSightOnSquareBoardWithCoverBetween(t *testing.T) {
 		t.Fatalf("expected blocked LOS through cover cell (2,0)")
 	}
 }
+
+func TestHexBoardInBoundsRectangularExtent(t *testing.T) {
+	// Rectangular extent in axial coords: 0 ≤ q < W, 0 ≤ r < H.
+	b := tabletop.NewHexBoard(6, 6)
+	if !b.InBounds(tabletop.Pos{0, 0}) {
+		t.Errorf("origin should be in bounds")
+	}
+	if !b.InBounds(tabletop.Pos{5, 5}) {
+		t.Errorf("(5,5) should be in bounds")
+	}
+	if b.InBounds(tabletop.Pos{6, 0}) {
+		t.Errorf("(6,0) should be out of bounds")
+	}
+	if b.InBounds(tabletop.Pos{-1, 0}) {
+		t.Errorf("(-1,0) should be out of bounds")
+	}
+}
+
+func TestHexBoardDistance(t *testing.T) {
+	b := tabletop.NewHexBoard(20, 20)
+	// Hex distance: (|dq| + |dr| + |dq+dr|) / 2
+	cases := []struct {
+		a, c tabletop.Pos
+		want int
+	}{
+		{tabletop.Pos{0, 0}, tabletop.Pos{0, 0}, 0},
+		{tabletop.Pos{0, 0}, tabletop.Pos{1, 0}, 1},
+		{tabletop.Pos{0, 0}, tabletop.Pos{0, 1}, 1},
+		{tabletop.Pos{0, 0}, tabletop.Pos{1, -1}, 1}, // out of bounds but distance is geometric
+		{tabletop.Pos{0, 0}, tabletop.Pos{3, 0}, 3},
+		{tabletop.Pos{0, 0}, tabletop.Pos{3, -2}, 3}, // diagonal hex move
+		{tabletop.Pos{2, 2}, tabletop.Pos{5, 1}, 3},
+	}
+	for _, c := range cases {
+		if got := b.Distance(c.a, c.c); got != c.want {
+			t.Errorf("Hex Distance(%v,%v) = %d, want %d", c.a, c.c, got, c.want)
+		}
+	}
+}
+
+func TestHexBoardNeighborsSixWay(t *testing.T) {
+	b := tabletop.NewHexBoard(10, 10)
+	got := b.Neighbors(tabletop.Pos{5, 5})
+	if len(got) != 6 {
+		t.Fatalf("expected 6 hex neighbors for interior cell, got %d: %v", len(got), got)
+	}
+	// Every neighbor must be at distance 1.
+	for _, n := range got {
+		if d := b.Distance(tabletop.Pos{5, 5}, n); d != 1 {
+			t.Errorf("neighbor %v is at distance %d, expected 1", n, d)
+		}
+	}
+}
+
+func TestHexBoardLineIncludesEndpoints(t *testing.T) {
+	b := tabletop.NewHexBoard(10, 10)
+	line := b.Line(tabletop.Pos{0, 0}, tabletop.Pos{3, 0})
+	if line[0] != (tabletop.Pos{0, 0}) || line[len(line)-1] != (tabletop.Pos{3, 0}) {
+		t.Fatalf("hex line endpoints mismatch: %v", line)
+	}
+	if len(line) != 4 {
+		t.Fatalf("hex line (0,0)→(3,0) should have 4 cells, got %d: %v", len(line), line)
+	}
+}
+
+func TestHexBoardLineLengthEqualsDistancePlusOne(t *testing.T) {
+	b := tabletop.NewHexBoard(20, 20)
+	cases := []struct{ a, c tabletop.Pos }{
+		{tabletop.Pos{0, 0}, tabletop.Pos{4, 2}},
+		{tabletop.Pos{1, 3}, tabletop.Pos{6, 1}},
+		{tabletop.Pos{2, 2}, tabletop.Pos{2, 2}},
+	}
+	for _, tc := range cases {
+		line := b.Line(tc.a, tc.c)
+		want := b.Distance(tc.a, tc.c) + 1
+		if len(line) != want {
+			t.Errorf("Line(%v,%v) len = %d, want %d (distance+1): %v", tc.a, tc.c, len(line), want, line)
+		}
+	}
+}
