@@ -24,31 +24,49 @@ func (s *Spec) newThread(ctx context.Context) *starlark.Thread {
 	return t
 }
 
-// CallMove invokes MOVES[moveName].apply(state, ctx, *args). It hands
-// the apply function a mutable Starlark dict view of state, so script-
-// side mutations write through; on success the (potentially mutated)
-// state is converted back to a Go map. fail(msg) in the spec surfaces
-// as a Go error.
+// CallMove invokes MOVES[moveName].apply(state, ctx, *args) and returns
+// the new state from the function's return value. The input state is
+// frozen, so mutation-style apply functions (write to state then
+// implicitly return None) fail loudly instead of silently no-opping —
+// the spec author switches to returning the new dict and the contract
+// becomes unambiguous: apply is a pure transform from old state to new.
+//
+// To reject a move, the apply function calls fail(msg); the message
+// propagates as the Go error.
 func (s *Spec) CallMove(ctx context.Context, bc *BridgeCtx, moveName string, state map[string]any, args []any) (map[string]any, error) {
 	mv, ok := s.Moves[moveName]
-	if !ok { return nil, fmt.Errorf("unknown move %q", moveName) }
+	if !ok {
+		return nil, fmt.Errorf("unknown move %q", moveName)
+	}
 
-	stateSV, err := ToStarlark(state)
-	if err != nil { return nil, err }
+	stateSV, err := freezeState(state)
+	if err != nil {
+		return nil, err
+	}
 
 	sargs := starlark.Tuple{stateSV, bc.asStarlark()}
 	for _, a := range args {
 		sv, err := ToStarlark(a)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		sargs = append(sargs, sv)
 	}
-	if _, err := starlark.Call(s.newThread(ctx), mv.Apply, sargs, nil); err != nil {
+	res, err := starlark.Call(s.newThread(ctx), mv.Apply, sargs, nil)
+	if err != nil {
 		return nil, err
 	}
-	g, err := ToGo(stateSV)
-	if err != nil { return nil, err }
+	g, err := ToGo(res)
+	if err != nil {
+		return nil, fmt.Errorf("apply return: %w", err)
+	}
+	if g == nil {
+		return nil, fmt.Errorf("apply for move %q returned None; it must return the new state dict (use fail(\"...\") to reject a move)", moveName)
+	}
 	out, ok := g.(map[string]any)
-	if !ok { return nil, fmt.Errorf("post-move state is not a dict") }
+	if !ok {
+		return nil, fmt.Errorf("apply for move %q must return a state dict, got %T", moveName, g)
+	}
 	return out, nil
 }
 

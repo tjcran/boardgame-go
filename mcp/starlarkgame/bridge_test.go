@@ -9,7 +9,7 @@ func TestBridgeCtxFields(t *testing.T) {
 	spec, err := LoadSpec(`
 META = {"name":"t","min_players":1,"max_players":3}
 def setup(ctx): return {"pid": ctx.player_id, "n": ctx.num_players}
-MOVES = {"noop": {"args":[], "apply": lambda s, c: None}}
+MOVES = {"noop": {"args":[], "apply": lambda s, c: s}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
 `)
@@ -33,7 +33,7 @@ def setup(ctx):
     ctx.log("hello")
     ctx.log("world")
     return {}
-MOVES = {"noop": {"args":[], "apply": lambda s, c: None}}
+MOVES = {"noop": {"args":[], "apply": lambda s, c: s}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
 `)

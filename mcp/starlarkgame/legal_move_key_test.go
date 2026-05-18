@@ -30,7 +30,7 @@ func TestEnumerateWithMoveKey(t *testing.T) {
 	src := `
 META = {"name":"k","min_players":2,"max_players":2}
 def setup(ctx): return {"x": 0}
-def _go(state, ctx): pass
+def _go(state, ctx): return state
 MOVES = {"go": {"args":[], "apply": _go}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx):
