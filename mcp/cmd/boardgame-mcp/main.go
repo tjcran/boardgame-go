@@ -207,6 +207,7 @@ func runServe(argv []string) error {
 	mcppkg.RegisterTools(srv, tools)
 	mcppkg.RegisterDefaultPrompts(srv)
 	mcppkg.RegisterDesignAGamePrompt(srv)
+	mcppkg.RegisterImplementAKnownGamePrompt(srv)
 	srv.WireGuideResources(registry)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
