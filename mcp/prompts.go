@@ -177,3 +177,22 @@ func RegisterDesignAGamePrompt(s *Server) {
 		}}, nil
 	})
 }
+
+//go:embed prompts/implement_a_known_game.md
+var implementAKnownGameBody string
+
+// RegisterImplementAKnownGamePrompt installs the implement-a-known-game
+// prompt: the user named a real-world game (chess, checkers, go, …) and
+// wants Claude to one-shot a Starlark spec from canonical rules,
+// playtest, and register. Skips the design-a-game interview entirely.
+func RegisterImplementAKnownGamePrompt(s *Server) {
+	s.RegisterPrompt(PromptSpec{
+		Name:        "implement-a-known-game",
+		Description: "Implement a real-world board game (chess, checkers, go, connect-4, …) from canonical rules — one-shot the Starlark spec, playtest it, and register. Skip the design-conversation interview.",
+	}, func(ctx context.Context, _ json.RawMessage) ([]PromptMessage, error) {
+		return []PromptMessage{{
+			Role:    "user",
+			Content: map[string]interface{}{"type": "text", "text": implementAKnownGameBody},
+		}}, nil
+	})
+}
