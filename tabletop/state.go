@@ -109,7 +109,12 @@ func (s *State) ensureIndex() {
 }
 
 func (s *State) addToCell(pos Pos, unit UnitID) {
-	s.ensureIndex()
+	if s.byCell == nil {
+		// First touch — rebuild from Positions, which already includes
+		// the newly-assigned (unit, pos) entry. No manual append needed.
+		s.ensureIndex()
+		return
+	}
 	s.byCell[pos] = append(s.byCell[pos], unit)
 }
 

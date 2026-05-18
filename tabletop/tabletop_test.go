@@ -436,3 +436,19 @@ func TestStatePlaceTwiceIsAMove(t *testing.T) {
 		t.Errorf("old cell should be empty after re-Place")
 	}
 }
+
+func TestStatePlaceOnZeroValueStateDoesNotDuplicate(t *testing.T) {
+	// Bug regression: a zero-value State (or one whose byCell is nil
+	// post JSON unmarshal) must not produce a duplicate entry in the
+	// reverse index when Place is called for the first time.
+	var s tabletop.State
+	s.Place(tabletop.UnitID(7), tabletop.Pos{1, 1})
+
+	at := s.EntitiesAt(tabletop.Pos{1, 1})
+	if len(at) != 1 || at[0] != 7 {
+		t.Fatalf("EntitiesAt on zero-value State should return [7], got %v", at)
+	}
+	if got, _ := s.PositionOf(tabletop.UnitID(7)); got != (tabletop.Pos{1, 1}) {
+		t.Errorf("PositionOf = %v, want (1,1)", got)
+	}
+}
