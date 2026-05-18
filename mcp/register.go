@@ -194,6 +194,23 @@ func RegisterTools(s *Server, t *Tools) {
 	}))
 
 	s.RegisterTool(ToolSpec{
+		Name:        "export_game",
+		Description: "Export a game you previously designed as a skill-shaped package: a SKILL.md skeleton (frontmatter + auto-rendered moves table + the designer's llm_guide), the Starlark spec source, and a structured manifest. Use this to share a designed game, seed a per-game Claude skill, or back up a spec outside the server. Built-ins can't be exported. Cross-owner exports are refused.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {"name": {"type": "string", "description": "Public name of a game you registered earlier."}},
+			"required": ["name"],
+			"additionalProperties": false
+		}`),
+	}, wrap(func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args ExportGameArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		return t.ExportGame(ctx, args)
+	}))
+
+	s.RegisterTool(ToolSpec{
 		Name:        "playtest_draft",
 		Description: "Dry-run a draft game spec. Returns validation errors, the initial state, and a per-step trace (state before/after, end_if result, legal moves) for the optional scenario. Side-effect-free; no DB write.",
 		InputSchema: json.RawMessage(`{

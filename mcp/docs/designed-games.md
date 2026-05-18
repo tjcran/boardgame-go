@@ -22,6 +22,18 @@ You can browse, hand-edit, copy between machines, or back up your designed games
 
 Tell Claude "delete the foo game" and it'll call `delete_game(name="foo")`. Built-ins are protected. Existing matches of a deleted game become unplayable but readable.
 
+## Exporting a game for a per-game skill
+
+`export_game(name="foo")` returns a skill-shaped package:
+
+- `skill_md` — a SKILL.md skeleton with YAML frontmatter, an auto-rendered moves table, and the designer's `llm_guide` (if any). Strategy prose, UI notes, and AI heuristics are placeholders for the author to fill in.
+- `spec_star` — the Starlark spec source.
+- `manifest` — structured metadata (name, players, owner, moves with declared arg shapes, `created_at`).
+
+The intended flow: write `skill_md` to `~/.claude/skills/<game>/SKILL.md` and `spec_star` to `~/.claude/skills/<game>/spec.star`, then layer in a `<game>/strategy.md`, a React UI, AI logic, etc. — anything the server can't auto-generate. In stdio mode the SKILL.md + spec.star are already on disk under `--skills-dir`; `export_game` is the way to get the same package out of hosted mode, and gives you a richer auto-generated SKILL.md than what the registration step writes.
+
+Built-ins can't be exported (no Starlark source to ship). Cross-owner exports are refused.
+
 ## Limits
 
 v1 supports any 2+ player turn-based game representable as a Starlark module. Out of scope: real-time games, simultaneous moves, multi-action turns (every successful move ends the turn), publishing designed games to other users.

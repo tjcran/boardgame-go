@@ -94,6 +94,7 @@ func TestToolsListReturnsAllRegisteredTools(t *testing.T) {
 		"list_games": true, "create_match": true, "join_match": true,
 		"get_state": true, "list_legal_moves": true, "make_move": true,
 		"register_game": true, "playtest_draft": true, "delete_game": true,
+		"export_game": true,
 	}
 	for _, tIface := range tools {
 		tMap := tIface.(map[string]any)
