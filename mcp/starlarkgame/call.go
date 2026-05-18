@@ -109,6 +109,35 @@ func (s *Spec) CallEndIf(ctx context.Context, bc *BridgeCtx, state map[string]an
 	return ToGo(res)
 }
 
+// CallPhaseEndIf invokes a phase's end_if(state, ctx). Return shape:
+//   - None  → phase keeps going (returns "")
+//   - str   → name of the next phase to transition to
+//   - other → error
+// Empty string also means "stay in this phase".
+func (s *Spec) CallPhaseEndIf(ctx context.Context, bc *BridgeCtx, state map[string]any, phaseName string) (string, error) {
+	ph, ok := s.Phases[phaseName]
+	if !ok {
+		return "", fmt.Errorf("CallPhaseEndIf: unknown phase %q", phaseName)
+	}
+	if ph.EndIf == nil {
+		return "", nil
+	}
+	sv, err := freezeState(state)
+	if err != nil { return "", err }
+	res, err := starlark.Call(s.newThread(ctx), ph.EndIf, starlark.Tuple{sv, bc.asStarlark()}, nil)
+	if err != nil { return "", fmt.Errorf("phase %q end_if: %w", phaseName, err) }
+	g, err := ToGo(res)
+	if err != nil { return "", err }
+	if g == nil {
+		return "", nil
+	}
+	next, ok := g.(string)
+	if !ok {
+		return "", fmt.Errorf("phase %q end_if must return None or a phase name (string), got %T", phaseName, g)
+	}
+	return next, nil
+}
+
 // CallLegalMoves invokes legal_moves(state, ctx). Expected return shape:
 // list of {name: string, args: list}.
 func (s *Spec) CallLegalMoves(ctx context.Context, bc *BridgeCtx, state map[string]any) ([]map[string]any, error) {

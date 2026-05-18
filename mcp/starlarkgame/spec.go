@@ -40,6 +40,20 @@ type ArgDef struct {
 	Max  *int64
 }
 
+// Phase is one entry in the spec's optional PHASES dict.
+//
+// Moves replaces the global MOVES table for the duration of the phase
+// (matching core.PhaseConfig.Moves). EndIf is called after every move
+// in this phase; returning a phase-name string transitions to that
+// phase, None keeps the same phase active. Start: True marks the entry
+// phase the game opens in — exactly one phase must set it.
+type Phase struct {
+	Name  string
+	Moves map[string]Move
+	EndIf starlark.Callable // optional
+	Start bool
+}
+
 // Spec is a compiled, structurally validated game spec.
 type Spec struct {
 	Meta       Meta
@@ -48,6 +62,12 @@ type Spec struct {
 	EndIf      starlark.Callable
 	LegalMoves starlark.Callable
 	PlayerView starlark.Callable // optional; nil → identity
+
+	// Phases is the optional named phase table. When empty, the game has
+	// no phase machinery and only the top-level Moves applies. When set,
+	// exactly one phase must have Start: true; StartPhase holds its name.
+	Phases     map[string]Phase
+	StartPhase string
 
 	source string
 }
@@ -135,7 +155,110 @@ func LoadSpec(source string) (*Spec, error) {
 	if len(s.Moves) == 0 {
 		return nil, errors.New("MOVES must define at least one move")
 	}
+
+	if err := readPhases(globals, s); err != nil {
+		return nil, err
+	}
+
 	return s, nil
+}
+
+// readPhases parses the optional top-level PHASES dict. PHASES is a
+// map from phase name to a dict containing:
+//
+//	moves    — required; same shape as the top-level MOVES table
+//	end_if   — optional callable (state, ctx) returning a phase-name
+//	           string to transition, or None to stay in this phase
+//	start    — optional bool; exactly one phase must have start=True
+//
+// When PHASES is absent or empty, the game has no phase machinery and
+// the top-level Moves applies globally.
+func readPhases(globals starlark.StringDict, s *Spec) error {
+	raw, ok := globals["PHASES"]
+	if !ok {
+		return nil
+	}
+	d, ok := raw.(*starlark.Dict)
+	if !ok {
+		return fmt.Errorf("PHASES must be a dict, got %s", raw.Type())
+	}
+	if d.Len() == 0 {
+		return nil
+	}
+	s.Phases = map[string]Phase{}
+	for _, k := range d.Keys() {
+		ks, ok := k.(starlark.String)
+		if !ok {
+			return fmt.Errorf("PHASES key %v must be a string", k)
+		}
+		name := string(ks)
+		vAny, _, _ := d.Get(k)
+		ph, err := readPhase(name, vAny)
+		if err != nil {
+			return fmt.Errorf("PHASES[%q]: %w", name, err)
+		}
+		if ph.Start {
+			if s.StartPhase != "" {
+				return fmt.Errorf("PHASES: multiple phases marked start (%q and %q) — exactly one is allowed", s.StartPhase, name)
+			}
+			s.StartPhase = name
+		}
+		s.Phases[name] = ph
+	}
+	if s.StartPhase == "" {
+		return errors.New("PHASES: exactly one phase must set \"start\": True")
+	}
+	return nil
+}
+
+func readPhase(name string, v starlark.Value) (Phase, error) {
+	d, ok := v.(*starlark.Dict)
+	if !ok {
+		return Phase{}, fmt.Errorf("must be a dict")
+	}
+	ph := Phase{Name: name, Moves: map[string]Move{}}
+
+	movesAny, ok, _ := d.Get(starlark.String("moves"))
+	if !ok {
+		return Phase{}, errors.New("missing 'moves'")
+	}
+	movesDict, ok := movesAny.(*starlark.Dict)
+	if !ok {
+		return Phase{}, errors.New("'moves' must be a dict")
+	}
+	for _, mk := range movesDict.Keys() {
+		mks, ok := mk.(starlark.String)
+		if !ok {
+			return Phase{}, fmt.Errorf("move key %v must be a string", mk)
+		}
+		mvRaw, _, _ := movesDict.Get(mk)
+		mv, err := readMove(string(mks), mvRaw)
+		if err != nil {
+			return Phase{}, fmt.Errorf("moves[%q]: %w", string(mks), err)
+		}
+		ph.Moves[mv.Name] = mv
+	}
+	if len(ph.Moves) == 0 {
+		return Phase{}, errors.New("'moves' must define at least one move")
+	}
+
+	if v, ok, _ := d.Get(starlark.String("end_if")); ok {
+		c, ok := v.(starlark.Callable)
+		if !ok {
+			return Phase{}, errors.New("'end_if' must be callable")
+		}
+		ph.EndIf = c
+	}
+
+	if v, ok, _ := d.Get(starlark.String("start")); ok {
+		b, ok := v.(starlark.Bool)
+		if !ok {
+			return Phase{}, errors.New("'start' must be a bool")
+		}
+		ph.Start = bool(b)
+	}
+
+	return ph, nil
 }
 
 func readMeta(globals starlark.StringDict, into *Meta) error {
