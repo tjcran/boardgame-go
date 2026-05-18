@@ -1,0 +1,575 @@
+package tabletop_test
+
+import (
+	"testing"
+
+	"github.com/tjcran/boardgame-go/core"
+	"github.com/tjcran/boardgame-go/tabletop"
+)
+
+func TestPosIsComparable(t *testing.T) {
+	a := tabletop.Pos{X: 1, Y: 2}
+	b := tabletop.Pos{X: 1, Y: 2}
+	c := tabletop.Pos{X: 2, Y: 1}
+	if a != b {
+		t.Fatalf("equal positions should compare equal")
+	}
+	if a == c {
+		t.Fatalf("different positions should not compare equal")
+	}
+	// Map key safety — would not compile if Pos contained a slice/map.
+	m := map[tabletop.Pos]int{a: 1}
+	if m[b] != 1 {
+		t.Fatalf("Pos should be usable as map key")
+	}
+}
+
+// stubBoard is a 5-cell horizontal line: (0,0), (1,0), …, (4,0).
+type stubBoard struct{}
+
+func (stubBoard) InBounds(p tabletop.Pos) bool { return p.Y == 0 && p.X >= 0 && p.X <= 4 }
+func (stubBoard) Distance(a, b tabletop.Pos) int {
+	d := a.X - b.X
+	if d < 0 {
+		d = -d
+	}
+	return d
+}
+func (stubBoard) Neighbors(p tabletop.Pos) []tabletop.Pos {
+	var out []tabletop.Pos
+	for _, dx := range []int{-1, 1} {
+		n := tabletop.Pos{X: p.X + dx, Y: p.Y}
+		if (stubBoard{}).InBounds(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+func (stubBoard) Line(a, b tabletop.Pos) []tabletop.Pos {
+	if a.X > b.X {
+		a, b = b, a
+	}
+	out := make([]tabletop.Pos, 0, b.X-a.X+1)
+	for x := a.X; x <= b.X; x++ {
+		out = append(out, tabletop.Pos{X: x, Y: 0})
+	}
+	return out
+}
+
+func TestLineOfSightClearWithNoBlockers(t *testing.T) {
+	b := stubBoard{}
+	clear := tabletop.LineOfSight(b, tabletop.Pos{0, 0}, tabletop.Pos{4, 0}, func(p tabletop.Pos) bool {
+		return false
+	})
+	if !clear {
+		t.Fatalf("expected clear LOS with no blockers")
+	}
+}
+
+func TestLineOfSightBlockedByIntermediateCell(t *testing.T) {
+	b := stubBoard{}
+	clear := tabletop.LineOfSight(b, tabletop.Pos{0, 0}, tabletop.Pos{4, 0}, func(p tabletop.Pos) bool {
+		return p.X == 2
+	})
+	if clear {
+		t.Fatalf("expected blocked LOS when an intermediate cell blocks")
+	}
+}
+
+func TestLineOfSightIgnoresEndpoints(t *testing.T) {
+	b := stubBoard{}
+	// A blocker on the source or target itself does NOT block LOS — only
+	// intermediate cells matter (matches the standard tabletop rule:
+	// you can see and be seen from a cell you occupy).
+	clear := tabletop.LineOfSight(b, tabletop.Pos{0, 0}, tabletop.Pos{4, 0}, func(p tabletop.Pos) bool {
+		return p.X == 0 || p.X == 4
+	})
+	if !clear {
+		t.Fatalf("endpoints must not block their own LOS")
+	}
+}
+
+func TestSquareBoardInBounds(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 8)
+	cases := []struct {
+		p    tabletop.Pos
+		want bool
+	}{
+		{tabletop.Pos{0, 0}, true},
+		{tabletop.Pos{9, 7}, true},
+		{tabletop.Pos{10, 0}, false},
+		{tabletop.Pos{0, 8}, false},
+		{tabletop.Pos{-1, 0}, false},
+		{tabletop.Pos{0, -1}, false},
+	}
+	for _, c := range cases {
+		if got := b.InBounds(c.p); got != c.want {
+			t.Errorf("InBounds(%v) = %v, want %v", c.p, got, c.want)
+		}
+	}
+}
+
+func TestSquareBoardDistanceIsChebyshev(t *testing.T) {
+	b := tabletop.NewSquareBoard(20, 20)
+	// Chebyshev (king's move) distance: max(|dx|, |dy|). Diagonal moves
+	// cost the same as orthogonal — standard for square-grid wargames.
+	cases := []struct {
+		a, b tabletop.Pos
+		want int
+	}{
+		{tabletop.Pos{0, 0}, tabletop.Pos{3, 0}, 3},
+		{tabletop.Pos{0, 0}, tabletop.Pos{0, 5}, 5},
+		{tabletop.Pos{0, 0}, tabletop.Pos{3, 5}, 5}, // diagonal
+		{tabletop.Pos{2, 7}, tabletop.Pos{2, 7}, 0},
+		{tabletop.Pos{5, 5}, tabletop.Pos{2, 2}, 3},
+	}
+	for _, c := range cases {
+		if got := b.Distance(c.a, c.b); got != c.want {
+			t.Errorf("Distance(%v,%v) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+func TestSquareBoardNeighborsEightWay(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	got := b.Neighbors(tabletop.Pos{5, 5})
+	if len(got) != 8 {
+		t.Fatalf("expected 8 neighbors for interior cell, got %d: %v", len(got), got)
+	}
+	// Corner — only 3 in-bounds neighbors.
+	corner := b.Neighbors(tabletop.Pos{0, 0})
+	if len(corner) != 3 {
+		t.Fatalf("expected 3 neighbors at corner, got %d: %v", len(corner), corner)
+	}
+}
+
+func TestSquareBoardLineIncludesEndpoints(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	line := b.Line(tabletop.Pos{0, 0}, tabletop.Pos{3, 0})
+	want := []tabletop.Pos{{0, 0}, {1, 0}, {2, 0}, {3, 0}}
+	if len(line) != len(want) {
+		t.Fatalf("line length = %d, want %d: %v", len(line), len(want), line)
+	}
+	for i, p := range want {
+		if line[i] != p {
+			t.Errorf("line[%d] = %v, want %v", i, line[i], p)
+		}
+	}
+}
+
+func TestSquareBoardLineDiagonal(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	line := b.Line(tabletop.Pos{0, 0}, tabletop.Pos{3, 3})
+	// Bresenham on a pure diagonal: every cell is on the line.
+	want := []tabletop.Pos{{0, 0}, {1, 1}, {2, 2}, {3, 3}}
+	if len(line) != len(want) {
+		t.Fatalf("diagonal line length = %d, want %d: %v", len(line), len(want), line)
+	}
+	for i, p := range want {
+		if line[i] != p {
+			t.Errorf("diagonal line[%d] = %v, want %v", i, line[i], p)
+		}
+	}
+}
+
+func TestSquareBoardLineReverseSwapsEndpoints(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	// Line a→b and b→a should both start at the first arg and end at the
+	// second arg. We don't require the interior cells to be identical
+	// (Bresenham is not symmetric on near-diagonals) — but the endpoints
+	// MUST be where the caller said.
+	line := b.Line(tabletop.Pos{3, 0}, tabletop.Pos{0, 0})
+	if line[0] != (tabletop.Pos{3, 0}) || line[len(line)-1] != (tabletop.Pos{0, 0}) {
+		t.Fatalf("Line endpoints must match args: got %v", line)
+	}
+}
+
+func TestLineOfSightOnSquareBoardWithCoverBetween(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	cover := map[tabletop.Pos]bool{{X: 2, Y: 0}: true}
+	clear := tabletop.LineOfSight(b, tabletop.Pos{0, 0}, tabletop.Pos{4, 0}, func(p tabletop.Pos) bool {
+		return cover[p]
+	})
+	if clear {
+		t.Fatalf("expected blocked LOS through cover cell (2,0)")
+	}
+}
+
+func TestHexBoardInBoundsRectangularExtent(t *testing.T) {
+	// Rectangular extent in axial coords: 0 ≤ q < W, 0 ≤ r < H.
+	b := tabletop.NewHexBoard(6, 6)
+	if !b.InBounds(tabletop.Pos{0, 0}) {
+		t.Errorf("origin should be in bounds")
+	}
+	if !b.InBounds(tabletop.Pos{5, 5}) {
+		t.Errorf("(5,5) should be in bounds")
+	}
+	if b.InBounds(tabletop.Pos{6, 0}) {
+		t.Errorf("(6,0) should be out of bounds")
+	}
+	if b.InBounds(tabletop.Pos{-1, 0}) {
+		t.Errorf("(-1,0) should be out of bounds")
+	}
+}
+
+func TestHexBoardDistance(t *testing.T) {
+	b := tabletop.NewHexBoard(20, 20)
+	// Hex distance: (|dq| + |dr| + |dq+dr|) / 2
+	cases := []struct {
+		a, c tabletop.Pos
+		want int
+	}{
+		{tabletop.Pos{0, 0}, tabletop.Pos{0, 0}, 0},
+		{tabletop.Pos{0, 0}, tabletop.Pos{1, 0}, 1},
+		{tabletop.Pos{0, 0}, tabletop.Pos{0, 1}, 1},
+		{tabletop.Pos{0, 0}, tabletop.Pos{1, -1}, 1}, // out of bounds but distance is geometric
+		{tabletop.Pos{0, 0}, tabletop.Pos{3, 0}, 3},
+		{tabletop.Pos{0, 0}, tabletop.Pos{3, -2}, 3}, // diagonal hex move
+		{tabletop.Pos{2, 2}, tabletop.Pos{5, 1}, 3},
+	}
+	for _, c := range cases {
+		if got := b.Distance(c.a, c.c); got != c.want {
+			t.Errorf("Hex Distance(%v,%v) = %d, want %d", c.a, c.c, got, c.want)
+		}
+	}
+}
+
+func TestHexBoardNeighborsSixWay(t *testing.T) {
+	b := tabletop.NewHexBoard(10, 10)
+	got := b.Neighbors(tabletop.Pos{5, 5})
+	if len(got) != 6 {
+		t.Fatalf("expected 6 hex neighbors for interior cell, got %d: %v", len(got), got)
+	}
+	// Every neighbor must be at distance 1.
+	for _, n := range got {
+		if d := b.Distance(tabletop.Pos{5, 5}, n); d != 1 {
+			t.Errorf("neighbor %v is at distance %d, expected 1", n, d)
+		}
+	}
+}
+
+func TestHexBoardLineIncludesEndpoints(t *testing.T) {
+	b := tabletop.NewHexBoard(10, 10)
+	line := b.Line(tabletop.Pos{0, 0}, tabletop.Pos{3, 0})
+	if line[0] != (tabletop.Pos{0, 0}) || line[len(line)-1] != (tabletop.Pos{3, 0}) {
+		t.Fatalf("hex line endpoints mismatch: %v", line)
+	}
+	if len(line) != 4 {
+		t.Fatalf("hex line (0,0)→(3,0) should have 4 cells, got %d: %v", len(line), line)
+	}
+}
+
+func TestHexBoardLineLengthEqualsDistancePlusOne(t *testing.T) {
+	b := tabletop.NewHexBoard(20, 20)
+	cases := []struct{ a, c tabletop.Pos }{
+		{tabletop.Pos{0, 0}, tabletop.Pos{4, 2}},
+		{tabletop.Pos{1, 3}, tabletop.Pos{6, 1}},
+		{tabletop.Pos{2, 2}, tabletop.Pos{2, 2}},
+	}
+	for _, tc := range cases {
+		line := b.Line(tc.a, tc.c)
+		want := b.Distance(tc.a, tc.c) + 1
+		if len(line) != want {
+			t.Errorf("Line(%v,%v) len = %d, want %d (distance+1): %v", tc.a, tc.c, len(line), want, line)
+		}
+	}
+}
+
+func TestTerrainMapTagAndHasTag(t *testing.T) {
+	tm := tabletop.NewTerrainMap()
+	p := tabletop.Pos{3, 4}
+
+	if tm.HasTag(p, "cover") {
+		t.Fatalf("fresh terrain map should have no tags")
+	}
+	tm.Tag(p, "cover")
+	tm.Tag(p, "blocks_los")
+	if !tm.HasTag(p, "cover") {
+		t.Errorf("expected cover tag after Tag")
+	}
+	if !tm.HasTag(p, "blocks_los") {
+		t.Errorf("expected blocks_los tag after Tag")
+	}
+	if tm.HasTag(p, "missing") {
+		t.Errorf("HasTag should report false for un-set tag")
+	}
+}
+
+func TestTerrainMapUntag(t *testing.T) {
+	tm := tabletop.NewTerrainMap()
+	p := tabletop.Pos{1, 1}
+	tm.Tag(p, "cover")
+	tm.Untag(p, "cover")
+	if tm.HasTag(p, "cover") {
+		t.Fatalf("Untag should remove the tag")
+	}
+}
+
+func TestTerrainMapBlocksIsSugar(t *testing.T) {
+	tm := tabletop.NewTerrainMap()
+	p := tabletop.Pos{2, 2}
+	if tm.Blocks(p) {
+		t.Fatalf("fresh cell should not block")
+	}
+	tm.Tag(p, "blocks_los")
+	if !tm.Blocks(p) {
+		t.Fatalf("Blocks should be true once blocks_los tag is set")
+	}
+}
+
+func TestTerrainMapTagAtMultipleCells(t *testing.T) {
+	tm := tabletop.NewTerrainMap()
+	tm.Tag(tabletop.Pos{0, 0}, "cover")
+	tm.Tag(tabletop.Pos{1, 1}, "cover")
+	if !tm.HasTag(tabletop.Pos{0, 0}, "cover") || !tm.HasTag(tabletop.Pos{1, 1}, "cover") {
+		t.Fatalf("multiple cells should each carry their own tags")
+	}
+	if tm.HasTag(tabletop.Pos{2, 2}, "cover") {
+		t.Fatalf("untagged cell should not report tagged")
+	}
+}
+
+func TestLineOfSightWithTerrainMap(t *testing.T) {
+	b := tabletop.NewSquareBoard(10, 10)
+	terrain := tabletop.NewTerrainMap()
+	terrain.Tag(tabletop.Pos{2, 2}, tabletop.TerrainTagBlocksLOS)
+
+	clear := tabletop.LineOfSight(b, tabletop.Pos{0, 0}, tabletop.Pos{4, 4}, terrain.Blocks)
+	if clear {
+		t.Fatalf("expected (2,2) blocker to break diagonal LOS (0,0)→(4,4)")
+	}
+
+	// Move the blocker off the line.
+	terrain.Untag(tabletop.Pos{2, 2}, tabletop.TerrainTagBlocksLOS)
+	terrain.Tag(tabletop.Pos{9, 9}, tabletop.TerrainTagBlocksLOS)
+	clear = tabletop.LineOfSight(b, tabletop.Pos{0, 0}, tabletop.Pos{4, 4}, terrain.Blocks)
+	if !clear {
+		t.Fatalf("expected LOS clear when blocker is off the line")
+	}
+}
+
+func TestStatePlaceAndPositionOf(t *testing.T) {
+	s := tabletop.NewState()
+	s.Place(tabletop.UnitID(7), tabletop.Pos{3, 4})
+
+	got, ok := s.PositionOf(tabletop.UnitID(7))
+	if !ok {
+		t.Fatalf("PositionOf(7) returned !ok")
+	}
+	if got != (tabletop.Pos{3, 4}) {
+		t.Errorf("PositionOf(7) = %v, want (3,4)", got)
+	}
+}
+
+func TestStateMoveUpdatesPositionAndIndex(t *testing.T) {
+	s := tabletop.NewState()
+	id := tabletop.UnitID(7)
+	s.Place(id, tabletop.Pos{1, 1})
+	s.Move(id, tabletop.Pos{5, 5})
+
+	if got, _ := s.PositionOf(id); got != (tabletop.Pos{5, 5}) {
+		t.Errorf("after Move, PositionOf = %v, want (5,5)", got)
+	}
+	if at := s.EntitiesAt(tabletop.Pos{1, 1}); len(at) != 0 {
+		t.Errorf("old cell should be empty after Move, got %v", at)
+	}
+	at := s.EntitiesAt(tabletop.Pos{5, 5})
+	if len(at) != 1 || at[0] != id {
+		t.Errorf("EntitiesAt(5,5) = %v, want [7]", at)
+	}
+}
+
+func TestStateRemoveDropsPositionAndIndex(t *testing.T) {
+	s := tabletop.NewState()
+	s.Place(tabletop.UnitID(7), tabletop.Pos{2, 2})
+	s.Remove(tabletop.UnitID(7))
+	if _, ok := s.PositionOf(tabletop.UnitID(7)); ok {
+		t.Errorf("PositionOf after Remove should report !ok")
+	}
+	if at := s.EntitiesAt(tabletop.Pos{2, 2}); len(at) != 0 {
+		t.Errorf("cell should be empty after Remove, got %v", at)
+	}
+}
+
+func TestStateEntitiesAtMultipleStacked(t *testing.T) {
+	s := tabletop.NewState()
+	s.Place(tabletop.UnitID(1), tabletop.Pos{0, 0})
+	s.Place(tabletop.UnitID(2), tabletop.Pos{0, 0})
+	s.Place(tabletop.UnitID(3), tabletop.Pos{0, 0})
+	at := s.EntitiesAt(tabletop.Pos{0, 0})
+	if len(at) != 3 {
+		t.Fatalf("expected 3 units stacked, got %d: %v", len(at), at)
+	}
+	// Order must be deterministic (ascending UnitID) for replay safety.
+	if at[0] != 1 || at[1] != 2 || at[2] != 3 {
+		t.Errorf("EntitiesAt order = %v, want [1 2 3]", at)
+	}
+}
+
+func TestStateWithinReturnsUnitsWithinRadius(t *testing.T) {
+	s := tabletop.NewState()
+	b := tabletop.NewSquareBoard(20, 20)
+	s.Place(tabletop.UnitID(1), tabletop.Pos{5, 5})
+	s.Place(tabletop.UnitID(2), tabletop.Pos{6, 5}) // distance 1
+	s.Place(tabletop.UnitID(3), tabletop.Pos{8, 8}) // distance 3
+	s.Place(tabletop.UnitID(4), tabletop.Pos{0, 0}) // distance 5
+
+	got := s.Within(b, tabletop.Pos{5, 5}, 2)
+	// Should include 1 (self, distance 0), 2 (1), exclude 3 (3) and 4 (5).
+	if len(got) != 2 {
+		t.Fatalf("Within radius 2 = %v, want 2 results", got)
+	}
+	if got[0] != 1 || got[1] != 2 {
+		t.Errorf("Within = %v, want [1 2] in ascending order", got)
+	}
+}
+
+func TestStatePlaceTwiceIsAMove(t *testing.T) {
+	s := tabletop.NewState()
+	id := tabletop.UnitID(7)
+	s.Place(id, tabletop.Pos{1, 1})
+	s.Place(id, tabletop.Pos{2, 2})
+
+	if got, _ := s.PositionOf(id); got != (tabletop.Pos{2, 2}) {
+		t.Errorf("re-Place should move: got %v", got)
+	}
+	if len(s.EntitiesAt(tabletop.Pos{1, 1})) != 0 {
+		t.Errorf("old cell should be empty after re-Place")
+	}
+}
+
+func TestStatePlaceOnZeroValueStateDoesNotDuplicate(t *testing.T) {
+	// Bug regression: a zero-value State (or one whose byCell is nil
+	// post JSON unmarshal) must not produce a duplicate entry in the
+	// reverse index when Place is called for the first time.
+	var s tabletop.State
+	s.Place(tabletop.UnitID(7), tabletop.Pos{1, 1})
+
+	at := s.EntitiesAt(tabletop.Pos{1, 1})
+	if len(at) != 1 || at[0] != 7 {
+		t.Fatalf("EntitiesAt on zero-value State should return [7], got %v", at)
+	}
+	if got, _ := s.PositionOf(tabletop.UnitID(7)); got != (tabletop.Pos{1, 1}) {
+		t.Errorf("PositionOf = %v, want (1,1)", got)
+	}
+}
+
+// rng builds a *core.Random from a known seed so tests are deterministic.
+func rng(seed uint64) *core.Random {
+	s := seed
+	return core.NewRandomFromState(&s)
+}
+
+func TestPoolRollReturnsExpectedLengthAndRange(t *testing.T) {
+	p := tabletop.Pool{Dice: 10, Sides: 6}
+	rolls := p.Roll(rng(1))
+	if len(rolls) != 10 {
+		t.Fatalf("expected 10 dice, got %d", len(rolls))
+	}
+	for _, r := range rolls {
+		if r < 1 || r > 6 {
+			t.Errorf("d6 roll out of range: %d", r)
+		}
+	}
+}
+
+func TestPoolRollIsDeterministicGivenSeed(t *testing.T) {
+	p := tabletop.Pool{Dice: 20, Sides: 6}
+	a := p.Roll(rng(42))
+	b := p.Roll(rng(42))
+	if len(a) != len(b) {
+		t.Fatalf("seeded rolls differ in length: %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("seeded rolls diverge at i=%d: %d vs %d", i, a[i], b[i])
+		}
+	}
+}
+
+func TestSuccessesCountsRollsAtOrAboveTarget(t *testing.T) {
+	rolls := []int{1, 3, 4, 5, 6, 6, 2}
+	if got := tabletop.Successes(rolls, 4); got != 4 { // 4,5,6,6
+		t.Errorf("Successes(>=4) = %d, want 4", got)
+	}
+	if got := tabletop.Successes(rolls, 7); got != 0 {
+		t.Errorf("Successes(>=7) = %d, want 0", got)
+	}
+}
+
+func TestRerollBelowReplacesMatchingDice(t *testing.T) {
+	original := []int{6, 6, 1, 1, 6}
+	r := rng(99)
+	got := tabletop.RerollBelow(original, 2, r)
+	// Non-matching dice should be unchanged.
+	if got[0] != 6 || got[1] != 6 || got[4] != 6 {
+		t.Errorf("non-matching dice should be unchanged, got %v", got)
+	}
+	// Rerolled positions should be in [1,6].
+	for _, v := range got {
+		if v < 1 || v > 6 {
+			t.Errorf("rerolled die out of range: %d", v)
+		}
+	}
+	// Reroll should NOT mutate the caller's slice.
+	if original[2] != 1 || original[3] != 1 {
+		t.Errorf("RerollBelow should not mutate input, got %v", original)
+	}
+}
+
+func TestResolveChainReducesPoolHitToWoundToUnsaved(t *testing.T) {
+	// With a deterministic seed, the exact counts are reproducible. We
+	// assert the SHAPE (hits ≤ attacks, wounds ≤ hits, unsaved ≤ wounds)
+	// and that determinism holds, rather than pinning specific numbers
+	// that the RNG implementation could legitimately change.
+	r := tabletop.Resolve{Attacks: 20, HitOn: 4, WoundOn: 4, SaveOn: 4}
+	a := r.Run(rng(1234))
+	b := r.Run(rng(1234))
+
+	if a.Hits != b.Hits || a.Wounds != b.Wounds || a.Unsaved != b.Unsaved {
+		t.Fatalf("Resolve should be deterministic given a seed: %+v vs %+v", a, b)
+	}
+	if a.Hits > 20 || a.Hits < 0 {
+		t.Errorf("hits out of range: %d", a.Hits)
+	}
+	if a.Wounds > a.Hits || a.Wounds < 0 {
+		t.Errorf("wounds must be ≤ hits: hits=%d wounds=%d", a.Hits, a.Wounds)
+	}
+	if a.Unsaved > a.Wounds || a.Unsaved < 0 {
+		t.Errorf("unsaved must be ≤ wounds: wounds=%d unsaved=%d", a.Wounds, a.Unsaved)
+	}
+}
+
+func TestResolveAlwaysHitsWhenHitOnIsOne(t *testing.T) {
+	r := tabletop.Resolve{Attacks: 30, HitOn: 1, WoundOn: 7, SaveOn: 7}
+	// HitOn=1 → every d6 hits. WoundOn=7 → no wound rolls succeed
+	// (d6 maxes at 6). SaveOn=7 → no saves succeed. So we expect
+	// Hits=30, Wounds=0, Unsaved=0.
+	got := r.Run(rng(1))
+	if got.Hits != 30 {
+		t.Errorf("HitOn=1 should hit every attack, got %d/30", got.Hits)
+	}
+	if got.Wounds != 0 {
+		t.Errorf("WoundOn=7 should yield zero wounds, got %d", got.Wounds)
+	}
+	if got.Unsaved != 0 {
+		t.Errorf("Unsaved should be zero when wounds=0, got %d", got.Unsaved)
+	}
+}
+
+func TestResolveAlwaysWoundsWhenSaveOnIsSeven(t *testing.T) {
+	r := tabletop.Resolve{Attacks: 10, HitOn: 1, WoundOn: 1, SaveOn: 7}
+	got := r.Run(rng(7))
+	// Everything hits, everything wounds, nothing saves → 10 unsaved.
+	if got.Unsaved != 10 {
+		t.Errorf("expected 10 unsaved with HitOn=WoundOn=1 and SaveOn=7, got %d", got.Unsaved)
+	}
+}
+
+func TestResolveZeroAttacksProducesZero(t *testing.T) {
+	r := tabletop.Resolve{Attacks: 0, HitOn: 4, WoundOn: 4, SaveOn: 4}
+	got := r.Run(rng(1))
+	if got != (tabletop.ResolveResult{}) {
+		t.Errorf("zero attacks should yield zero result, got %+v", got)
+	}
+}
