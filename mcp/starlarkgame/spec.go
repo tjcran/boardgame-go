@@ -22,6 +22,14 @@ type Move struct {
 	Name    string
 	ArgsDef []ArgDef
 	Apply   starlark.Callable
+
+	// EndsTurn controls whether the engine hands turn control to the
+	// next player after this move runs successfully. Defaults to true —
+	// matches the v0.4-v0.5.3 behaviour where every move ended the
+	// turn. Setting "ends_turn": False in MOVES lets the same player
+	// keep going (roll-then-build, draw-then-play, …) until they play
+	// a move that's marked terminal.
+	EndsTurn bool
 }
 
 // ArgDef is a single positional argument declaration.
@@ -199,7 +207,14 @@ func readMove(name string, v starlark.Value) (Move, error) {
 		return Move{}, errors.New("'apply' must be callable")
 	}
 
-	m := Move{Name: name, Apply: apply}
+	m := Move{Name: name, Apply: apply, EndsTurn: true}
+	if v, ok, _ := d.Get(starlark.String("ends_turn")); ok {
+		b, ok := v.(starlark.Bool)
+		if !ok {
+			return Move{}, fmt.Errorf("'ends_turn' must be a bool, got %s", v.Type())
+		}
+		m.EndsTurn = bool(b)
+	}
 	if argsAny, ok, _ := d.Get(starlark.String("args")); ok {
 		argsList, ok := argsAny.(*starlark.List)
 		if !ok {
