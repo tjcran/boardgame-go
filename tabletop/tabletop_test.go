@@ -3,6 +3,7 @@ package tabletop_test
 import (
 	"testing"
 
+	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/tabletop"
 )
 
@@ -450,5 +451,68 @@ func TestStatePlaceOnZeroValueStateDoesNotDuplicate(t *testing.T) {
 	}
 	if got, _ := s.PositionOf(tabletop.UnitID(7)); got != (tabletop.Pos{1, 1}) {
 		t.Errorf("PositionOf = %v, want (1,1)", got)
+	}
+}
+
+// rng builds a *core.Random from a known seed so tests are deterministic.
+func rng(seed uint64) *core.Random {
+	s := seed
+	return core.NewRandomFromState(&s)
+}
+
+func TestPoolRollReturnsExpectedLengthAndRange(t *testing.T) {
+	p := tabletop.Pool{Dice: 10, Sides: 6}
+	rolls := p.Roll(rng(1))
+	if len(rolls) != 10 {
+		t.Fatalf("expected 10 dice, got %d", len(rolls))
+	}
+	for _, r := range rolls {
+		if r < 1 || r > 6 {
+			t.Errorf("d6 roll out of range: %d", r)
+		}
+	}
+}
+
+func TestPoolRollIsDeterministicGivenSeed(t *testing.T) {
+	p := tabletop.Pool{Dice: 20, Sides: 6}
+	a := p.Roll(rng(42))
+	b := p.Roll(rng(42))
+	if len(a) != len(b) {
+		t.Fatalf("seeded rolls differ in length: %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("seeded rolls diverge at i=%d: %d vs %d", i, a[i], b[i])
+		}
+	}
+}
+
+func TestSuccessesCountsRollsAtOrAboveTarget(t *testing.T) {
+	rolls := []int{1, 3, 4, 5, 6, 6, 2}
+	if got := tabletop.Successes(rolls, 4); got != 4 { // 4,5,6,6
+		t.Errorf("Successes(>=4) = %d, want 4", got)
+	}
+	if got := tabletop.Successes(rolls, 7); got != 0 {
+		t.Errorf("Successes(>=7) = %d, want 0", got)
+	}
+}
+
+func TestRerollBelowReplacesMatchingDice(t *testing.T) {
+	original := []int{6, 6, 1, 1, 6}
+	r := rng(99)
+	got := tabletop.RerollBelow(original, 2, r)
+	// Non-matching dice should be unchanged.
+	if got[0] != 6 || got[1] != 6 || got[4] != 6 {
+		t.Errorf("non-matching dice should be unchanged, got %v", got)
+	}
+	// Rerolled positions should be in [1,6].
+	for _, v := range got {
+		if v < 1 || v > 6 {
+			t.Errorf("rerolled die out of range: %d", v)
+		}
+	}
+	// Reroll should NOT mutate the caller's slice.
+	if original[2] != 1 || original[3] != 1 {
+		t.Errorf("RerollBelow should not mutate input, got %v", original)
 	}
 }
