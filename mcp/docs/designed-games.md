@@ -13,10 +13,15 @@ The boardgame-mcp server lets Claude help you design and play your own board gam
 ## Where games live
 
 - Built-ins (tic-tac-toe, love-letter) come from the server binary.
-- **Stdio mode (default):** each designed game lives as an on-disk skill at `$HOME/.claude/skills/games/<game-name>/`, containing a human-readable `SKILL.md` (frontmatter + your `llm_guide` markdown) and a `spec.star` (the Starlark spec the server runs). Override the root with `--skills-dir=PATH`; pass `--skills-dir=""` to keep games in memory only (ephemeral).
-- **Hosted mode (`--database-url` set):** designed games go to the `user_games` Postgres table, scoped to the registering user.
+- **Stdio mode (default):** each designed game lives as an on-disk skill at `$HOME/.claude/skills/games/<game-name>/`:
+  - `SKILL.md` — auto-generated rich rendering (frontmatter + auto-rendered moves table + the designer's notes + strategy placeholder). Regenerated on every `register_game`; hand-edits to it are overwritten on the next save.
+  - `spec.star` — canonical Starlark spec source.
+  - `guide.md` — canonical `llm_guide` content (only present if the designer authored one).
+  
+  Hand-edit `spec.star` or `guide.md` between sessions; the SKILL.md is the auto-generated view. Override the root with `--skills-dir=PATH`; pass `--skills-dir=""` to keep games in memory only (ephemeral).
+- **Hosted mode (`--database-url` set):** designed games go to the `user_games` Postgres table, scoped to the registering user. Use `export_game` to retrieve the skill-shaped artefact.
 
-You can browse, hand-edit, copy between machines, or back up your designed games like any other files. The server scans the skills directory on startup and registers every game it finds.
+The server scans the skills directory on startup and registers every game it finds. v0.4–v0.5.1 stored a "skinny" SKILL.md (no auto-rendered moves table, llm_guide embedded as the body); those files still load (back-compat path extracts the llm_guide from the body), but the next `register_game` migrates them to the new three-file layout.
 
 ## Deleting a game
 

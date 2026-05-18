@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tjcran/boardgame-go/mcp/starlarkgame"
 )
 
 // SkillsDirUserGames stores designed-game specs as on-disk Claude skills,
@@ -19,12 +21,17 @@ import (
 //
 // Layout (under the configured root):
 //
-//	<root>/<game-name>/SKILL.md   — YAML frontmatter + markdown llm_guide
-//	<root>/<game-name>/spec.star  — Starlark spec source
+//	<root>/<game-name>/SKILL.md   — auto-generated rich rendering
+//	                                (frontmatter + moves table + sections).
+//	                                Regenerated on every Put; hand-edits
+//	                                to it are lost on the next save.
+//	<root>/<game-name>/spec.star  — canonical Starlark spec source.
+//	<root>/<game-name>/guide.md   — canonical llm_guide content
+//	                                (omitted if the designer didn't write one).
 //
-// Both files must be present for the directory to be recognized as a
-// designed game; other subdirectories in the root (user-authored skills,
-// junk) are ignored.
+// SKILL.md and spec.star are required for a directory to be recognised
+// as a designed game; guide.md is optional. Other subdirectories in the
+// root (user-authored skills, junk) are ignored.
 //
 // This implementation is single-user. Owner is stored in SKILL.md
 // frontmatter; cross-user isolation is by filter-on-read rather than
@@ -53,9 +60,12 @@ func (s *SkillsDirUserGames) gameDir(name string) string {
 	return filepath.Join(s.root, name)
 }
 
-// Put writes the game to <root>/<name>/{SKILL.md,spec.star}. Replaces an
-// existing entry by overwriting both files; created_at is preserved
-// (read-modify-write) if the SKILL.md already exists.
+// Put writes the game to <root>/<name>/{SKILL.md,spec.star[,guide.md]}.
+// SKILL.md is the rich auto-rendering (same shape export_game emits);
+// spec.star is the canonical source; guide.md is the llm_guide body if
+// non-empty (otherwise removed so a no-longer-relevant guide doesn't
+// linger from a prior Put). created_at is preserved across Puts when
+// the caller passes a zero time.
 func (s *SkillsDirUserGames) Put(_ context.Context, ug UserGame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -75,11 +85,39 @@ func (s *SkillsDirUserGames) Put(_ context.Context, ug UserGame) error {
 		}
 	}
 
-	skillMD := buildSkillMarkdown(ug.UserID, ug.Name, created, ug.LLMGuide)
-	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
+	// Parse the spec so we can render the rich SKILL.md. The source has
+	// already been validated by RegisterUserGame, so this should never
+	// fail in practice — but if it does, we surface the parse error
+	// rather than write a junk file.
+	spec, err := starlarkgame.LoadSpec(ug.Source)
+	if err != nil {
+		return fmt.Errorf("skills dir: render SKILL.md: %w", err)
+	}
+	skeleton := starlarkgame.BuildSkillSkeleton(spec, ug.LLMGuide, ug.UserID, created)
+
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(skeleton.RenderMarkdown()), 0o644); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "spec.star"), []byte(ug.Source), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "spec.star"), []byte(ug.Source), 0o644); err != nil {
+		return err
+	}
+
+	guidePath := filepath.Join(dir, "guide.md")
+	if ug.LLMGuide != "" {
+		body := ug.LLMGuide
+		if !strings.HasSuffix(body, "\n") {
+			body += "\n"
+		}
+		if err := os.WriteFile(guidePath, []byte(body), 0o644); err != nil {
+			return err
+		}
+	} else {
+		// Empty llm_guide on this Put — clear any prior guide.md so reads
+		// don't return stale content from before the author dropped their
+		// notes.
+		_ = os.Remove(guidePath)
+	}
+	return nil
 }
 
 func (s *SkillsDirUserGames) Get(_ context.Context, userID, name string) (*UserGame, error) {
@@ -138,8 +176,14 @@ func (s *SkillsDirUserGames) Delete(_ context.Context, userID, name string) erro
 	return os.RemoveAll(s.gameDir(name))
 }
 
-// readGame reads <root>/<name>/{SKILL.md,spec.star}. Returns os.ErrNotExist
-// if either file is missing.
+// readGame reads <root>/<name>/{SKILL.md,spec.star} plus the optional
+// guide.md. Returns os.ErrNotExist if SKILL.md or spec.star is missing.
+//
+// For back-compat with the v0.4–v0.5.1 skinny format (where llm_guide
+// was embedded as the SKILL.md body), if guide.md is absent and the
+// SKILL.md body doesn't start with a "# " heading the body is treated
+// as the legacy llm_guide. The next Put migrates the layout to the
+// three-file shape.
 func (s *SkillsDirUserGames) readGame(name string) (*UserGame, error) {
 	dir := s.gameDir(name)
 	skill, err := readSkillFile(filepath.Join(dir, "SKILL.md"))
@@ -150,11 +194,24 @@ func (s *SkillsDirUserGames) readGame(name string) (*UserGame, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	var llmGuide string
+	if g, err := os.ReadFile(filepath.Join(dir, "guide.md")); err == nil {
+		llmGuide = strings.TrimRight(string(g), "\n")
+	} else if !strings.HasPrefix(strings.TrimLeft(skill.Body, "\n"), "# ") {
+		// Legacy skinny SKILL.md — body IS the llm_guide.
+		body := strings.TrimRight(skill.Body, "\n")
+		// Drop the placeholder line written when llm_guide was empty.
+		if body != "(No strategy notes were authored for this game.)" {
+			llmGuide = body
+		}
+	}
+
 	return &UserGame{
 		UserID:    skill.Owner,
 		Name:      skill.Name,
 		Source:    string(src),
-		LLMGuide:  skill.Body,
+		LLMGuide:  llmGuide,
 		CreatedAt: skill.CreatedAt,
 	}, nil
 }
@@ -244,23 +301,3 @@ func readSkillFile(path string) (*skillFile, error) {
 	return out, nil
 }
 
-// buildSkillMarkdown renders a SKILL.md with the standard frontmatter
-// shape this store reads. The body is the llm_guide (may be empty).
-func buildSkillMarkdown(owner, name string, createdAt time.Time, llmGuide string) string {
-	var b strings.Builder
-	b.WriteString("---\n")
-	b.WriteString("name: " + name + "\n")
-	b.WriteString("owner: " + owner + "\n")
-	b.WriteString("created_at: " + createdAt.UTC().Format(time.RFC3339) + "\n")
-	b.WriteString("---\n\n")
-	if llmGuide == "" {
-		// Placeholder so the file is legible as a skill even without a guide.
-		b.WriteString("(No strategy notes were authored for this game.)\n")
-	} else {
-		b.WriteString(llmGuide)
-		if !strings.HasSuffix(llmGuide, "\n") {
-			b.WriteString("\n")
-		}
-	}
-	return b.String()
-}
