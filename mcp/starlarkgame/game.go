@@ -19,12 +19,14 @@ func BuildCoreGame(s *Spec) *core.Game {
 		Name:       s.Meta.Name,
 		MinPlayers: s.Meta.MinPlayers,
 		MaxPlayers: s.Meta.MaxPlayers,
-		// Starlark games are turn-based: each move ends the current
-		// player's turn and hands control to the next player. MaxMoves:1
-		// triggers the engine's auto-endTurn logic after a single move so
-		// round-robin turn rotation works without games needing to call
-		// events.EndTurn() explicitly.
-		Turn: &core.TurnConfig{MaxMoves: 1},
+		// Designed games end the turn per-move via Move.EndsTurn (default
+		// true): the MoveFn closure below enqueues an EndTurn event when
+		// the move that just ran is marked terminal. This lets specs opt
+		// into multi-action turns (roll-then-build, draw-then-play) by
+		// marking the non-terminal moves "ends_turn": False in MOVES.
+		// We deliberately do NOT set MaxMoves here — that would force
+		// the engine to auto-end after every move regardless of the
+		// per-move flag.
 	}
 
 	g.Setup = func(ctx core.Ctx, _ any) core.G {
@@ -91,7 +93,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 	moves := make(map[string]any, len(s.Moves))
 	for name, mv := range s.Moves {
 		name := name
-		_ = mv // captured in name; apply is dispatched via CallMove
+		endsTurn := mv.EndsTurn
 		moves[name] = core.MoveFn(func(mc *core.MoveContext, args ...any) (core.G, error) {
 			bc := &BridgeCtx{
 				NumPlayers: mc.Ctx.NumPlayers,
@@ -105,6 +107,9 @@ func BuildCoreGame(s *Spec) *core.Game {
 			newState, err := s.CallMove(context.Background(), bc, name, state, args)
 			if err != nil {
 				return nil, err
+			}
+			if endsTurn && mc.Events != nil {
+				mc.Events.EndTurn()
 			}
 			return newState, nil
 		})

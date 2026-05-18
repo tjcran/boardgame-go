@@ -8,7 +8,7 @@ A spec is one Starlark module with these required top-level names. Keep this sec
 |------|------|---------|
 | `META` | dict | `{"name": "...", "min_players": N, "max_players": M, "description": "..."}`. `name` matches `^[a-z0-9-]{1,40}$`. |
 | `setup(ctx)` | function | Returns the initial state as a dict. |
-| `MOVES` | dict | `{"move_name": {"args": [{"name":"x","type":"int","min":0,"max":N}], "apply": fn}}`. `apply(state, ctx, *args)` MUST `return` the new state dict — input `state` is frozen, so mutations raise. Use `fail("...")` to reject a move. |
+| `MOVES` | dict | `{"move_name": {"args": [{"name":"x","type":"int","min":0,"max":N}], "apply": fn, "ends_turn": True}}`. `apply(state, ctx, *args)` MUST `return` the new state dict — input `state` is frozen, so mutations raise. Use `fail("...")` to reject a move. `"ends_turn": False` keeps the same player active (multi-action turns, e.g. Catan's roll-then-build); defaults to `True`. |
 | `end_if(state, ctx)` | function | Returns `{"winner": "0"}` / `{"draw": True}` / `None`. |
 | `legal_moves(state, ctx)` | function | Returns list of `{"move": ..., "args": [...]}` — same shape the server returns. |
 | `player_view(state, player_id)` | function (optional) | Redact hidden info for one player. Default: identity. |
@@ -16,11 +16,11 @@ A spec is one Starlark module with these required top-level names. Keep this sec
 `ctx` exposes `ctx.player_id`, `ctx.num_players`, `ctx.random.range(n)` / `.shuffle(list)` / `.choice(list)` (seeded), `ctx.log(msg)`. No time, no I/O, no filesystem, no network. All five functions are pure: copy lists/dicts before changing them — `new_cells = list(state["cells"]); new_cells[i] = X` then return `{"cells": new_cells, ...}`.
 
 **Current engine limits** (matter for known games):
-- Every successful `apply` ends the player's turn. Multi-action turns (Catan-style roll-then-build, MTG-style stack interactions) aren't supported yet.
-- No phases or stages (a setup phase distinct from a play phase isn't supported yet either — model "setup" as the initial `setup(ctx)` result).
+- Multi-action turns are supported via the per-move `"ends_turn": False` flag (default `True`). Catan's roll-then-build, MTG-style draw-then-play, and similar patterns work — mark the non-terminal moves `False` and the terminal "end turn" move (or whatever closes the turn) `True`.
+- No phases or stages yet (a distinct setup phase, "discard to N" gates, or a trick-taker's bid/play split aren't expressible). For games that need them, model "setup" as the initial `setup(ctx)` result and offer a reduction.
 - Args are positional primitives (int / string / bool). No nested dicts in args.
 
-If the user named a game that needs multi-action turns, phases, or stages (Settlers of Catan, Magic, Stratego's place-then-play, trick-takers with bid-then-play), tell them upfront which feature is needed and that it's coming in a near-term release, then offer to implement a v1 *without* that feature if there's a sensible reduction (e.g., "I can do Catan's build phase but skip the trade step for now"). Don't silently downgrade.
+If the user named a game that needs phases or stages (Stratego's place-then-play, trick-takers with bid-then-play, Magic's stack interactions), tell them upfront which feature is needed and that it's coming in a near-term release, then offer to implement a v1 *without* that feature if there's a sensible reduction (e.g., "I can do trick-taking but skip the bidding round for now"). Don't silently downgrade.
 
 # Your workflow
 

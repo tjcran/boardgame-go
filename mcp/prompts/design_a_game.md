@@ -8,7 +8,7 @@ A **Starlark module** that the server will validate, store, and run as a real ga
 |------|------|---------|
 | `META` | dict | `{"name": "...", "min_players": N, "max_players": M, "description": "..."}`. `name` matches `^[a-z0-9-]{1,40}$`. |
 | `setup(ctx)` | function | Returns initial state as a dict. |
-| `MOVES` | dict | `{"move_name": {"args": [{"name":"x","type":"int","min":0,"max":8}], "apply": fn}}`. `apply(state, ctx, *args)` MUST `return` the new state dict — input `state` is frozen, so mutations raise. Use `fail("...")` to reject a move. |
+| `MOVES` | dict | `{"move_name": {"args": [{"name":"x","type":"int","min":0,"max":8}], "apply": fn, "ends_turn": True}}`. `apply(state, ctx, *args)` MUST `return` the new state dict — input `state` is frozen, so mutations raise. Use `fail("...")` to reject a move. Set `"ends_turn": False` on a move that should NOT pass control to the next player (multi-action turns, e.g. roll-then-build). Default `True`. |
 | `end_if(state, ctx)` | function | Returns `{"winner": "0"}` / `{"draw": True}` / `None`. |
 | `legal_moves(state, ctx)` | function | Returns list of `{"move": ..., "args": [...]}` — same shape the server returns to clients. (`"name"` is also accepted for back-compat.) |
 | `player_view(state, player_id)` | function (optional) | Redact hidden info for one player. Default: identity. |
@@ -24,7 +24,7 @@ There is no time, no I/O, no filesystem, no network. Determinism is enforced.
 
 # Rules for the spec
 
-- Every successful `apply` ends the player's turn. Multi-action turns are not supported in v1.
+- Every successful `apply` ends the player's turn **unless** the move declares `"ends_turn": False`. The same player keeps going until one of their moves is terminal (or `end_if` fires). Use this for roll-then-act, draw-then-play, build-out-then-end-turn patterns.
 - All five functions are pure: `setup`, `apply`, `end_if`, `legal_moves`, `player_view` each take frozen state (when they receive one) and return a value. `apply` returns the new state dict; the other four return their own shapes. Never mutate inputs — copy lists/dicts before changing them (e.g. `new_cells = list(state["cells"])`).
 - Move args are positional, primitive (int / string / bool). Declare them in `args` so the engine can render argument pickers.
 - `legal_moves` must enumerate every legal `(name, args)` for the current player from the current state. The engine cannot enumerate for you; if the action space is huge, design a smaller move space (e.g., split one mega-move into two micro-moves).
