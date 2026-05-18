@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/match"
@@ -456,6 +457,92 @@ func (t *Tools) DeleteGame(ctx context.Context, args DeleteGameArgs) (DeleteGame
 		return DeleteGameResult{}, err
 	}
 	return DeleteGameResult{Deleted: true}, nil
+}
+
+// ExportGameArgs / ExportGameResult / ExportGameMove are the wire types
+// for export_game. The result is structured (no archive packaging) so
+// callers can compose whatever distribution format they want — write
+// the SKILL.md and spec.star to a directory, tar it, post it, etc.
+type ExportGameArgs struct {
+	Name string `json:"name"`
+}
+
+type ExportGameMove struct {
+	Name string                  `json:"name"`
+	Args []starlarkgame.ArgDef   `json:"args,omitempty"`
+}
+
+type ExportGameManifest struct {
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	Owner       string           `json:"owner,omitempty"`
+	MinPlayers  int              `json:"min_players"`
+	MaxPlayers  int              `json:"max_players"`
+	CreatedAt   string           `json:"created_at,omitempty"`
+	Moves       []ExportGameMove `json:"moves"`
+}
+
+type ExportGameResult struct {
+	Name     string             `json:"name"`
+	SkillMD  string             `json:"skill_md"`
+	SpecStar string             `json:"spec_star"`
+	Manifest ExportGameManifest `json:"manifest"`
+}
+
+// ExportGame returns a skill-shaped package for a designed game owned
+// by the caller. The SKILL.md is a skeleton — frontmatter, an auto-
+// rendered moves table, the designer's llm_guide — meant as a starting
+// point for the game's per-game Claude skill. Strategy prose, UI notes,
+// and AI heuristics are the author's job to add.
+//
+// Built-ins can't be exported (no spec source to round-trip). Cross-
+// owner exports are refused at the registry level.
+func (t *Tools) ExportGame(ctx context.Context, args ExportGameArgs) (ExportGameResult, error) {
+	if t.Registry == nil {
+		return ExportGameResult{}, fmt.Errorf("registry not configured")
+	}
+	if args.Name == "" {
+		return ExportGameResult{}, fmt.Errorf("export_game: name is required")
+	}
+	userID := UserIDFromContext(ctx)
+
+	ug, err := t.Registry.UserGame(ctx, userID, args.Name)
+	if err != nil {
+		return ExportGameResult{}, err
+	}
+	if ug == nil {
+		return ExportGameResult{}, fmt.Errorf("export_game: %q is not a game you own (built-ins can't be exported)", args.Name)
+	}
+
+	spec, err := starlarkgame.LoadSpec(ug.Source)
+	if err != nil {
+		return ExportGameResult{}, fmt.Errorf("export_game: stored spec failed to parse: %w", err)
+	}
+
+	skeleton := starlarkgame.BuildSkillSkeleton(spec, ug.LLMGuide, ug.UserID, ug.CreatedAt)
+
+	moves := make([]ExportGameMove, 0, len(skeleton.Moves))
+	for _, m := range skeleton.Moves {
+		moves = append(moves, ExportGameMove{Name: m.Name, Args: m.Args})
+	}
+	manifest := ExportGameManifest{
+		Name:        skeleton.Name,
+		Description: skeleton.Description,
+		Owner:       skeleton.Owner,
+		MinPlayers:  skeleton.MinPlayers,
+		MaxPlayers:  skeleton.MaxPlayers,
+		Moves:       moves,
+	}
+	if !skeleton.CreatedAt.IsZero() {
+		manifest.CreatedAt = skeleton.CreatedAt.UTC().Format(time.RFC3339)
+	}
+
+	return ExportGameResult{
+		Name:     skeleton.Name,
+		SkillMD:  skeleton.RenderMarkdown(),
+		SpecStar: ug.Source,
+		Manifest: manifest,
+	}, nil
 }
 
 // deepCopyMap shallow-copies the top level; nested values are shared.
