@@ -92,6 +92,17 @@ func BuildCoreGame(s *Spec) *core.Game {
 
 	g.Moves = buildMovesMap(s, s.Moves)
 
+	if len(s.Stages) > 0 {
+		stages := make(map[string]*core.StageConfig, len(s.Stages))
+		for stageName, st := range s.Stages {
+			stages[stageName] = &core.StageConfig{
+				Moves: buildMovesMap(s, st.Moves),
+				Next:  st.Next,
+			}
+		}
+		g.Turn = &core.TurnConfig{Stages: stages}
+	}
+
 	if len(s.Phases) > 0 {
 		g.Phases = make(map[string]*core.PhaseConfig, len(s.Phases))
 		for phaseName, ph := range s.Phases {
@@ -141,6 +152,7 @@ func buildMovesMap(s *Spec, src map[string]Move) map[string]any {
 				NumPlayers: mc.Ctx.NumPlayers,
 				PlayerID:   mc.PlayerID,
 				Phase:      mc.Ctx.Phase,
+				Events:     mc.Events,
 			}
 			bc.AttachSeededRandom(ctxSeed(mc.Ctx))
 			state, ok := mc.G.(map[string]any)
