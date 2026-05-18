@@ -8,7 +8,7 @@ A **Starlark module** that the server will validate, store, and run as a real ga
 |------|------|---------|
 | `META` | dict | `{"name": "...", "min_players": N, "max_players": M, "description": "..."}`. `name` matches `^[a-z0-9-]{1,40}$`. |
 | `setup(ctx)` | function | Returns initial state as a dict. |
-| `MOVES` | dict | `{"move_name": {"args": [{"name":"x","type":"int","min":0,"max":8}], "apply": fn}}`. |
+| `MOVES` | dict | `{"move_name": {"args": [{"name":"x","type":"int","min":0,"max":8}], "apply": fn}}`. `apply(state, ctx, *args)` MUST `return` the new state dict — input `state` is frozen, so mutations raise. Use `fail("...")` to reject a move. |
 | `end_if(state, ctx)` | function | Returns `{"winner": "0"}` / `{"draw": True}` / `None`. |
 | `legal_moves(state, ctx)` | function | Returns list of `{"move": ..., "args": [...]}` — same shape the server returns to clients. (`"name"` is also accepted for back-compat.) |
 | `player_view(state, player_id)` | function (optional) | Redact hidden info for one player. Default: identity. |
@@ -25,7 +25,7 @@ There is no time, no I/O, no filesystem, no network. Determinism is enforced.
 # Rules for the spec
 
 - Every successful `apply` ends the player's turn. Multi-action turns are not supported in v1.
-- `setup` returns a fresh dict; `apply` mutates state in place; `end_if`, `legal_moves`, `player_view` must NOT mutate state.
+- All five functions are pure: `setup`, `apply`, `end_if`, `legal_moves`, `player_view` each take frozen state (when they receive one) and return a value. `apply` returns the new state dict; the other four return their own shapes. Never mutate inputs — copy lists/dicts before changing them (e.g. `new_cells = list(state["cells"])`).
 - Move args are positional, primitive (int / string / bool). Declare them in `args` so the engine can render argument pickers.
 - `legal_moves` must enumerate every legal `(name, args)` for the current player from the current state. The engine cannot enumerate for you; if the action space is huge, design a smaller move space (e.g., split one mega-move into two micro-moves).
 
@@ -44,7 +44,9 @@ def setup(ctx): return {"cells": [None] * 9}
 
 def _click(state, ctx, idx):
     if state["cells"][idx] != None: fail("occupied")
-    state["cells"][idx] = ctx.player_id
+    new_cells = list(state["cells"])
+    new_cells[idx] = ctx.player_id
+    return {"cells": new_cells}
 
 MOVES = {"click": {"args": [{"name":"idx","type":"int","min":0,"max":8}], "apply": _click}}
 
@@ -82,9 +84,10 @@ When the playtest looks right, ask the user "ready to register?", then call **`r
 
 # Common pitfalls
 
+- **Forgetting to `return` from `apply`.** State is frozen, so writing `state["x"] = ...` raises. Build a new dict and return it; the engine takes the return value as the new state.
 - **Forgetting `legal_moves`.** It's required. The engine uses it for `list_legal_moves`.
 - **Letting `end_if` return non-None at setup.** Validation will reject this.
-- **Mutating state in `legal_moves` or `end_if`.** They're called against a frozen state; mutations raise.
+- **Mutating state in any function.** All inputs are frozen. Copy before changing — `new_cells = list(state["cells"]); new_cells[i] = X` then return a dict containing `new_cells`.
 - **Args that aren't primitives.** Use ints, strings, bools. No nested dicts in args for v1.
 - **Names that don't match `^[a-z0-9-]{1,40}$`.** No spaces, no caps.
 

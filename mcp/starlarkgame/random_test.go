@@ -10,7 +10,7 @@ func TestCtxRandomIsDeterministic(t *testing.T) {
 META = {"name":"r","min_players":1,"max_players":1}
 def setup(ctx):
     return {"draws": [ctx.random.range(100) for _ in range(5)]}
-MOVES = {"noop": {"args":[], "apply": lambda s, c: None}}
+MOVES = {"noop": {"args":[], "apply": lambda s, c: s}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
 `)

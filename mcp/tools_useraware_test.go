@@ -17,7 +17,7 @@ func TestListGames_UserAware(t *testing.T) {
 	_ = store.Put(context.Background(), UserGame{UserID: "alice", Name: "z-game", Source: `
 META = {"name":"z-game","min_players":2,"max_players":2}
 def setup(ctx): return {}
-MOVES = {"noop": {"args":[], "apply": lambda s, c: None}}
+MOVES = {"noop": {"args":[], "apply": lambda s, c: s}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
 `})
@@ -58,7 +58,7 @@ func TestCreateMatch_UserAware(t *testing.T) {
 	const src = `
 META = {"name":"my-game","min_players":2,"max_players":2}
 def setup(ctx): return {}
-MOVES = {"noop": {"args":[], "apply": lambda s, c: None}}
+MOVES = {"noop": {"args":[], "apply": lambda s, c: s}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
 `
@@ -95,7 +95,7 @@ func TestGetState_ReturnsPublicGameName(t *testing.T) {
 	const src = `
 META = {"name":"hex","min_players":2,"max_players":2}
 def setup(ctx): return {"cells": []}
-MOVES = {"noop": {"args":[], "apply": lambda s, c: None}}
+MOVES = {"noop": {"args":[], "apply": lambda s, c: s}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
 `

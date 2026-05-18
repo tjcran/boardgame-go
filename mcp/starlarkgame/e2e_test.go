@@ -26,7 +26,9 @@ def _three(state):
 
 def _click(state, ctx, idx):
     if state["cells"][idx] != None: fail("occupied")
-    state["cells"][idx] = ctx.player_id
+    new_cells = list(state["cells"])
+    new_cells[idx] = ctx.player_id
+    return {"cells": new_cells}
 
 MOVES = {"click": {"args":[{"name":"idx","type":"int"}], "apply": _click}}
 

@@ -13,7 +13,7 @@ META = {
     "description": "A demo.",
 }
 def setup(ctx): return {}
-MOVES = {"noop": {"args": [], "apply": lambda state, ctx: None}}
+MOVES = {"noop": {"args": [], "apply": lambda state, ctx: state}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
 `

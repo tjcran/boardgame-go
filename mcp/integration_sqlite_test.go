@@ -37,7 +37,7 @@ func TestStarlarkGameMoves_WithSQLitePersistence(t *testing.T) {
 META = {"name":"simple","min_players":2,"max_players":2}
 def setup(ctx): return {"turn": 0}
 def _go(state, ctx):
-    state["turn"] = state["turn"] + 1
+    return {"turn": state["turn"] + 1}
 MOVES = {"go": {"args":[], "apply": _go}}
 def end_if(state, ctx):
     if state["turn"] >= 4: return {"winner": "0"}

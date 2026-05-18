@@ -12,7 +12,7 @@ func TestCallSetupReturnsInitialState(t *testing.T) {
 META = {"name":"demo","min_players":2,"max_players":2}
 def setup(ctx):
     return {"cells": [None]*3, "pid_at_setup": ctx.player_id}
-MOVES = {"noop": {"args":[], "apply": lambda state, ctx: None}}
+MOVES = {"noop": {"args":[], "apply": lambda state, ctx: state}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
 `)
@@ -40,7 +40,9 @@ def setup(ctx): return {"cells": [None, None, None]}
 def _click(state, ctx, idx):
     if state["cells"][idx] != None:
         fail("occupied")
-    state["cells"][idx] = ctx.player_id
+    new_cells = list(state["cells"])
+    new_cells[idx] = ctx.player_id
+    return {"cells": new_cells}
 MOVES = {"click": {"args":[{"name":"idx","type":"int"}], "apply": _click}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
@@ -88,7 +90,7 @@ func TestCallEndIfWinner(t *testing.T) {
 	spec, _ := LoadSpec(`
 META = {"name":"w","min_players":2,"max_players":2}
 def setup(ctx): return {"done": True}
-MOVES = {"noop": {"args":[], "apply": lambda state, ctx: None}}
+MOVES = {"noop": {"args":[], "apply": lambda state, ctx: state}}
 def end_if(state, ctx):
     if state["done"]: return {"winner": "0"}
     return None
@@ -105,7 +107,7 @@ func TestCallLegalMoves(t *testing.T) {
 	spec, _ := LoadSpec(`
 META = {"name":"l","min_players":2,"max_players":2}
 def setup(ctx): return {"cells": [None]*3}
-MOVES = {"click": {"args":[{"name":"i","type":"int"}], "apply": lambda state, ctx, i: None}}
+MOVES = {"click": {"args":[{"name":"i","type":"int"}], "apply": lambda state, ctx, i: state}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx):
     return [{"name":"click","args":[i]} for i in range(3) if state["cells"][i] == None]
@@ -122,7 +124,7 @@ func TestCallPlayerViewIdentityWhenMissing(t *testing.T) {
 	spec, _ := LoadSpec(`
 META = {"name":"p","min_players":2,"max_players":2}
 def setup(ctx): return {"x": 1}
-MOVES = {"noop": {"args":[], "apply": lambda state, ctx: None}}
+MOVES = {"noop": {"args":[], "apply": lambda state, ctx: state}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
 `)

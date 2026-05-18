@@ -20,7 +20,9 @@ LINES = [(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]
 def setup(ctx): return {"cells": [None]*9}
 def _click(state, ctx, idx):
     if state["cells"][idx] != None: fail("occupied")
-    state["cells"][idx] = ctx.player_id
+    new_cells = list(state["cells"])
+    new_cells[idx] = ctx.player_id
+    return {"cells": new_cells}
 MOVES = {"click": {"args":[{"name":"idx","type":"int"}], "apply": _click}}
 def end_if(state, ctx):
     for a,b,c in LINES:

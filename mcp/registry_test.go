@@ -31,7 +31,7 @@ func TestListGames_IncludesOwnedUserGame(t *testing.T) {
 	const src = `
 META = {"name":"hex","min_players":2,"max_players":2}
 def setup(ctx): return {}
-MOVES = {"noop": {"args":[], "apply": lambda s, c: None}}
+MOVES = {"noop": {"args":[], "apply": lambda s, c: s}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
 `
@@ -72,7 +72,7 @@ func TestRegisterAndLookupRoundTrip(t *testing.T) {
 	const src = `
 META = {"name":"foo","min_players":2,"max_players":2}
 def setup(ctx): return {}
-MOVES = {"noop": {"args":[], "apply": lambda s, c: None}}
+MOVES = {"noop": {"args":[], "apply": lambda s, c: s}}
 def end_if(state, ctx): return None
 def legal_moves(state, ctx): return []
 `
