@@ -12,11 +12,13 @@ A **Starlark module** that the server will validate, store, and run as a real ga
 | `end_if(state, ctx)` | function | Returns `{"winner": "0"}` / `{"draw": True}` / `None`. |
 | `legal_moves(state, ctx)` | function | Returns list of `{"move": ..., "args": [...]}` — same shape the server returns to clients. (`"name"` is also accepted for back-compat.) |
 | `player_view(state, player_id)` | function (optional) | Redact hidden info for one player. Default: identity. |
+| `PHASES` | dict (optional) | `{"phase_name": {"moves": {...}, "end_if": fn, "start": True}}`. Each phase has its own scoped moves table (replaces global MOVES while the phase is active), an optional `end_if(state, ctx)` returning a phase-name string to transition or `None` to stay, and `"start": True` on exactly one entry-phase. Use for setup-then-play, distinct bidding/play segments, market/buy/build loops. Omit PHASES entirely for a single-flow game. |
 
 # The `ctx` you receive
 
 - `ctx.player_id` — string seat ID of the current mover (`""` in setup).
 - `ctx.num_players` — int.
+- `ctx.phase` — current phase name (`""` when no `PHASES` is declared). Use to filter `legal_moves` to the right move set.
 - `ctx.random.range(n)` / `.shuffle(list)` / `.choice(list)` — seeded; deterministic per match.
 - `ctx.log(msg)` — append a short string to the engine log (debugging only; not used for game logic).
 

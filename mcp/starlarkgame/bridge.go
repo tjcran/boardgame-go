@@ -13,6 +13,7 @@ import (
 type BridgeCtx struct {
 	PlayerID   string
 	NumPlayers int
+	Phase      string // current phase name, "" when game has no phases
 	Log        []string
 
 	// rng is set by attachRandom (Task 5). Nil → ctx.random raises.
@@ -26,6 +27,7 @@ func (c *BridgeCtx) asStarlark() starlark.Value {
 	attrs := starlark.StringDict{
 		"player_id":   starlark.String(c.PlayerID),
 		"num_players": starlark.MakeInt(c.NumPlayers),
+		"phase":       starlark.String(c.Phase),
 		"log": starlark.NewBuiltin("log",
 			func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
 				if len(args) != 1 {

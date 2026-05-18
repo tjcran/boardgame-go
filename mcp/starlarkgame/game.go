@@ -90,14 +90,57 @@ func BuildCoreGame(s *Spec) *core.Game {
 		return acts
 	}
 
-	moves := make(map[string]any, len(s.Moves))
-	for name, mv := range s.Moves {
+	g.Moves = buildMovesMap(s, s.Moves)
+
+	if len(s.Phases) > 0 {
+		g.Phases = make(map[string]*core.PhaseConfig, len(s.Phases))
+		for phaseName, ph := range s.Phases {
+			phaseName := phaseName
+			ph := ph
+			pc := &core.PhaseConfig{
+				Moves: buildMovesMap(s, ph.Moves),
+				Start: ph.Start,
+			}
+			if ph.EndIf != nil {
+				pc.EndIf = func(mc *core.MoveContext) (bool, string) {
+					bc := &BridgeCtx{
+						NumPlayers: mc.Ctx.NumPlayers,
+						PlayerID:   mc.PlayerID,
+						Phase:      mc.Ctx.Phase,
+					}
+					bc.AttachSeededRandom(ctxSeed(mc.Ctx))
+					state, ok := mc.G.(map[string]any)
+					if !ok {
+						return false, ""
+					}
+					next, err := s.CallPhaseEndIf(context.Background(), bc, state, phaseName)
+					if err != nil || next == "" {
+						return false, ""
+					}
+					return true, next
+				}
+			}
+			g.Phases[phaseName] = pc
+		}
+	}
+
+	return g
+}
+
+// buildMovesMap renders a moves table (top-level MOVES or a phase's
+// scoped moves) into core.MoveFn closures. Each closure dispatches to
+// the spec's apply function via CallMove and enqueues an EndTurn event
+// when the move is marked terminal.
+func buildMovesMap(s *Spec, src map[string]Move) map[string]any {
+	out := make(map[string]any, len(src))
+	for name, mv := range src {
 		name := name
 		endsTurn := mv.EndsTurn
-		moves[name] = core.MoveFn(func(mc *core.MoveContext, args ...any) (core.G, error) {
+		out[name] = core.MoveFn(func(mc *core.MoveContext, args ...any) (core.G, error) {
 			bc := &BridgeCtx{
 				NumPlayers: mc.Ctx.NumPlayers,
 				PlayerID:   mc.PlayerID,
+				Phase:      mc.Ctx.Phase,
 			}
 			bc.AttachSeededRandom(ctxSeed(mc.Ctx))
 			state, ok := mc.G.(map[string]any)
@@ -114,8 +157,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 			return newState, nil
 		})
 	}
-	g.Moves = moves
-	return g
+	return out
 }
 
 // ctxSeed returns a per-call seed derived from core.Ctx. Same Ctx fields →
