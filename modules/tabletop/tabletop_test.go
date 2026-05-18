@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/tjcran/boardgame-go/core"
-	"github.com/tjcran/boardgame-go/tabletop"
+	"github.com/tjcran/boardgame-go/modules/tabletop"
 )
 
 func TestPosIsComparable(t *testing.T) {
