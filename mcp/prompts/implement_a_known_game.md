@@ -13,16 +13,17 @@ A spec is one Starlark module with these required top-level names. Keep this sec
 | `legal_moves(state, ctx)` | function | Returns list of `{"move": ..., "args": [...]}` — same shape the server returns. |
 | `player_view(state, player_id)` | function (optional) | Redact hidden info for one player. Default: identity. |
 | `PHASES` | dict (optional) | `{"phase_name": {"moves": {...}, "end_if": fn, "start": True}}`. Phase-scoped move tables; the phase's `end_if(state, ctx)` returns a phase-name string to transition or `None` to stay. Exactly one phase sets `"start": True`. Use for Stratego's place-then-play, trick-takers' bid-then-play, distinct opening/midgame/endgame phases when rules genuinely differ. Skip PHASES for single-flow games like chess or checkers. |
+| `STAGES` | dict (optional) | `{"stage_name": {"moves": {...}, "next": "other_stage"}}`. Sub-modes within a turn. From an apply function call `ctx.events.set_stage("stage_name")` to gate the current player into the stage (only the stage's moves are legal for them); call `ctx.events.end_stage()` to leave. Mark the entering move `"ends_turn": False`. Use for loveletter Prince ("play card → pick a target → resolve"), "discard to N" gates, Magic-style targeted spell resolution. |
 
-`ctx` exposes `ctx.player_id`, `ctx.num_players`, `ctx.phase`, `ctx.random.range(n)` / `.shuffle(list)` / `.choice(list)` (seeded), `ctx.log(msg)`. No time, no I/O, no filesystem, no network. All five functions are pure: copy lists/dicts before changing them — `new_cells = list(state["cells"]); new_cells[i] = X` then return `{"cells": new_cells, ...}`.
+`ctx` exposes `ctx.player_id`, `ctx.num_players`, `ctx.phase`, `ctx.random.range(n)` / `.shuffle(list)` / `.choice(list)` (seeded), `ctx.log(msg)`, and `ctx.events.set_stage(name)` / `ctx.events.end_stage()` (apply only). No time, no I/O, no filesystem, no network. All five functions are pure: copy lists/dicts before changing them — `new_cells = list(state["cells"]); new_cells[i] = X` then return `{"cells": new_cells, ...}`.
 
 **Current engine limits** (matter for known games):
 - Multi-action turns: per-move `"ends_turn": False` (default `True`). Catan-style roll-then-build, MTG-style draw-then-play work — mark non-terminal moves `False`.
-- Phases: declare a `PHASES` dict with scoped move tables and `end_if` transitions. Use for setup-then-play or bid-then-play games.
-- Stages (player priority shifts within a turn — loveletter's "play card → target another player → resolve") aren't supported yet. Spec authors who hit this should offer a reduction.
+- Phases: declare a `PHASES` dict with scoped move tables and `end_if` transitions. Use for setup-then-play, bid-then-play, or markets-then-build games.
+- Stages: declare a `STAGES` dict; enter via `ctx.events.set_stage("name")` from apply, leave via `ctx.events.end_stage()`. Covers loveletter-Prince-style "now pick a target" patterns.
 - Args are positional primitives (int / string / bool). No nested dicts in args.
 
-If the user named a game that needs stages (Magic's stack interactions, loveletter's targeted card effects), tell them upfront and offer a reduction. Don't silently downgrade.
+If the game still doesn't fit (e.g. simultaneous actions, real-time clocks), tell the user upfront and offer a reduction. Don't silently downgrade.
 
 # Your workflow
 

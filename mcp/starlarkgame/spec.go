@@ -54,6 +54,18 @@ type Phase struct {
 	Start bool
 }
 
+// Stage is one entry in the spec's optional STAGES dict.
+//
+// Moves replaces the active move table for a player gated into this
+// stage via ctx.events.set_stage("stage_name"). Next, when set, is
+// the stage a player transitions to when ctx.events.end_stage() runs
+// from this stage; empty string means they leave the active set.
+type Stage struct {
+	Name  string
+	Moves map[string]Move
+	Next  string
+}
+
 // Spec is a compiled, structurally validated game spec.
 type Spec struct {
 	Meta       Meta
@@ -68,6 +80,12 @@ type Spec struct {
 	// exactly one phase must have Start: true; StartPhase holds its name.
 	Phases     map[string]Phase
 	StartPhase string
+
+	// Stages is the optional top-level stage table (TurnConfig.Stages).
+	// Players are gated into a stage via ctx.events.set_stage("name") from
+	// inside an apply function; while gated, only the stage's Moves are
+	// legal for that player. ctx.events.end_stage() pops them out.
+	Stages map[string]Stage
 
 	source string
 }
@@ -159,8 +177,92 @@ func LoadSpec(source string) (*Spec, error) {
 	if err := readPhases(globals, s); err != nil {
 		return nil, err
 	}
+	if err := readStages(globals, s); err != nil {
+		return nil, err
+	}
 
 	return s, nil
+}
+
+// readStages parses the optional top-level STAGES dict.
+//
+// STAGES is a map from stage name to a dict containing:
+//
+//	moves  — required; same shape as MOVES (per-move ends_turn applies)
+//	next   — optional string; stage to transition to on end_stage(),
+//	         empty means leave the active set
+//
+// When STAGES is absent or empty, ctx.events.set_stage() is a no-op
+// (no stage tables exist for the engine to gate on).
+func readStages(globals starlark.StringDict, s *Spec) error {
+	raw, ok := globals["STAGES"]
+	if !ok {
+		return nil
+	}
+	d, ok := raw.(*starlark.Dict)
+	if !ok {
+		return fmt.Errorf("STAGES must be a dict, got %s", raw.Type())
+	}
+	if d.Len() == 0 {
+		return nil
+	}
+	s.Stages = map[string]Stage{}
+	for _, k := range d.Keys() {
+		ks, ok := k.(starlark.String)
+		if !ok {
+			return fmt.Errorf("STAGES key %v must be a string", k)
+		}
+		name := string(ks)
+		vAny, _, _ := d.Get(k)
+		st, err := readStage(name, vAny)
+		if err != nil {
+			return fmt.Errorf("STAGES[%q]: %w", name, err)
+		}
+		s.Stages[name] = st
+	}
+	return nil
+}
+
+func readStage(name string, v starlark.Value) (Stage, error) {
+	d, ok := v.(*starlark.Dict)
+	if !ok {
+		return Stage{}, fmt.Errorf("must be a dict")
+	}
+	st := Stage{Name: name, Moves: map[string]Move{}}
+
+	movesAny, ok, _ := d.Get(starlark.String("moves"))
+	if !ok {
+		return Stage{}, errors.New("missing 'moves'")
+	}
+	movesDict, ok := movesAny.(*starlark.Dict)
+	if !ok {
+		return Stage{}, errors.New("'moves' must be a dict")
+	}
+	for _, mk := range movesDict.Keys() {
+		mks, ok := mk.(starlark.String)
+		if !ok {
+			return Stage{}, fmt.Errorf("move key %v must be a string", mk)
+		}
+		mvRaw, _, _ := movesDict.Get(mk)
+		mv, err := readMove(string(mks), mvRaw)
+		if err != nil {
+			return Stage{}, fmt.Errorf("moves[%q]: %w", string(mks), err)
+		}
+		st.Moves[mv.Name] = mv
+	}
+	if len(st.Moves) == 0 {
+		return Stage{}, errors.New("'moves' must define at least one move")
+	}
+
+	if v, ok, _ := d.Get(starlark.String("next")); ok {
+		s, ok := v.(starlark.String)
+		if !ok {
+			return Stage{}, errors.New("'next' must be a string")
+		}
+		st.Next = string(s)
+	}
+
+	return st, nil
 }
 
 // readPhases parses the optional top-level PHASES dict. PHASES is a

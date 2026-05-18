@@ -13,6 +13,7 @@ A **Starlark module** that the server will validate, store, and run as a real ga
 | `legal_moves(state, ctx)` | function | Returns list of `{"move": ..., "args": [...]}` — same shape the server returns to clients. (`"name"` is also accepted for back-compat.) |
 | `player_view(state, player_id)` | function (optional) | Redact hidden info for one player. Default: identity. |
 | `PHASES` | dict (optional) | `{"phase_name": {"moves": {...}, "end_if": fn, "start": True}}`. Each phase has its own scoped moves table (replaces global MOVES while the phase is active), an optional `end_if(state, ctx)` returning a phase-name string to transition or `None` to stay, and `"start": True` on exactly one entry-phase. Use for setup-then-play, distinct bidding/play segments, market/buy/build loops. Omit PHASES entirely for a single-flow game. |
+| `STAGES` | dict (optional) | `{"stage_name": {"moves": {...}, "next": "other_stage"}}`. Sub-modes within a turn. While a player is in a stage, only that stage's moves are legal for them. Enter a stage from inside an apply with `ctx.events.set_stage("stage_name")`; leave with `ctx.events.end_stage()`. Use for "you played a card, now pick a target," "discard down to N," and any sub-decision a player must resolve before normal play resumes. Mark the entering move `"ends_turn": False` so the same player stays active for the stage. |
 
 # The `ctx` you receive
 
@@ -21,6 +22,8 @@ A **Starlark module** that the server will validate, store, and run as a real ga
 - `ctx.phase` — current phase name (`""` when no `PHASES` is declared). Use to filter `legal_moves` to the right move set.
 - `ctx.random.range(n)` / `.shuffle(list)` / `.choice(list)` — seeded; deterministic per match.
 - `ctx.log(msg)` — append a short string to the engine log (debugging only; not used for game logic).
+- `ctx.events.set_stage("stage_name")` — push the current player into a stage (apply only). Pair with `"ends_turn": False` so they stay active.
+- `ctx.events.end_stage()` — pop the current player out of their stage.
 
 There is no time, no I/O, no filesystem, no network. Determinism is enforced.
 
