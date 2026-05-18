@@ -346,3 +346,93 @@ func TestLineOfSightWithTerrainMap(t *testing.T) {
 		t.Fatalf("expected LOS clear when blocker is off the line")
 	}
 }
+
+func TestStatePlaceAndPositionOf(t *testing.T) {
+	s := tabletop.NewState()
+	s.Place(tabletop.UnitID(7), tabletop.Pos{3, 4})
+
+	got, ok := s.PositionOf(tabletop.UnitID(7))
+	if !ok {
+		t.Fatalf("PositionOf(7) returned !ok")
+	}
+	if got != (tabletop.Pos{3, 4}) {
+		t.Errorf("PositionOf(7) = %v, want (3,4)", got)
+	}
+}
+
+func TestStateMoveUpdatesPositionAndIndex(t *testing.T) {
+	s := tabletop.NewState()
+	id := tabletop.UnitID(7)
+	s.Place(id, tabletop.Pos{1, 1})
+	s.Move(id, tabletop.Pos{5, 5})
+
+	if got, _ := s.PositionOf(id); got != (tabletop.Pos{5, 5}) {
+		t.Errorf("after Move, PositionOf = %v, want (5,5)", got)
+	}
+	if at := s.EntitiesAt(tabletop.Pos{1, 1}); len(at) != 0 {
+		t.Errorf("old cell should be empty after Move, got %v", at)
+	}
+	at := s.EntitiesAt(tabletop.Pos{5, 5})
+	if len(at) != 1 || at[0] != id {
+		t.Errorf("EntitiesAt(5,5) = %v, want [7]", at)
+	}
+}
+
+func TestStateRemoveDropsPositionAndIndex(t *testing.T) {
+	s := tabletop.NewState()
+	s.Place(tabletop.UnitID(7), tabletop.Pos{2, 2})
+	s.Remove(tabletop.UnitID(7))
+	if _, ok := s.PositionOf(tabletop.UnitID(7)); ok {
+		t.Errorf("PositionOf after Remove should report !ok")
+	}
+	if at := s.EntitiesAt(tabletop.Pos{2, 2}); len(at) != 0 {
+		t.Errorf("cell should be empty after Remove, got %v", at)
+	}
+}
+
+func TestStateEntitiesAtMultipleStacked(t *testing.T) {
+	s := tabletop.NewState()
+	s.Place(tabletop.UnitID(1), tabletop.Pos{0, 0})
+	s.Place(tabletop.UnitID(2), tabletop.Pos{0, 0})
+	s.Place(tabletop.UnitID(3), tabletop.Pos{0, 0})
+	at := s.EntitiesAt(tabletop.Pos{0, 0})
+	if len(at) != 3 {
+		t.Fatalf("expected 3 units stacked, got %d: %v", len(at), at)
+	}
+	// Order must be deterministic (ascending UnitID) for replay safety.
+	if at[0] != 1 || at[1] != 2 || at[2] != 3 {
+		t.Errorf("EntitiesAt order = %v, want [1 2 3]", at)
+	}
+}
+
+func TestStateWithinReturnsUnitsWithinRadius(t *testing.T) {
+	s := tabletop.NewState()
+	b := tabletop.NewSquareBoard(20, 20)
+	s.Place(tabletop.UnitID(1), tabletop.Pos{5, 5})
+	s.Place(tabletop.UnitID(2), tabletop.Pos{6, 5}) // distance 1
+	s.Place(tabletop.UnitID(3), tabletop.Pos{8, 8}) // distance 3
+	s.Place(tabletop.UnitID(4), tabletop.Pos{0, 0}) // distance 5
+
+	got := s.Within(b, tabletop.Pos{5, 5}, 2)
+	// Should include 1 (self, distance 0), 2 (1), exclude 3 (3) and 4 (5).
+	if len(got) != 2 {
+		t.Fatalf("Within radius 2 = %v, want 2 results", got)
+	}
+	if got[0] != 1 || got[1] != 2 {
+		t.Errorf("Within = %v, want [1 2] in ascending order", got)
+	}
+}
+
+func TestStatePlaceTwiceIsAMove(t *testing.T) {
+	s := tabletop.NewState()
+	id := tabletop.UnitID(7)
+	s.Place(id, tabletop.Pos{1, 1})
+	s.Place(id, tabletop.Pos{2, 2})
+
+	if got, _ := s.PositionOf(id); got != (tabletop.Pos{2, 2}) {
+		t.Errorf("re-Place should move: got %v", got)
+	}
+	if len(s.EntitiesAt(tabletop.Pos{1, 1})) != 0 {
+		t.Errorf("old cell should be empty after re-Place")
+	}
+}
