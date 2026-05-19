@@ -228,3 +228,102 @@ func TestPlayAgainCreatesNewMatch(t *testing.T) {
 		t.Fatalf("expected idempotent PlayAgain, got %q vs %q", again, nextID)
 	}
 }
+
+func TestGameBeforePersistScrubsStorageOnly(t *testing.T) {
+	type myG struct {
+		Persistent string
+		Transient  string
+	}
+	game := &core.Game{
+		Name: "before-persist-test", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ any) core.G { return &myG{} },
+		Moves: map[string]any{
+			"act": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+				return &myG{Persistent: "keep", Transient: "drop"}, nil
+			}),
+		},
+		BeforePersist: func(s core.State) core.State {
+			if g, ok := s.G.(*myG); ok {
+				clone := *g
+				clone.Transient = ""
+				s.G = &clone
+			}
+			return s
+		},
+		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+
+	store := storage.NewMemory()
+	m := NewManager(store)
+	m.MustRegister(game)
+
+	var observedState core.State
+	m.OnLifecycleKind(LifecycleMatchMoved, func(ev LifecycleEvent) {
+		observedState = ev.State
+	})
+
+	id, _ := m.Create("before-persist-test", CreateOptions{})
+	alice, _ := m.Join(id, "alice", JoinOptions{})
+	_, _ = m.Join(id, "bob", JoinOptions{})
+
+	if _, err := m.Move(id, alice.PlayerID, alice.PlayerCredentials, "act", nil); err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+
+	// (a) Storage should have the trimmed state — Transient empty.
+	stored, err := store.Get(id)
+	if err != nil {
+		t.Fatalf("store.Get: %v", err)
+	}
+	storedG, ok := stored.State.G.(*myG)
+	if !ok {
+		t.Fatalf("stored state G is not *myG: %T", stored.State.G)
+	}
+	if storedG.Transient != "" {
+		t.Errorf("storage Transient = %q, want empty (BeforePersist should have run)", storedG.Transient)
+	}
+	if storedG.Persistent != "keep" {
+		t.Errorf("storage Persistent = %q, want \"keep\"", storedG.Persistent)
+	}
+
+	// (b) Lifecycle observer should have seen the full state — Transient="drop".
+	if observedState.G == nil {
+		t.Fatalf("lifecycle event State.G is nil — observer never fired or saw zero state")
+	}
+	obsG, ok := observedState.G.(*myG)
+	if !ok {
+		t.Fatalf("observed state G is not *myG: %T", observedState.G)
+	}
+	if obsG.Transient != "drop" {
+		t.Errorf("lifecycle observer Transient = %q, want \"drop\" (full state)", obsG.Transient)
+	}
+}
+
+func TestGameBeforePersistNilIsNoOp(t *testing.T) {
+	// When Game.BeforePersist is nil, state is persisted unmodified.
+	type myG struct{ Val string }
+	game := &core.Game{
+		Name: "before-persist-nil", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ any) core.G { return &myG{} },
+		Moves: map[string]any{
+			"act": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+				return &myG{Val: "persisted"}, nil
+			}),
+		},
+		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+	store := storage.NewMemory()
+	m := NewManager(store)
+	m.MustRegister(game)
+
+	id, _ := m.Create("before-persist-nil", CreateOptions{})
+	alice, _ := m.Join(id, "alice", JoinOptions{})
+	_, _ = m.Join(id, "bob", JoinOptions{})
+	if _, err := m.Move(id, alice.PlayerID, alice.PlayerCredentials, "act", nil); err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	stored, _ := store.Get(id)
+	if stored.State.G.(*myG).Val != "persisted" {
+		t.Errorf("nil BeforePersist should persist state unmodified, got %q", stored.State.G.(*myG).Val)
+	}
+}
