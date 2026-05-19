@@ -29,6 +29,7 @@ var (
 	ErrUnknownSeat    = errors.New("player not seated in this match")
 	ErrSeatRequired   = errors.New("game not yet ready (seats unfilled)")
 	ErrBadCredentials = errors.New("invalid credentials")
+	ErrServerOnly     = errors.New("move is marked Move.ServerOnly — credentialed clients cannot dispatch it; use Manager.DispatchServer")
 )
 
 // GenerateCredentialsFn produces an opaque token for a freshly joined
@@ -821,8 +822,39 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 		return core.State{}, ErrSeatRequired
 	}
 
-	start := m.now()
 	req.PlayerID = seat
+
+	// Look up the move definition to check ServerOnly. Credentialed
+	// clients cannot dispatch server-only moves — they must go via
+	// Manager.DispatchServer.
+	if mv, ok := g.Moves[req.Move]; ok {
+		// g.Moves values are core.Move (value type) or core.MoveFn.
+		// Only core.Move carries the ServerOnly flag; MoveFn implicitly
+		// has ServerOnly=false.
+		if move, ok := mv.(core.Move); ok && move.ServerOnly {
+			return core.State{}, ErrServerOnly
+		}
+	}
+
+	return m.dispatchLocked(ctx, matchID, playerID, g, match, req)
+}
+
+// dispatchLocked runs a move through the OCC retry loop, persists,
+// broadcasts, and fires lifecycle events. The caller must already
+// hold the match lock and have loaded match + game.
+//
+// Shared between MoveReqCtx (credentialed) and DispatchServer (no
+// credentials) so both paths go through identical lifecycle and
+// persist semantics — the only difference is what runs upstream.
+func (m *Manager) dispatchLocked(
+	ctx context.Context,
+	matchID string,
+	playerID string,
+	g *core.Game,
+	match *storage.Match,
+	req core.MoveRequest,
+) (core.State, error) {
+	start := m.now()
 
 	// OCC retry loop: when UseOptimisticConcurrency is on and the store
 	// satisfies storage.OptimisticStorage, we run Apply + CAS-Update
@@ -927,6 +959,53 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 	// game ended).
 	m.scheduleTurnTimer(matchID, next, g)
 	return next, nil
+}
+
+// DispatchServer dispatches a move on behalf of the server, bypassing
+// credential authentication. Goes through the full reducer pipeline
+// (validation, hooks, persist, broadcast, lifecycle events) — identical
+// in every observable way to a credentialed move via MoveReqCtx, except
+// no credentials are required.
+//
+// Use for turn-timer-driven force-end, scheduled administrative
+// actions, disconnect-driven concede, cron-job cleanup moves, etc.
+//
+// playerID is the seat the move appears as having been made by;
+// LifecycleMatchMoved observers see this as PlayerID just like a
+// credentialed move. moveName must match a key in Game.Moves. ServerOnly
+// moves are dispatchable here (the asymmetric counterpart to MoveReqCtx's
+// ServerOnly refusal); non-ServerOnly moves are dispatchable too — the
+// server's authority covers anything in the game's move set.
+//
+// The match's current state ID is used for the staleness check, so
+// DispatchServer never returns a "stale state" error — the server
+// always operates on the current state.
+func (m *Manager) DispatchServer(
+	ctx context.Context,
+	matchID string,
+	playerID string,
+	moveName string,
+	args ...any,
+) (core.State, error) {
+	unlock := m.lockMatch(matchID)
+	defer unlock()
+
+	match, err := m.loadMigrated(matchID)
+	if err != nil {
+		return core.State{}, err
+	}
+	g := m.Game(match.GameName)
+	if g == nil {
+		return core.State{}, fmt.Errorf("%w: %s", ErrUnknownGame, match.GameName)
+	}
+
+	req := core.MoveRequest{
+		PlayerID: playerID,
+		Move:     moveName,
+		Args:     args,
+		StateID:  match.State.StateID, // server always at current state — no staleness
+	}
+	return m.dispatchLocked(ctx, matchID, playerID, g, match, req)
 }
 
 // Subscribe registers s to receive state pushes for matchID. Returns an

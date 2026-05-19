@@ -1,6 +1,7 @@
 package match
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -130,7 +131,7 @@ func TestMoveRejectedUntilAllSeatsFilled(t *testing.T) {
 func TestMovePlaysThroughEnd(t *testing.T) {
 	m, id := newTestManager(t)
 	aliceID, aliceCreds := joinHelper(t, m, id, "alice") // seat 0
-	bobID, bobCreds := joinHelper(t, m, id, "bob")         // seat 1
+	bobID, bobCreds := joinHelper(t, m, id, "bob")       // seat 1
 
 	type turnSpec struct {
 		pid, creds string
@@ -325,5 +326,153 @@ func TestGameBeforePersistNilIsNoOp(t *testing.T) {
 	stored, _ := store.Get(id)
 	if stored.State.G.(*myG).Val != "persisted" {
 		t.Errorf("nil BeforePersist should persist state unmodified, got %q", stored.State.G.(*myG).Val)
+	}
+}
+
+func TestDispatchServerHappyPath(t *testing.T) {
+	// DispatchServer dispatches a normal move (no creds), state advances,
+	// LifecycleMatchMoved fires with the expected PlayerID.
+	type myG struct{ Acted bool }
+	game := &core.Game{
+		Name: "ds-happy", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ any) core.G { return &myG{} },
+		Moves: map[string]any{
+			"act": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+				return &myG{Acted: true}, nil
+			}),
+		},
+		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+	m := NewManager(storage.NewMemory())
+	m.MustRegister(game)
+
+	var moved LifecycleEvent
+	m.OnLifecycleKind(LifecycleMatchMoved, func(ev LifecycleEvent) {
+		moved = ev
+	})
+
+	id, _ := m.Create("ds-happy", CreateOptions{})
+	_, _ = m.Join(id, "alice", JoinOptions{})
+	_, _ = m.Join(id, "bob", JoinOptions{})
+
+	st, err := m.DispatchServer(context.Background(), id, "0", "act")
+	if err != nil {
+		t.Fatalf("DispatchServer: %v", err)
+	}
+	if !st.G.(*myG).Acted {
+		t.Errorf("state should reflect the move")
+	}
+	if moved.Kind != LifecycleMatchMoved {
+		t.Fatalf("LifecycleMatchMoved should have fired, got %q", moved.Kind)
+	}
+	if moved.PlayerID != "0" {
+		t.Errorf("PlayerID = %q, want \"0\"", moved.PlayerID)
+	}
+	if moved.Move != "act" {
+		t.Errorf("Move = %q, want \"act\"", moved.Move)
+	}
+}
+
+func TestDispatchServerCanCallServerOnlyMove(t *testing.T) {
+	// A ServerOnly "concede" move: credentialed clients refused via
+	// MoveReqCtx, but DispatchServer succeeds.
+	game := &core.Game{
+		Name: "ds-server-only", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ any) core.G { return map[string]int{} },
+		Moves: map[string]any{
+			"concede": core.Move{
+				ServerOnly: true,
+				Move: core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+					return mc.G, nil
+				}),
+			},
+		},
+		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+	m := NewManager(storage.NewMemory())
+	m.MustRegister(game)
+
+	id, _ := m.Create("ds-server-only", CreateOptions{})
+	alice, _ := m.Join(id, "alice", JoinOptions{})
+	_, _ = m.Join(id, "bob", JoinOptions{})
+
+	// Client-side: refused.
+	if _, err := m.Move(id, alice.PlayerID, alice.PlayerCredentials, "concede", nil); !errors.Is(err, ErrServerOnly) {
+		t.Errorf("MoveReqCtx should refuse ServerOnly move with ErrServerOnly, got %v", err)
+	}
+
+	// Server-side: accepted.
+	if _, err := m.DispatchServer(context.Background(), id, "0", "concede"); err != nil {
+		t.Errorf("DispatchServer should accept ServerOnly move, got %v", err)
+	}
+}
+
+func TestMoveReqCtxRefusesServerOnlyMove(t *testing.T) {
+	// Documents the asymmetric ingress: clients cannot call ServerOnly
+	// moves even with valid credentials.
+	game := &core.Game{
+		Name: "moveReqCtx-refuses", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ any) core.G { return map[string]int{} },
+		Moves: map[string]any{
+			"adminOnly": core.Move{
+				ServerOnly: true,
+				Move: core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+					return mc.G, nil
+				}),
+			},
+		},
+		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+	m := NewManager(storage.NewMemory())
+	m.MustRegister(game)
+
+	id, _ := m.Create("moveReqCtx-refuses", CreateOptions{})
+	alice, _ := m.Join(id, "alice", JoinOptions{})
+	_, _ = m.Join(id, "bob", JoinOptions{})
+
+	_, err := m.Move(id, alice.PlayerID, alice.PlayerCredentials, "adminOnly", nil)
+	if !errors.Is(err, ErrServerOnly) {
+		t.Errorf("expected ErrServerOnly, got %v", err)
+	}
+}
+
+func TestDispatchServerFiresRejectedOnInvalidMove(t *testing.T) {
+	// DispatchServer routes through the same lifecycle as MoveReqCtx,
+	// so a rejected move (here: unknown move name) fires
+	// LifecycleMatchMoveRejected.
+	game := &core.Game{
+		Name: "ds-rejected", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ any) core.G { return map[string]int{} },
+		Moves: map[string]any{
+			"act": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+				return mc.G, nil
+			}),
+		},
+		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+	m := NewManager(storage.NewMemory())
+	m.MustRegister(game)
+
+	var rejected LifecycleEvent
+	m.OnLifecycleKind(LifecycleMatchMoveRejected, func(ev LifecycleEvent) {
+		rejected = ev
+	})
+
+	id, _ := m.Create("ds-rejected", CreateOptions{})
+	_, _ = m.Join(id, "alice", JoinOptions{})
+	_, _ = m.Join(id, "bob", JoinOptions{})
+
+	_, err := m.DispatchServer(context.Background(), id, "0", "nope")
+	if err == nil {
+		t.Fatal("expected error from unknown move via DispatchServer")
+	}
+	if rejected.Kind != LifecycleMatchMoveRejected {
+		t.Errorf("LifecycleMatchMoveRejected should fire, got %q", rejected.Kind)
+	}
+	if rejected.Move != "nope" {
+		t.Errorf("rejected.Move = %q, want \"nope\"", rejected.Move)
+	}
+	if rejected.PlayerID != "0" {
+		t.Errorf("rejected.PlayerID = %q, want \"0\"", rejected.PlayerID)
 	}
 }
