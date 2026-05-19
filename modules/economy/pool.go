@@ -24,3 +24,25 @@ type Pool struct {
 func (p Pool) Current(s *ccg.State) int {
 	return s.Counters(p.Owner, p.Kind)
 }
+
+// Gain adds n to the pool, clamped to Cap when Cap > 0. Returns the
+// actual delta applied (0 when n ≤ 0 or when already at cap). The
+// underlying ccg counter_changed event fires with the *applied* delta,
+// matching ccg's Counter semantics.
+func (p Pool) Gain(s *ccg.State, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if p.Cap > 0 {
+		current := p.Current(s)
+		room := p.Cap - current
+		if room <= 0 {
+			return 0
+		}
+		if n > room {
+			n = room
+		}
+	}
+	s.AddCounter(p.Owner, p.Kind, n)
+	return n
+}
