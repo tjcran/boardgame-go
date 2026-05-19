@@ -16,14 +16,17 @@ type QueuedAction struct {
 // a player input arrives.
 //
 // Data is opaque to the engine — apps use it to carry context across
-// the pause (the candidate-targets list, the source card ID, etc.) so
-// the resume move can read mc.G or the matching block from
-// State.Blocks.
+// the pause (the source card ID, mode flags, etc.) so the resume move
+// can read mc.G or the matching block from State.Blocks. For the
+// common "ask a player to pick from a candidate set" case, prefer the
+// typed Target field plus Queue.RequestTarget — clients and replays
+// see a structured shape they can render and validate.
 type BlockSpec struct {
-	Tag      string `json:"tag"`
-	PlayerID string `json:"playerID"`
-	Order    int    `json:"order,omitempty"` // reserved; ignored by v1 reducer
-	Data     any    `json:"data,omitempty"`
+	Tag      string         `json:"tag"`
+	PlayerID string         `json:"playerID"`
+	Order    int            `json:"order,omitempty"` // reserved; ignored by v1 reducer
+	Data     any            `json:"data,omitempty"`
+	Target   *TargetRequest `json:"target,omitempty"`
 }
 
 // Queue is the API exposed to moves via MoveContext.Queue. Like
@@ -54,6 +57,26 @@ func (q *Queue) Push(playerID, move string, args ...any) {
 func (q *Queue) Block(tag, playerID string, data any) {
 	q.blocks = append(q.blocks, BlockSpec{
 		Tag: tag, PlayerID: playerID, Data: data,
+	})
+}
+
+// RequestTarget is the typed sibling of Block: it pauses the cascade
+// and records a TargetRequest the transport / UI / replay can render
+// and validate against. Tag is set to req.Kind, so the resume move's
+// MoveRequest.ResumeTag should match req.Kind.
+//
+// Games that need multiple concurrent requests of the same Kind (rare)
+// can disambiguate by either calling Block directly with a unique Tag
+// or including a discriminator in req.Data.
+//
+// The resume move reads the typed request via mc.ResumingBlock.Target
+// and validates the player's selection with ValidateSelection.
+func (q *Queue) RequestTarget(playerID string, req TargetRequest) {
+	r := req
+	q.blocks = append(q.blocks, BlockSpec{
+		Tag:      req.Kind,
+		PlayerID: playerID,
+		Target:   &r,
 	})
 }
 

@@ -82,13 +82,18 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 
 	// Resume-tag handling: remove a matching block before the move runs.
 	// If no match, refuse — the tag implies the caller thinks they're
-	// resolving a specific pause that doesn't exist.
+	// resolving a specific pause that doesn't exist. The consumed block
+	// is stashed in `resumingBlock` so the move can read what it's
+	// resuming (e.g. ResumingBlock.Target for typed target requests).
+	var resumingBlock *BlockSpec
 	if req.ResumeTag != "" {
 		idx := findBlock(state.Blocks, req.ResumeTag, req.PlayerID)
 		if idx < 0 {
 			return state, fmt.Errorf("%w: tag=%s player=%s",
 				ErrUnknownResumeTag, req.ResumeTag, req.PlayerID)
 		}
+		b := state.Blocks[idx]
+		resumingBlock = &b
 		state.Blocks = append(state.Blocks[:idx], state.Blocks[idx+1:]...)
 	}
 
@@ -124,13 +129,14 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		defer cancel()
 	}
 	mc := &MoveContext{
-		G:        state.G,
-		Ctx:      state.Ctx,
-		PlayerID: req.PlayerID,
-		Events:   events,
-		Plugins:  plugins,
-		Context:  moveCtx,
-		Queue:    queue,
+		G:             state.G,
+		Ctx:           state.Ctx,
+		PlayerID:      req.PlayerID,
+		Events:        events,
+		Plugins:       plugins,
+		Context:       moveCtx,
+		Queue:         queue,
+		ResumingBlock: resumingBlock,
 	}
 	// Ergonomic shortcut: if the Random plugin is registered, expose its
 	// API as mc.Random so moves can write `mc.Random.D6()` instead of

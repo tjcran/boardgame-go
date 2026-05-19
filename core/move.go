@@ -37,6 +37,16 @@ type MoveContext struct {
 	// input. Drained by the reducer after the move + Events drain.
 	Queue *Queue
 
+	// ResumingBlock is the BlockSpec this move resumed, when applicable.
+	// The reducer sets it on the MoveContext of an external move whose
+	// MoveRequest.ResumeTag matched a pending block; the block has
+	// already been removed from State.Blocks by the time the move runs.
+	// Nil for non-resume external moves and for all drain-step moves.
+	//
+	// Use ResumingBlock.Target (when non-nil) plus ValidateSelection to
+	// process the player's chosen targets in the resume handler.
+	ResumingBlock *BlockSpec
+
 	// extra holds AddLog entries appended during this MoveContext's
 	// lifetime. Engine-only; not visible to plugins.
 	extra *extraLog
