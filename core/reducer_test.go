@@ -172,3 +172,47 @@ func TestLogEntryStageEmptyOutsideStage(t *testing.T) {
 		t.Fatalf("outside-stage move log entry Stage = %q, want empty", last.Stage)
 	}
 }
+
+func TestDrainStepLogEntryStampsStage(t *testing.T) {
+	// A move that enters a stage and queues a follow-up via mc.Queue.Push
+	// produces a drain-step LogEntry. That drain entry should also carry
+	// Stage when the queued player is in one.
+	g := &Game{
+		Name: "drain-stage-test", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ Ctx, _ any) G { return map[string]int{} },
+		Moves: map[string]any{
+			"trigger": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
+				// Put player 0 in stage "discard" and queue a self-targeted
+				// follow-up. The follow-up runs in the drain and should
+				// inherit the stage.
+				mc.Events.SetActivePlayers(ActivePlayersConfig{
+					Value: map[string]string{"0": "discard"},
+				})
+				mc.Queue.Push("0", "follow")
+				return mc.G, nil
+			}),
+			"follow": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
+				return mc.G, nil
+			}),
+		},
+		Turn: &TurnConfig{MinMoves: 1, MaxMoves: 4},
+	}
+	s := NewMatch(g, 0, nil)
+	s, err := Apply(g, s, MoveRequest{PlayerID: "0", Move: "trigger"})
+	if err != nil {
+		t.Fatalf("trigger: %v", err)
+	}
+	// Find the drain-step entry for "follow" and assert its Stage.
+	var found bool
+	for _, e := range s.Log {
+		if e.Kind == "drain-step" && e.Move == "follow" {
+			found = true
+			if e.Stage != "discard" {
+				t.Fatalf("drain-step Stage = %q, want %q", e.Stage, "discard")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a drain-step entry for 'follow' in log, got %+v", s.Log)
+	}
+}

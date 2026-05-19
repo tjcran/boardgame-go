@@ -343,6 +343,7 @@ func applyStep(ctx context.Context, game *Game, state State, action QueuedAction
 		Args:     append([]any(nil), action.Args...),
 		Turn:     state.Ctx.Turn,
 		Phase:    state.Ctx.Phase,
+		Stage:    stage,
 		Parent:   parentIdx,
 	})
 	next = flushPlugins(game, next, mc)
