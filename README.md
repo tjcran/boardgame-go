@@ -428,6 +428,8 @@ imports it; importers pay nothing if their game isn't card-shaped.
 | **Action queue + drain primitive** (`mc.Queue.Push` / `Block` with `ResumeTag`) | MTG-style trigger cascades with pause/resume as first-class engine state | None — users hand-roll `processNext` moves |
 | **`modules/ccg/` library** (entities, zones, layered modifiers, event bus, target queries) | CCG / TCG / deckbuilder bookkeeping with no opinionated semantics | None |
 | **`modules/tabletop/` library** (Board interface w/ Square + Hex impls, positions w/ reverse index, terrain tags, LOS, dice pools, hit-wound-save Resolve) | Wargame-shape spatial + dice primitives, composes with `modules/ccg/` for unit stats | None |
+| **`modules/economy/` library** (Pool with cap, Gain/Spend/Set, Scaled income helper) | Deckbuilder / auto-battler turn-economy on top of `ccg.Counters` — currency semantics ccg's "clamps at 0" floor wouldn't give you | None |
+| **`modules/shop/` library** (Shop with Slots/Stock/Size, Freeze, Clear/Fill/Roll, Buy) | Refreshable market for shop-phase games; composes cleanly with `modules/economy/` for cost-paying | None |
 | **Compile-time-typed games** (`typedgame.Game[S]`) | `mc.G.Score` with no runtime asserts | TypeScript types help IDE; framework is still untyped at runtime |
 | **`Move.Timeout`** | Cooperative per-move cancellation via `context.Context` | None |
 | **`Move.IgnoreBlocks`** | Concede / forfeit can bypass cascade pause | None |
@@ -523,6 +525,12 @@ modules/ccg/  (opt-in) CCG-shape bookkeeping: entities, zones,
 modules/tabletop/ (opt-in) Wargame-shape spatial + dice primitives:
                 Board (Square/Hex), positions, terrain, LOS,
                 dice pools, hit-wound-save Resolve chain
+modules/economy/ (opt-in) Per-turn resource pools (gold, actions,
+                buys) with cap + Spend(ErrInsufficient), built on
+                ccg.Counters
+modules/shop/ (opt-in) Refreshable market with Freeze, Roll, Buy;
+                composes with modules/economy/ for cost-paying
+                purchases
 typedgame/    (opt-in) Generics wrapper over core for typed G
 match/        Manager: lifecycle, locks, broadcast, lifecycle hooks,
                 turn timers, janitor, OCC retry, schema migration
