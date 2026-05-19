@@ -263,6 +263,13 @@ analysis.
   `ResumeTag` matching) for MTG-style trigger cascades with pause/resume
 - **`modules/ccg/` library** — CCG/TCG bookkeeping (entities, zones, layered
   modifiers, sync event bus, target queries)
+- **`modules/tabletop/` library** — wargame spatial + dice primitives
+  (Board interface w/ Square + Hex impls, positions, terrain, LOS,
+  dice pools, hit-wound-save Resolve chain)
+- **`modules/economy/` library** — turn-resource pools (gold/actions/
+  buys) with cap + Spend(ErrInsufficient), built on `ccg.Counters`
+- **`modules/shop/` library** — refreshable market with Freeze, Roll,
+  Buy; composes with `modules/economy/` for cost-paying purchases
 - **Compile-time-typed games** via `typedgame.Game[S]` generics
 - **Cross-match concurrency** by default (goroutines vs Node event loop)
 - **Server-side bots** that don't block other matches; MCTS rollouts
