@@ -18,19 +18,21 @@ package ccg
 // cleanly; the routing table is rebuilt by the game's NewMatch
 // equivalent.
 type State struct {
-	Entities  map[EntityID]Entity      `json:"entities,omitempty"`
-	Zones     map[ZoneName]*Zone       `json:"zones,omitempty"`
-	Modifiers map[ModifierID]Modifier  `json:"modifiers,omitempty"`
-	Events    []Event                  `json:"events,omitempty"`
+	Entities       map[EntityID]Entity     `json:"entities,omitempty"`
+	Zones          map[ZoneName]*Zone      `json:"zones,omitempty"`
+	Modifiers      map[ModifierID]Modifier `json:"modifiers,omitempty"`
+	Events         []Event                 `json:"events,omitempty"`
+	PendingEffects []Effect                `json:"pending_effects,omitempty"`
 
-	// nextEntityID / nextModID / nextSubID / nextAbilityID are
-	// monotonic counters for stable IDs. Replay-safe: equal Setup +
-	// equal moves → equal IDs.
-	nextEntityID   uint64
-	nextModID      uint64
-	nextInsertion  int
-	nextSubID      uint64
-	nextAbilityID  uint64
+	// nextEntityID / nextModID / nextSubID / nextAbilityID /
+	// nextEffectID are monotonic counters for stable IDs. Replay-safe:
+	// equal Setup + equal moves → equal IDs.
+	nextEntityID  uint64
+	nextModID     uint64
+	nextInsertion int
+	nextSubID     uint64
+	nextAbilityID uint64
+	nextEffectID  uint64
 
 	// subs / abilities are in-memory tables (not serialised). The
 	// engine re-registers them at process start the same way it
