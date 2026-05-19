@@ -168,3 +168,124 @@ func TestLifecycleNonMoveEventsHaveZeroPrevState(t *testing.T) {
 		t.Errorf("non-move event should have nil LogDelta, got %v", seen.LogDelta)
 	}
 }
+
+func TestLifecycleMoveRejectedFires(t *testing.T) {
+	// Dispatch a move that core.ApplyContext rejects (here: an unknown
+	// move name). Verify a LifecycleMatchMoveRejected event fires with
+	// the expected fields.
+	g := &core.Game{
+		Name: "rejected-test", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ any) core.G { return map[string]int{} },
+		Moves: map[string]any{
+			"act": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+				return mc.G, nil
+			}),
+		},
+		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+	m := NewManager(storage.NewMemory())
+	m.MustRegister(g)
+
+	var seen LifecycleEvent
+	m.OnLifecycleKind(LifecycleMatchMoveRejected, func(ev LifecycleEvent) {
+		seen = ev
+	})
+
+	id, _ := m.Create("rejected-test", CreateOptions{})
+	alice, _ := m.Join(id, "alice", JoinOptions{})
+	_, _ = m.Join(id, "bob", JoinOptions{})
+
+	// Dispatch a move that doesn't exist in the game's Moves map.
+	_, err := m.Move(id, alice.PlayerID, alice.PlayerCredentials, "nope", nil)
+	if err == nil {
+		t.Fatal("expected error from unknown move, got nil")
+	}
+
+	if seen.Kind != LifecycleMatchMoveRejected {
+		t.Fatalf("expected LifecycleMatchMoveRejected, got %q", seen.Kind)
+	}
+	if seen.MatchID != id {
+		t.Errorf("MatchID = %q, want %q", seen.MatchID, id)
+	}
+	if seen.PlayerID != alice.PlayerID {
+		t.Errorf("PlayerID = %q, want %q", seen.PlayerID, alice.PlayerID)
+	}
+	if seen.Move != "nope" {
+		t.Errorf("Move = %q, want \"nope\"", seen.Move)
+	}
+	if seen.Err == nil {
+		t.Errorf("Err should be non-nil for rejected event")
+	}
+	if seen.StateID < 0 {
+		t.Errorf("StateID = %d, want >= 0", seen.StateID)
+	}
+}
+
+func TestLifecycleMoveRejectedDoesNotFireForAcceptedMove(t *testing.T) {
+	// A successful move fires LifecycleMatchMoved, not Rejected.
+	g := &core.Game{
+		Name: "no-spurious-reject", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ any) core.G { return map[string]int{} },
+		Moves: map[string]any{
+			"act": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+				return mc.G, nil
+			}),
+		},
+		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+	m := NewManager(storage.NewMemory())
+	m.MustRegister(g)
+
+	var rejectedCount int
+	m.OnLifecycleKind(LifecycleMatchMoveRejected, func(ev LifecycleEvent) {
+		rejectedCount++
+	})
+
+	id, _ := m.Create("no-spurious-reject", CreateOptions{})
+	alice, _ := m.Join(id, "alice", JoinOptions{})
+	_, _ = m.Join(id, "bob", JoinOptions{})
+
+	if _, err := m.Move(id, alice.PlayerID, alice.PlayerCredentials, "act", nil); err != nil {
+		t.Fatalf("Move: %v", err)
+	}
+	if rejectedCount != 0 {
+		t.Errorf("Rejected event should not fire on accepted move, fired %d times", rejectedCount)
+	}
+}
+
+func TestLifecycleMoveRejectedDoesNotFireForCredentialFailure(t *testing.T) {
+	// Credential failures are filtered earlier in MoveReqCtx — before
+	// core.ApplyContext runs. The Rejected event is for game-logic
+	// rejections specifically; auth failures are a separate category.
+	g := &core.Game{
+		Name: "no-auth-reject", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ any) core.G { return map[string]int{} },
+		Moves: map[string]any{
+			"act": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+				return mc.G, nil
+			}),
+		},
+		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+	m := NewManager(storage.NewMemory())
+	m.MustRegister(g)
+
+	var rejectedCount int
+	m.OnLifecycleKind(LifecycleMatchMoveRejected, func(ev LifecycleEvent) {
+		rejectedCount++
+	})
+
+	id, _ := m.Create("no-auth-reject", CreateOptions{})
+	alice, _ := m.Join(id, "alice", JoinOptions{})
+	_, _ = m.Join(id, "bob", JoinOptions{})
+
+	// Dispatch with wrong credentials. Should error, but NOT fire the
+	// game-logic rejected event.
+	_, err := m.Move(id, alice.PlayerID, "wrong-creds", "act", nil)
+	if err == nil {
+		t.Fatal("expected credential error")
+	}
+	if rejectedCount != 0 {
+		t.Errorf("credential failure should not fire Rejected lifecycle event, fired %d times", rejectedCount)
+	}
+}

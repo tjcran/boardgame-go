@@ -489,7 +489,7 @@ handlers (the doc comment shows the pattern). Engine never imports it.
 |---|---|---|
 | **Cross-match concurrency by default** (goroutines) | Manager flat at ~3 µs/op across 1–64 concurrent matches | Single Node event loop bottlenecks everything |
 | **Action queue + drain primitive** (`mc.Queue.Push` / `Block` with `ResumeTag`) | MTG-style trigger cascades with pause/resume as first-class engine state | None — users hand-roll `processNext` moves |
-| **Per-move observability primitives** (`LifecycleMatchMoved.PrevState` + `LogDelta`, `Game.BeforePersist`, `LogEntry.Stage`) | Replay validation, audit feeds, AI training data collection — engine-driven recording with no per-observer bookkeeping | None |
+| **Per-move observability primitives** (`LifecycleMatchMoved.PrevState` + `LogDelta`, `LifecycleMatchMoveRejected.Err` + `StateID`, `Game.BeforePersist`, `LogEntry.Stage`) | Replay validation, audit feeds, anti-cheat telemetry, AI training data collection — engine-driven recording for both accepted and rejected moves with no per-observer bookkeeping | None |
 | **`modules/ccg/` library** (entities, zones, layered modifiers, event bus, target queries) | CCG / TCG / deckbuilder bookkeeping with no opinionated semantics | None |
 | **`modules/tabletop/` library** (Board interface w/ Square + Hex impls, positions w/ reverse index, terrain tags, LOS, dice pools, hit-wound-save Resolve) | Wargame-shape spatial + dice primitives, composes with `modules/ccg/` for unit stats | None |
 | **`modules/economy/` library** (Pool with cap, Gain/Spend/Set, Scaled income helper) | Deckbuilder / auto-battler turn-economy on top of `ccg.Counters` — currency semantics ccg's "clamps at 0" floor wouldn't give you | None |

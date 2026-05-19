@@ -11,12 +11,13 @@ import (
 type LifecycleEventKind string
 
 const (
-	LifecycleMatchCreated  LifecycleEventKind = "match.created"
-	LifecycleMatchJoined   LifecycleEventKind = "match.joined"
-	LifecycleMatchLeft     LifecycleEventKind = "match.left"
-	LifecycleMatchMoved    LifecycleEventKind = "match.moved"
-	LifecycleMatchGameOver LifecycleEventKind = "match.gameOver"
-	LifecycleMatchReset    LifecycleEventKind = "match.reset"
+	LifecycleMatchCreated      LifecycleEventKind = "match.created"
+	LifecycleMatchJoined       LifecycleEventKind = "match.joined"
+	LifecycleMatchLeft         LifecycleEventKind = "match.left"
+	LifecycleMatchMoved        LifecycleEventKind = "match.moved"
+	LifecycleMatchMoveRejected LifecycleEventKind = "match.moveRejected"
+	LifecycleMatchGameOver     LifecycleEventKind = "match.gameOver"
+	LifecycleMatchReset        LifecycleEventKind = "match.reset"
 )
 
 // LifecycleEvent is dispatched to handlers registered with
@@ -29,7 +30,8 @@ type LifecycleEvent struct {
 	PlayerID string
 	State    core.State
 	Match    *storage.Match
-	// Move and Args are set for LifecycleMatchMoved events.
+	// Move and Args are set for LifecycleMatchMoved and
+	// LifecycleMatchMoveRejected events.
 	Move string
 	Args []any
 	// PrevState is the pre-move snapshot captured just before
@@ -42,6 +44,17 @@ type LifecycleEvent struct {
 	// for observer convenience so consumers don't have to compute the
 	// slice math themselves. Nil for non-move event kinds.
 	LogDelta []core.LogEntry
+	// Err is the rejection reason for LifecycleMatchMoveRejected events.
+	// Nil for all other event kinds. Observers can use errors.Is to
+	// dispatch on specific rejection causes (stale state, unauthorized,
+	// blocked, unknown move, etc.).
+	Err error
+	// StateID is the match's current state ID at the time of a
+	// LifecycleMatchMoveRejected event — useful for observers
+	// correlating rejections to specific match-state revisions.
+	// Zero for all other event kinds (which expose State.StateID
+	// instead).
+	StateID int
 }
 
 // LifecycleHandler receives lifecycle events. Handlers run synchronously
