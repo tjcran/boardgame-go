@@ -266,6 +266,12 @@ analysis.
   with `Err` and `StateID` when the engine rejects a move;
   `Game.BeforePersist` lets games scrub transient state from storage;
   `LogEntry.Stage` self-describes exported logs
+- **Server-driven move ingress** — `Manager.DispatchServer` dispatches
+  moves on the server's behalf (no credentials needed), and
+  `Move.ServerOnly` is now enforced in `MoveReqCtx` so credentialed
+  clients can't call server-only moves. Together they form the
+  asymmetric model: clients call non-ServerOnly moves; the server
+  calls anything.
 - **`modules/ccg/` library** — CCG/TCG bookkeeping (entities, zones, layered
   modifiers, sync event bus, target queries)
 - **`modules/tabletop/` library** — wargame spatial + dice primitives
