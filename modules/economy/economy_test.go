@@ -130,3 +130,59 @@ func TestPoolSpendNegativeErrors(t *testing.T) {
 		t.Fatal("Spend(negative) should error to prevent the Spend→Gain footgun")
 	}
 }
+
+func TestPoolSetOverwritesToExactValue(t *testing.T) {
+	s, id := newPlayerState()
+	gold := economy.Pool{Owner: id, Kind: "gold", Cap: 10}
+	gold.Gain(s, 7)
+	final := gold.Set(s, 4)
+	if final != 4 {
+		t.Errorf("Set returned %d, want 4", final)
+	}
+	if gold.Current(s) != 4 {
+		t.Errorf("Current after Set(4) = %d, want 4", gold.Current(s))
+	}
+}
+
+func TestPoolSetClampsToCap(t *testing.T) {
+	s, id := newPlayerState()
+	gold := economy.Pool{Owner: id, Kind: "gold", Cap: 10}
+	final := gold.Set(s, 99)
+	if final != 10 {
+		t.Errorf("Set above cap should clamp to %d, got %d", 10, final)
+	}
+	if gold.Current(s) != 10 {
+		t.Errorf("Current after Set(99) on cap=10 pool = %d, want 10", gold.Current(s))
+	}
+}
+
+func TestPoolSetNegativeClampsToZero(t *testing.T) {
+	s, id := newPlayerState()
+	gold := economy.Pool{Owner: id, Kind: "gold", Cap: 10}
+	gold.Gain(s, 5)
+	final := gold.Set(s, -3)
+	if final != 0 {
+		t.Errorf("Set(negative) should clamp to 0, got %d", final)
+	}
+}
+
+func TestScaledLinear(t *testing.T) {
+	cases := []struct {
+		turn, base, per, max, want int
+	}{
+		{1, 4, 1, 10, 4}, // turn 1: just base
+		{2, 4, 1, 10, 5},
+		{5, 4, 1, 10, 8},
+		{7, 4, 1, 10, 10}, // capped
+		{99, 4, 1, 10, 10},
+		{1, 1, 0, 0, 1},  // no growth, no cap
+		{0, 4, 1, 10, 3}, // turn 0 → base - per (edge: not all games are 1-indexed)
+	}
+	for _, c := range cases {
+		got := economy.Scaled(c.turn, c.base, c.per, c.max)
+		if got != c.want {
+			t.Errorf("Scaled(turn=%d,base=%d,per=%d,max=%d) = %d, want %d",
+				c.turn, c.base, c.per, c.max, got, c.want)
+		}
+	}
+}

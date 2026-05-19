@@ -76,3 +76,21 @@ func (p Pool) Spend(s *ccg.State, n int) error {
 	s.RemoveCounter(p.Owner, p.Kind, n)
 	return nil
 }
+
+// Set overwrites the pool to exactly n, clamped to [0, Cap]. Returns
+// the final value (post-clamp). The transition fires the ccg
+// counter_changed event with the applied delta — handlers see the same
+// signal as if Gain or Spend had produced this outcome.
+func (p Pool) Set(s *ccg.State, n int) int {
+	if n < 0 {
+		n = 0
+	}
+	if p.Cap > 0 && n > p.Cap {
+		n = p.Cap
+	}
+	delta := n - p.Current(s)
+	if delta != 0 {
+		s.AddCounter(p.Owner, p.Kind, delta)
+	}
+	return n
+}
