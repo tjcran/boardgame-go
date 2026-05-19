@@ -28,6 +28,12 @@ type LogEntry struct {
 	// Phase at the time this entry was written.
 	Phase string `json:"phase,omitempty"`
 
+	// Stage is the active stage the dispatching player was in at write
+	// time, as read from state.Ctx.ActivePlayers[PlayerID]. Empty for
+	// moves dispatched outside any stage (the typical case). Mirrors
+	// the empty-string-for-default convention used by Phase.
+	Stage string `json:"stage,omitempty"`
+
 	// Redact records whether this entry is hidden from non-initiating
 	// players. Resolved at write time so subsequent state changes don't
 	// alter the verdict.

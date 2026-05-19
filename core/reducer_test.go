@@ -113,3 +113,62 @@ func TestEndIfWritesGameoverAndFreezes(t *testing.T) {
 		t.Fatalf("expected ErrGameOver, got %v", err)
 	}
 }
+
+func TestLogEntryStampsStage(t *testing.T) {
+	// A two-player game with a stage. Player 0 enters the "discard" stage
+	// via SetActivePlayers, then dispatches a move. The resulting log
+	// entry should carry Stage="discard".
+	g := &Game{
+		Name: "stage-log-test", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ Ctx, _ any) G { return map[string]int{"n": 0} },
+		Moves: map[string]any{
+			"act": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
+				return mc.G, nil
+			}),
+			"enterStage": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
+				mc.Events.SetActivePlayers(ActivePlayersConfig{
+					Value: map[string]string{"0": "discard"},
+				})
+				return mc.G, nil
+			}),
+		},
+		Turn: &TurnConfig{MinMoves: 1, MaxMoves: 8},
+	}
+	s := NewMatch(g, 0, nil)
+
+	// Move 1: enter the stage.
+	s, err := Apply(g, s, MoveRequest{PlayerID: "0", Move: "enterStage"})
+	if err != nil {
+		t.Fatalf("enterStage: %v", err)
+	}
+	// Move 2: act while in stage "discard".
+	s, err = Apply(g, s, MoveRequest{PlayerID: "0", Move: "act"})
+	if err != nil {
+		t.Fatalf("act-in-stage: %v", err)
+	}
+	// The second move's log entry should carry Stage="discard".
+	if last := s.Log[len(s.Log)-1]; last.Stage != "discard" {
+		t.Fatalf("in-stage move log entry Stage = %q, want %q", last.Stage, "discard")
+	}
+}
+
+func TestLogEntryStageEmptyOutsideStage(t *testing.T) {
+	g := &Game{
+		Name: "stage-log-test-2", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ Ctx, _ any) G { return map[string]int{} },
+		Moves: map[string]any{
+			"act": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
+				return mc.G, nil
+			}),
+		},
+		Turn: &TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+	s := NewMatch(g, 0, nil)
+	s, err := Apply(g, s, MoveRequest{PlayerID: "0", Move: "act"})
+	if err != nil {
+		t.Fatalf("act: %v", err)
+	}
+	if last := s.Log[len(s.Log)-1]; last.Stage != "" {
+		t.Fatalf("outside-stage move log entry Stage = %q, want empty", last.Stage)
+	}
+}

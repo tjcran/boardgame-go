@@ -178,6 +178,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		Args:      append([]any(nil), req.Args...),
 		Turn:      state.Ctx.Turn,
 		Phase:     state.Ctx.Phase,
+		Stage:     state.Ctx.ActivePlayers[req.PlayerID],
 		Redact:    redact,
 		Undoable:  undoable,
 		Parent:    -1,
