@@ -3,6 +3,7 @@ package shop_test
 import (
 	"testing"
 
+	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/modules/ccg"
 	"github.com/tjcran/boardgame-go/modules/shop"
 )
@@ -133,5 +134,77 @@ func TestShopClearAllFrozenIsNoOp(t *testing.T) {
 	}
 	if s.Size("market") != 2 {
 		t.Errorf("all-frozen Clear should be no-op, got Slots size %d", s.Size("market"))
+	}
+}
+
+// newRng builds a *core.Random from a known seed so tests are deterministic.
+func newRng(seed uint64) *core.Random {
+	s := seed
+	return core.NewRandomFromState(&s)
+}
+
+func TestShopFillBringsSlotsUpToSize(t *testing.T) {
+	s, _, _ := newShopState(t, 0, 7) // empty market, 7 in stock
+	sh := shop.Shop{Slots: "market", Stock: "stock", Size: 5}
+
+	r := newRng(1)
+	if err := sh.Fill(s, r); err != nil {
+		t.Fatalf("Fill: %v", err)
+	}
+	if got := s.Size("market"); got != 5 {
+		t.Errorf("after Fill, Slots size = %d, want 5", got)
+	}
+	if got := s.Size("stock"); got != 2 {
+		t.Errorf("after Fill, Stock should have 7-5=2 left, got %d", got)
+	}
+}
+
+func TestShopFillPartialWhenStockShortOfSize(t *testing.T) {
+	s, slots, _ := newShopState(t, 1, 2) // market has 1, stock has 2, target 5
+	sh := shop.Shop{Slots: "market", Stock: "stock", Size: 5}
+
+	r := newRng(2)
+	if err := sh.Fill(s, r); err != nil {
+		t.Fatalf("Fill: %v", err)
+	}
+	// Slots had 1 + drew 2 (all of stock) = 3, short of Size=5. No error.
+	if got := s.Size("market"); got != 3 {
+		t.Errorf("Fill should add what stock can supply, Slots size = %d, want 3", got)
+	}
+	if got := s.Size("stock"); got != 0 {
+		t.Errorf("Stock should be empty, got %d", got)
+	}
+	if !s.Contains("market", slots[0]) {
+		t.Errorf("original Slot entity should still be there after Fill")
+	}
+}
+
+func TestShopFillIsNoopWhenAtSize(t *testing.T) {
+	s, _, _ := newShopState(t, 5, 3)
+	sh := shop.Shop{Slots: "market", Stock: "stock", Size: 5}
+
+	r := newRng(3)
+	if err := sh.Fill(s, r); err != nil {
+		t.Fatalf("Fill: %v", err)
+	}
+	if got := s.Size("stock"); got != 3 {
+		t.Errorf("Fill at-Size should not touch Stock, got %d", got)
+	}
+}
+
+func TestShopRollClearsThenFills(t *testing.T) {
+	s, _, _ := newShopState(t, 3, 10)
+	sh := shop.Shop{Slots: "market", Stock: "stock", Size: 5}
+
+	r := newRng(4)
+	if err := sh.Roll(s, r, ""); err != nil {
+		t.Fatalf("Roll: %v", err)
+	}
+	if got := s.Size("market"); got != 5 {
+		t.Errorf("after Roll, Slots should be at Size=5, got %d", got)
+	}
+	// 3 old (destroyed) + 5 drawn = stock down to 10-5=5.
+	if got := s.Size("stock"); got != 5 {
+		t.Errorf("Roll should have drawn 5 from stock, got %d remaining", got)
 	}
 }
