@@ -178,6 +178,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		Args:      append([]any(nil), req.Args...),
 		Turn:      state.Ctx.Turn,
 		Phase:     state.Ctx.Phase,
+		Stage:     state.Ctx.ActivePlayers[req.PlayerID],
 		Redact:    redact,
 		Undoable:  undoable,
 		Parent:    -1,
@@ -342,6 +343,7 @@ func applyStep(ctx context.Context, game *Game, state State, action QueuedAction
 		Args:     append([]any(nil), action.Args...),
 		Turn:     state.Ctx.Turn,
 		Phase:    state.Ctx.Phase,
+		Stage:    stage,
 		Parent:   parentIdx,
 	})
 	next = flushPlugins(game, next, mc)

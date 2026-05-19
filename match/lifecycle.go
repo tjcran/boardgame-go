@@ -32,6 +32,16 @@ type LifecycleEvent struct {
 	// Move and Args are set for LifecycleMatchMoved events.
 	Move string
 	Args []any
+	// PrevState is the pre-move snapshot captured just before
+	// core.ApplyContext ran. Populated only for LifecycleMatchMoved;
+	// zero value for all other event kinds. Equal Setup + equal moves
+	// → equal PrevState (replay-safe).
+	PrevState core.State
+	// LogDelta is the slice of log entries appended during this move
+	// and its drain — equal to State.Log[len(PrevState.Log):]. Provided
+	// for observer convenience so consumers don't have to compute the
+	// slice math themselves. Nil for non-move event kinds.
+	LogDelta []core.LogEntry
 }
 
 // LifecycleHandler receives lifecycle events. Handlers run synchronously

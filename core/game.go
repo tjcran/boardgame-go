@@ -94,6 +94,19 @@ type Game struct {
 	// such hook today.
 	OnUndo HookFn
 
+	// BeforePersist, if set, is called with the post-move state just
+	// before it is handed to storage.Update. It returns the state to
+	// persist — typically a copy with transient / in-memory-only fields
+	// (effect-cascade queues, drain cursors, ephemeral per-move
+	// counters that regenerate on load) cleared. The in-memory match
+	// state, broadcast subscribers, and lifecycle observers all keep
+	// the full state; only storage sees the trim.
+	//
+	// Nil-default — without this hook, state is persisted unmodified.
+	// Pairs with OnUndo, which is the analogous transient-scrub for
+	// the undo path.
+	BeforePersist func(state State) State
+
 	// PlayerView, if set, is called before pushing state to a client to
 	// redact G per-seat.
 	PlayerView PlayerViewFn

@@ -838,10 +838,12 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 
 	var (
 		next         core.State
+		prevState    core.State
 		prevGameover any
 	)
 	for attempt := 0; ; attempt++ {
 		prevGameover = match.State.Ctx.Gameover
+		prevState = match.State // pre-move snapshot for lifecycle observers
 		var err error
 		next, err = core.ApplyContext(ctx, g, match.State, req)
 		if err != nil {
@@ -854,12 +856,23 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 		}
 		match.State = next
 
+		// If the game defined BeforePersist, build a synthetic match copy
+		// with the trimmed state for the storage call. Leaves `match`
+		// itself with the full state so subsequent broadcast / lifecycle
+		// observers see everything.
+		persistMatch := match
+		if g.BeforePersist != nil {
+			pCopy := *match
+			pCopy.State = g.BeforePersist(next)
+			persistMatch = &pCopy
+		}
+
 		var writeErr error
 		if useOCC {
 			expected := next.StateID - 1 // we just incremented it
-			writeErr = occ.UpdateIfStateID(match, expected)
+			writeErr = occ.UpdateIfStateID(persistMatch, expected)
 		} else {
-			writeErr = m.store.Update(match)
+			writeErr = m.store.Update(persistMatch)
 		}
 		if writeErr == nil {
 			break
@@ -892,6 +905,8 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 		Kind: LifecycleMatchMoved, MatchID: matchID,
 		PlayerID: playerID, State: next, Match: match,
 		Move: req.Move, Args: req.Args,
+		PrevState: prevState,
+		LogDelta:  next.Log[len(prevState.Log):],
 	})
 	if next.Ctx.Gameover != nil && prevGameover == nil {
 		// Game just ended on this move.
