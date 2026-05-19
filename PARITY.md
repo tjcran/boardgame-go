@@ -261,6 +261,10 @@ analysis.
 
 - **Action queue + drain primitive** (`mc.Queue.Push` / `Block` with
   `ResumeTag` matching) for MTG-style trigger cascades with pause/resume
+- **Per-move observability primitives** — `LifecycleMatchMoved` events
+  carry `PrevState` and `LogDelta`; `Game.BeforePersist` lets games
+  scrub transient state from storage; `LogEntry.Stage` self-describes
+  exported logs
 - **`modules/ccg/` library** — CCG/TCG bookkeeping (entities, zones, layered
   modifiers, sync event bus, target queries)
 - **`modules/tabletop/` library** — wargame spatial + dice primitives
