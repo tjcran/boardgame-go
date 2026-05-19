@@ -838,10 +838,12 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 
 	var (
 		next         core.State
+		prevState    core.State
 		prevGameover any
 	)
 	for attempt := 0; ; attempt++ {
 		prevGameover = match.State.Ctx.Gameover
+		prevState = match.State // pre-move snapshot for lifecycle observers
 		var err error
 		next, err = core.ApplyContext(ctx, g, match.State, req)
 		if err != nil {
@@ -903,6 +905,8 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 		Kind: LifecycleMatchMoved, MatchID: matchID,
 		PlayerID: playerID, State: next, Match: match,
 		Move: req.Move, Args: req.Args,
+		PrevState: prevState,
+		LogDelta:  next.Log[len(prevState.Log):],
 	})
 	if next.Ctx.Gameover != nil && prevGameover == nil {
 		// Game just ended on this move.
