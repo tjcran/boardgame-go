@@ -23,12 +23,12 @@ import (
 // Errors returned by Manager. They're surfaced through the HTTP layer with
 // appropriate status codes (see server package).
 var (
-	ErrUnknownGame      = errors.New("unknown game")
-	ErrSeatTaken        = errors.New("seat already taken")
-	ErrNoSeatsLeft      = errors.New("no seats available")
-	ErrUnknownSeat      = errors.New("player not seated in this match")
-	ErrSeatRequired     = errors.New("game not yet ready (seats unfilled)")
-	ErrBadCredentials   = errors.New("invalid credentials")
+	ErrUnknownGame    = errors.New("unknown game")
+	ErrSeatTaken      = errors.New("seat already taken")
+	ErrNoSeatsLeft    = errors.New("no seats available")
+	ErrUnknownSeat    = errors.New("player not seated in this match")
+	ErrSeatRequired   = errors.New("game not yet ready (seats unfilled)")
+	ErrBadCredentials = errors.New("invalid credentials")
 )
 
 // GenerateCredentialsFn produces an opaque token for a freshly joined
@@ -852,6 +852,14 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 				"player_id", playerID,
 				"move", req.Move,
 				"err", err.Error())
+			m.fireLifecycle(LifecycleEvent{
+				Kind: LifecycleMatchMoveRejected, MatchID: matchID,
+				PlayerID: playerID,
+				Move:     req.Move,
+				Args:     req.Args,
+				Err:      err,
+				StateID:  match.State.StateID,
+			})
 			return core.State{}, err
 		}
 		match.State = next
