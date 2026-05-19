@@ -208,3 +208,45 @@ func TestShopRollClearsThenFills(t *testing.T) {
 		t.Errorf("Roll should have drawn 5 from stock, got %d remaining", got)
 	}
 }
+
+func TestShopBuyMovesItemToDestination(t *testing.T) {
+	s, slots, _ := newShopState(t, 3, 0)
+	s.NewZone("hand", false)
+	sh := shop.Shop{Slots: "market", Stock: "stock", Size: 5}
+
+	if err := sh.Buy(s, slots[1], "hand"); err != nil {
+		t.Fatalf("Buy: %v", err)
+	}
+	if s.Contains("market", slots[1]) {
+		t.Errorf("bought item should leave Slots")
+	}
+	if !s.Contains("hand", slots[1]) {
+		t.Errorf("bought item should land in hand")
+	}
+}
+
+func TestShopBuyRejectsNonSlotEntity(t *testing.T) {
+	s, _, _ := newShopState(t, 0, 0)
+	s.NewZone("hand", false)
+	stranger := s.NewEntity("card", "", nil)
+	sh := shop.Shop{Slots: "market", Stock: "stock", Size: 5}
+
+	if err := sh.Buy(s, stranger, "hand"); err != shop.ErrNotInSlots {
+		t.Errorf("Buy on non-slot entity should return ErrNotInSlots, got %v", err)
+	}
+}
+
+func TestShopBuyClearsFreezeFlag(t *testing.T) {
+	s, slots, _ := newShopState(t, 2, 0)
+	s.NewZone("hand", false)
+	sh := shop.Shop{Slots: "market", Stock: "stock", Size: 5}
+	if err := sh.Freeze(s, slots[0]); err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	if err := sh.Buy(s, slots[0], "hand"); err != nil {
+		t.Fatalf("Buy: %v", err)
+	}
+	if sh.IsFrozen(s, slots[0]) {
+		t.Errorf("Buy should clear the freeze flag so the item doesn't carry shop state into the hand")
+	}
+}
