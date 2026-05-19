@@ -362,7 +362,7 @@ go vet -vettool=$(which boardgame-go-vet) ./...
 
 ### CCG / TCG library
 
-[`ccg/`](ccg/) — entities, zones, layered modifiers, sync event bus,
+[`modules/ccg/`](modules/ccg/) — entities, zones, layered modifiers, sync event bus,
 target queries, plus an optional `Catalog` of `CardDef` templates so
 games can stamp instances with `State.Instantiate(catalog, defID, owner)`,
 a `DeckList` + composable validators (`MinSize` / `MaxSize` /
@@ -387,7 +387,7 @@ style "empty deck loses" stays as the un-opinionated default), and
 event subscription that auto-unbinds when the entity leaves the
 listed zones or is destroyed, closing the classic "creature still
 triggers from the graveyard because someone forgot Unsubscribe"
-bug. The optional [`ccg/typed`](ccg/typed/) sub-package adds generic
+bug. The optional [`modules/ccg/typed`](modules/ccg/typed/) sub-package adds generic
 `CardDef[A]` / `Catalog[A]` so games can author card templates whose
 Attrs is a typed struct; the underlying untyped `ccg.Catalog` is
 reachable via `cat.Untyped()` and flows through `State.Instantiate`
@@ -426,8 +426,8 @@ imports it; importers pay nothing if their game isn't card-shaped.
 |---|---|---|
 | **Cross-match concurrency by default** (goroutines) | Manager flat at ~3 µs/op across 1–64 concurrent matches | Single Node event loop bottlenecks everything |
 | **Action queue + drain primitive** (`mc.Queue.Push` / `Block` with `ResumeTag`) | MTG-style trigger cascades with pause/resume as first-class engine state | None — users hand-roll `processNext` moves |
-| **`ccg/` library** (entities, zones, layered modifiers, event bus, target queries) | CCG / TCG / deckbuilder bookkeeping with no opinionated semantics | None |
-| **`tabletop/` library** (Board interface w/ Square + Hex impls, positions w/ reverse index, terrain tags, LOS, dice pools, hit-wound-save Resolve) | Wargame-shape spatial + dice primitives, composes with `ccg/` for unit stats | None |
+| **`modules/ccg/` library** (entities, zones, layered modifiers, event bus, target queries) | CCG / TCG / deckbuilder bookkeeping with no opinionated semantics | None |
+| **`modules/tabletop/` library** (Board interface w/ Square + Hex impls, positions w/ reverse index, terrain tags, LOS, dice pools, hit-wound-save Resolve) | Wargame-shape spatial + dice primitives, composes with `modules/ccg/` for unit stats | None |
 | **Compile-time-typed games** (`typedgame.Game[S]`) | `mc.G.Score` with no runtime asserts | TypeScript types help IDE; framework is still untyped at runtime |
 | **`Move.Timeout`** | Cooperative per-move cancellation via `context.Context` | None |
 | **`Move.IgnoreBlocks`** | Concede / forfeit can bypass cascade pause | None |
@@ -518,9 +518,9 @@ go test -bench . ./bench/    # cross-match concurrency numbers
 core/         pure game engine — no I/O, no concurrency primitives
                 Game, State, Ctx, Move(Context), Events, Queue,
                 Turn/Phase/Stage, Plugin interface, Replay, Undo
-ccg/          (opt-in) CCG-shape bookkeeping: entities, zones,
+modules/ccg/  (opt-in) CCG-shape bookkeeping: entities, zones,
                 modifiers (layered), event bus, target queries
-tabletop/     (opt-in) Wargame-shape spatial + dice primitives:
+modules/tabletop/ (opt-in) Wargame-shape spatial + dice primitives:
                 Board (Square/Hex), positions, terrain, LOS,
                 dice pools, hit-wound-save Resolve chain
 typedgame/    (opt-in) Generics wrapper over core for typed G
