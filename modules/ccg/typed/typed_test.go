@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tjcran/boardgame-go/ccg"
-	"github.com/tjcran/boardgame-go/ccg/typed"
+	"github.com/tjcran/boardgame-go/modules/ccg"
+	"github.com/tjcran/boardgame-go/modules/ccg/typed"
 )
 
 type goblinAttrs struct {

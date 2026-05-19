@@ -3,7 +3,7 @@ package ccg_test
 import (
 	"testing"
 
-	"github.com/tjcran/boardgame-go/ccg"
+	"github.com/tjcran/boardgame-go/modules/ccg"
 	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/plugins/random"
 )

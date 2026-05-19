@@ -261,7 +261,7 @@ analysis.
 
 - **Action queue + drain primitive** (`mc.Queue.Push` / `Block` with
   `ResumeTag` matching) for MTG-style trigger cascades with pause/resume
-- **`ccg/` library** — CCG/TCG bookkeeping (entities, zones, layered
+- **`modules/ccg/` library** — CCG/TCG bookkeeping (entities, zones, layered
   modifiers, sync event bus, target queries)
 - **Compile-time-typed games** via `typedgame.Game[S]` generics
 - **Cross-match concurrency** by default (goroutines vs Node event loop)

@@ -16,7 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/tjcran/boardgame-go/ccg"
+	"github.com/tjcran/boardgame-go/modules/ccg"
 )
 
 // CardDef is the typed mirror of ccg.CardDef. Attrs may be any type

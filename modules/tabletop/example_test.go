@@ -3,10 +3,10 @@ package tabletop_test
 import (
 	"testing"
 
-	"github.com/tjcran/boardgame-go/ccg"
+	"github.com/tjcran/boardgame-go/modules/ccg"
 	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/plugins/random"
-	"github.com/tjcran/boardgame-go/tabletop"
+	"github.com/tjcran/boardgame-go/modules/tabletop"
 )
 
 // miniWargame demonstrates tabletop + ccg + core composing for a

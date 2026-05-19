@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tjcran/boardgame-go/ccg"
+	"github.com/tjcran/boardgame-go/modules/ccg"
 	"github.com/tjcran/boardgame-go/core"
 )
 
