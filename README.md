@@ -1,14 +1,17 @@
 # boardgame-go
 
 A Go-based engine and authoritative server for turn-based board games,
-card games, deckbuilders, and engine-builders. Inspired by
+card games, deckbuilders, miniatures wargames, and auto-battlers.
+Inspired by
 [boardgame.io](https://github.com/boardgameio/boardgame.io); structurally
 a superset of its non-React surface, plus the features Go's runtime and
 type system make easy that JavaScript's don't.
 
 > **Status:** production-shaped. Full BGIO parity for the engine,
 > plugins, and lobby; 22+ open BGIO issues addressed (closed in our
-> port); CCG-shape primitives library on top. See
+> port); four opt-in `modules/` libraries on top — `ccg/` (CCG/TCG
+> bookkeeping), `tabletop/` (wargame spatial + dice), `economy/`
+> (turn-resource pools), `shop/` (refreshable market). See
 > [PARITY.md](PARITY.md), [GO_LEVERAGE.md](GO_LEVERAGE.md), and
 > [JS_LIMITATIONS.md](JS_LIMITATIONS.md) for the inventory.
 
@@ -203,19 +206,20 @@ game over).
 │   Invalidator│
 └──────────────┘
                     │
-   ┌──────────────────────────────┐  ┌─────────────────┐
-   │ bots/                        │  │ ccg/  (opt-in)  │
-   │   RandomBot                  │  │  entities       │
-   │   MCTSBot (Perspective)      │  │  zones          │
-   │   AutoPlayer                 │  │  modifiers      │
-   │   Simulate                   │  │  event bus      │
-   │   llm/  (OpenAI / OpenRouter │  │  target queries │
-   │          / Anthropic, tools) │  └─────────────────┘
-   └──────────────────────────────┘
+   ┌──────────────────────────────┐  ┌─────────────────────────────┐
+   │ bots/                        │  │ modules/   (all opt-in)     │
+   │   RandomBot                  │  │   ccg/       entities/zones │
+   │   MCTSBot (Perspective)      │  │              modifiers/bus  │
+   │   AutoPlayer                 │  │   tabletop/  Board, LOS,    │
+   │   Simulate                   │  │              dice, Resolve  │
+   │   llm/  (OpenAI / OpenRouter │  │   economy/   per-turn pools │
+   │          / Anthropic, tools) │  │   shop/      market + Buy   │
+   └──────────────────────────────┘  └─────────────────────────────┘
 ```
 
 The `core` package has no I/O dependencies. The engine never imports
-`bots`, `ccg`, `tabletop`, `plugins`, `server`, `match`, or any storage backend.
+anything under `modules/`, `bots`, `plugins`, `server`, `match`, or
+any storage backend.
 
 ## Features
 
@@ -394,6 +398,65 @@ reachable via `cat.Untyped()` and flows through `State.Instantiate`
 / `LoadDeckList` unchanged. Bookkeeping only; no game semantics.
 Composes with the action queue + Random + Replay. Engine never
 imports it; importers pay nothing if their game isn't card-shaped.
+
+### Wargame library
+
+[`modules/tabletop/`](modules/tabletop/) — spatial + dice primitives for
+miniatures wargames (40k-shaped, Battletech-shaped, Necromunda-shaped).
+A `Board` interface (`InBounds` / `Distance` / `Neighbors` / `Line`)
+with two concrete impls: `SquareBoard` (Chebyshev distance, 8-way
+neighbors, Bresenham line) and `HexBoard` (axial coordinates, hex
+distance, cube-coord-round line whose length equals `Distance + 1`).
+LOS is a board-agnostic free function — `LineOfSight(board, from, to,
+blocks)` walks `Line` and asks the blocker predicate about every
+intermediate cell. A `TerrainMap` provides sparse per-cell tag storage
+(`Tag` / `Untag` / `HasTag` / `Blocks` sugar for the LOS-blocking
+case). `tabletop.State` tracks `UnitID → Pos` mappings with a lazy
+reverse cell→units index built on first access (rebuilds correctly
+after JSON unmarshal), plus `Place` / `Move` / `Remove` / `PositionOf`
+/ `EntitiesAt` / `Within(board, center, radius)` queries. Dice helpers
+include `Pool{Dice, Sides}.Roll(*core.Random)`, `Successes(rolls,
+target)`, `RerollBelow(rolls, threshold, *core.Random)`, and the
+40k-shaped `Resolve{Attacks, HitOn, WoundOn, SaveOn}.Run(*core.Random)`
+hit-wound-save chain that returns `ResolveResult{Hits, Wounds, Unsaved}`.
+Units are identified by an opaque `tabletop.UnitID = uint64` so games
+also using `ccg/` can pass `tabletop.UnitID(ccgEntity.ID)` — same
+numeric space, zero coupling. Engine never imports it; importers pay
+nothing if their game isn't spatial.
+
+### Turn-economy library
+
+[`modules/economy/`](modules/economy/) — per-turn resource pools (gold,
+actions, buys) for deckbuilder-shape and auto-battler-shape games.
+`Pool{Owner, Kind, Cap}` is a thin config struct over `ccg.Counters`:
+storage is just a named counter on a player entity. What economy adds
+on top is currency semantics — `Cap` enforcement on `Gain` and `Set`
+(clamps to the configured max, returns the applied delta), and
+`Spend(s, n)` that returns `ErrInsufficient` and leaves state untouched
+when the pool has less than `n` (ccg's `RemoveCounter` would silently
+clamp at 0 — that's a bug for currency). `Scaled(turn, base, per, max)`
+is the canonical "base + (turn − 1) × per, capped at max" income curve
+— drop it straight into `Pool.Set` at turn start. Every operation
+routes through `ccg.Counters` so the `counter_changed` event fires
+under the hood; card abilities that listen for "gold gained" or
+"gold spent" Just Work. Engine never imports it.
+
+### Shop library
+
+[`modules/shop/`](modules/shop/) — refreshable market for auto-battler
+and deckbuilder games. `Shop{Slots, Stock, Size}` is two `ccg.Zone`
+names plus a target size. Operations: `Clear(s, dest)` removes
+un-frozen items from `Slots` (destroying them when `dest == ""`,
+or moving them to `dest` for shared-pool semantics); `Fill(s, r)`
+draws from `Stock` up to `Size`, stopping early if `Stock` runs
+dry; `Roll(s, r, dest)` is sugar for `Clear` + `Fill` — the typical
+"spend 1 gold to reroll" move. `Freeze` / `Unfreeze` / `IsFrozen`
+mark a slot entry to survive the next `Roll` (stored as a reserved
+`Entity.Attrs[ShopFrozenAttrKey]` bool). `Buy(s, item, destination)`
+moves the item to a destination zone and clears the freeze flag so
+shop state doesn't leak into the player's hand. `Shop` does NOT enforce
+cost — games compose `economy.Pool.Spend` and `shop.Buy` in their move
+handlers (the doc comment shows the pattern). Engine never imports it.
 
 ## Comparison vs boardgame.io
 
