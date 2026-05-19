@@ -81,3 +81,52 @@ func TestPoolGainNegativeReturnsZero(t *testing.T) {
 		t.Errorf("Gain(negative) must not mutate, Current = %d (want 5)", gold.Current(s))
 	}
 }
+
+func TestPoolSpendDeductsAndReturnsNil(t *testing.T) {
+	s, id := newPlayerState()
+	gold := economy.Pool{Owner: id, Kind: "gold", Cap: 10}
+	gold.Gain(s, 7)
+	if err := gold.Spend(s, 3); err != nil {
+		t.Fatalf("Spend within funds should not error: %v", err)
+	}
+	if gold.Current(s) != 4 {
+		t.Errorf("Current after Spend(3) = %d, want 4", gold.Current(s))
+	}
+}
+
+func TestPoolSpendInsufficientErrorsAndDoesNotMutate(t *testing.T) {
+	s, id := newPlayerState()
+	gold := economy.Pool{Owner: id, Kind: "gold", Cap: 10}
+	gold.Gain(s, 2)
+	err := gold.Spend(s, 5)
+	if err == nil {
+		t.Fatal("Spend over balance should return error, got nil")
+	}
+	if err != economy.ErrInsufficient {
+		t.Errorf("Spend error = %v, want ErrInsufficient", err)
+	}
+	if gold.Current(s) != 2 {
+		t.Errorf("failed Spend must not mutate; Current = %d (want 2)", gold.Current(s))
+	}
+}
+
+func TestPoolSpendZeroIsNoop(t *testing.T) {
+	s, id := newPlayerState()
+	gold := economy.Pool{Owner: id, Kind: "gold", Cap: 10}
+	gold.Gain(s, 5)
+	if err := gold.Spend(s, 0); err != nil {
+		t.Errorf("Spend(0) should return nil, got %v", err)
+	}
+	if gold.Current(s) != 5 {
+		t.Errorf("Spend(0) must not mutate, Current = %d", gold.Current(s))
+	}
+}
+
+func TestPoolSpendNegativeErrors(t *testing.T) {
+	s, id := newPlayerState()
+	gold := economy.Pool{Owner: id, Kind: "gold", Cap: 10}
+	gold.Gain(s, 5)
+	if err := gold.Spend(s, -3); err == nil {
+		t.Fatal("Spend(negative) should error to prevent the Spend→Gain footgun")
+	}
+}

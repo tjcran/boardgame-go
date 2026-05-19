@@ -1,6 +1,10 @@
 package economy
 
-import "github.com/tjcran/boardgame-go/modules/ccg"
+import (
+	"errors"
+
+	"github.com/tjcran/boardgame-go/modules/ccg"
+)
 
 // Pool is the per-player, per-kind resource handle. Pool itself holds
 // no state — the counter values live in s.Counters(Owner, Kind). Keep
@@ -45,4 +49,30 @@ func (p Pool) Gain(s *ccg.State, n int) int {
 	}
 	s.AddCounter(p.Owner, p.Kind, n)
 	return n
+}
+
+// ErrInsufficient is returned by Spend when the pool's current value
+// is less than the requested amount. The pool state is unchanged.
+var ErrInsufficient = errors.New("economy: insufficient funds")
+
+// ErrNegativeSpend is returned by Spend when called with a negative
+// amount — that would be a silent Gain, almost always a logic bug at
+// the call site. Use Gain explicitly for additions.
+var ErrNegativeSpend = errors.New("economy: negative spend amount")
+
+// Spend deducts n from the pool. Returns ErrInsufficient (state
+// unchanged) when current < n. n == 0 is a no-op that returns nil.
+// Negative n returns ErrNegativeSpend.
+func (p Pool) Spend(s *ccg.State, n int) error {
+	if n < 0 {
+		return ErrNegativeSpend
+	}
+	if n == 0 {
+		return nil
+	}
+	if p.Current(s) < n {
+		return ErrInsufficient
+	}
+	s.RemoveCounter(p.Owner, p.Kind, n)
+	return nil
 }
