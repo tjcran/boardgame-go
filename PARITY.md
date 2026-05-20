@@ -281,7 +281,9 @@ analysis.
   buys) with cap + Spend(ErrInsufficient), built on `ccg.Counters`
 - **`modules/shop/` library** — refreshable market with Freeze, Roll,
   Buy; composes with `modules/economy/` for cost-paying purchases
-- **Compile-time-typed games** via `typedgame.Game[S]` generics
+- **Compile-time-typed games** via `typedgame.Game[S, SD]` generics —
+  both state AND setup-data are typed; setup callbacks receive the
+  declared `SD` payload with no `any` assertion at the call site
 - **Cross-match concurrency** by default (goroutines vs Node event loop)
 - **Server-side bots** that don't block other matches; MCTS rollouts
   parallelise across goroutines
