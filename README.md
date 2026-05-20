@@ -134,7 +134,7 @@ Prefer compile-time-typed G via [`typedgame`](typedgame/typedgame.go):
 ```go
 import "github.com/tjcran/boardgame-go/typedgame"
 
-var MyGame = typedgame.Game[*State]{
+var MyGame = typedgame.Game[*State, any]{
     Name: "counter",
     Setup: func(_ core.Ctx, _ any) *State { return &State{} },
     Moves: typedgame.Moves[*State]{
@@ -495,7 +495,7 @@ handlers (the doc comment shows the pattern). Engine never imports it.
 | **`modules/tabletop/` library** (Board interface w/ Square + Hex impls, positions w/ reverse index, terrain tags, LOS, dice pools, hit-wound-save Resolve) | Wargame-shape spatial + dice primitives, composes with `modules/ccg/` for unit stats | None |
 | **`modules/economy/` library** (Pool with cap, Gain/Spend/Set, Scaled income helper) | Deckbuilder / auto-battler turn-economy on top of `ccg.Counters` — currency semantics ccg's "clamps at 0" floor wouldn't give you | None |
 | **`modules/shop/` library** (Shop with Slots/Stock/Size, Freeze, Clear/Fill/Roll, Buy) | Refreshable market for shop-phase games; composes cleanly with `modules/economy/` for cost-paying | None |
-| **Compile-time-typed games** (`typedgame.Game[S]`) | `mc.G.Score` with no runtime asserts | TypeScript types help IDE; framework is still untyped at runtime |
+| **Compile-time-typed games** (`typedgame.Game[S, SD]` — typed state AND typed setup data) | `mc.G.Score` AND `sd.DeckSeed` with no runtime asserts | TypeScript types help IDE; framework is still untyped at runtime |
 | **`Move.Timeout`** | Cooperative per-move cancellation via `context.Context` | None |
 | **`Move.IgnoreBlocks`** | Concede / forfeit can bypass cascade pause | None |
 | **`MCTSBot.Perspective`** | AI can't read opponent secret state during rollouts | MCTS sees full state; effectively cheats |

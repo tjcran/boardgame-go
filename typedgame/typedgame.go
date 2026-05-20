@@ -8,7 +8,7 @@
 //
 //	type State struct{ Score int }
 //
-//	var MyGame = typedgame.Game[*State]{
+//	var MyGame = typedgame.Game[*State, any]{
 //	    Name:  "counter",
 //	    Setup: func(_ core.Ctx, _ any) *State { return &State{} },
 //	    Moves: typedgame.Moves[*State]{
@@ -16,6 +16,14 @@
 //	            return &State{Score: mc.G.Score + 1}, nil
 //	        }),
 //	    },
+//	}
+//
+// For games with typed setup data, parameterise the second slot too:
+//
+//	type Setup struct{ Seed int64 }
+//	var MyGame = typedgame.Game[*State, *Setup]{
+//	    Setup: func(_ core.Ctx, sd *Setup) *State { return &State{Seed: sd.Seed} },
+//	    // ...
 //	}
 //
 //	m.MustRegister(MyGame.Build())
@@ -59,8 +67,14 @@ type MoveFn[S any] func(mc *Context[S], args ...any) (S, error)
 // HookFn is the typed hook signature for OnBegin/OnEnd/OnMove.
 type HookFn[S any] func(mc *Context[S]) S
 
-// SetupFn is the typed initial-state builder.
-type SetupFn[S any] func(ctx core.Ctx, setupData any) S
+// SetupFn is the typed initial-state builder. SD is the (typed) setup
+// data payload — pass `any` if your game doesn't take typed setup data.
+type SetupFn[S, SD any] func(ctx core.Ctx, setupData SD) S
+
+// ValidateSetupDataFn is the typed setup-data validator. Returns an
+// empty string when valid, or an error message when invalid. SD is
+// the typed payload.
+type ValidateSetupDataFn[SD any] func(setupData SD, numPlayers int) string
 
 // EndIfFn is the typed game-end predicate.
 type EndIfFn[S any] func(mc *Context[S]) any
@@ -78,8 +92,8 @@ type TurnEndIfFn[S any] func(mc *Context[S]) (bool, string)
 // underlying core.Move.
 type Move[S any] struct {
 	Move               MoveFn[S]
-	Undoable           any  // bool or func(*Context[S]) bool
-	Redact             any  // bool or func(*Context[S]) bool
+	Undoable           any // bool or func(*Context[S]) bool
+	Redact             any // bool or func(*Context[S]) bool
 	ServerOnly         bool
 	NoLimit            bool
 	IgnoreStaleStateID bool
@@ -121,13 +135,15 @@ type PhaseConfig[S any] struct {
 	Next    any // string or func(*Context[S]) string
 }
 
-// Game is the typed game definition.
-type Game[S any] struct {
+// Game is the typed game definition. S is the state type; SD is the
+// typed setup-data payload (use `any` if your game doesn't need typed
+// setup).
+type Game[S, SD any] struct {
 	Name              string
 	MinPlayers        int
 	MaxPlayers        int
-	Setup             SetupFn[S]
-	ValidateSetupData core.ValidateSetupDataFn
+	Setup             SetupFn[S, SD]
+	ValidateSetupData ValidateSetupDataFn[SD]
 	Seed              any
 	DisableUndo       bool
 	DeltaState        bool
@@ -142,20 +158,35 @@ type Game[S any] struct {
 
 // Build compiles a typed Game into the engine's untyped *core.Game. The
 // returned object is safe to register with match.Manager.
-func (g Game[S]) Build() *core.Game {
+func (g Game[S, SD]) Build() *core.Game {
 	out := &core.Game{
-		Name:              g.Name,
-		MinPlayers:        g.MinPlayers,
-		MaxPlayers:        g.MaxPlayers,
-		ValidateSetupData: g.ValidateSetupData,
-		Seed:              g.Seed,
-		DisableUndo:       g.DisableUndo,
-		DeltaState:        g.DeltaState,
-		Plugins:           g.Plugins,
+		Name:        g.Name,
+		MinPlayers:  g.MinPlayers,
+		MaxPlayers:  g.MaxPlayers,
+		Seed:        g.Seed,
+		DisableUndo: g.DisableUndo,
+		DeltaState:  g.DeltaState,
+		Plugins:     g.Plugins,
 	}
 	if g.Setup != nil {
 		setup := g.Setup
-		out.Setup = func(ctx core.Ctx, setupData any) core.G { return setup(ctx, setupData) }
+		out.Setup = func(ctx core.Ctx, setupData any) core.G {
+			var sd SD
+			if setupData != nil {
+				sd = setupData.(SD)
+			}
+			return setup(ctx, sd)
+		}
+	}
+	if g.ValidateSetupData != nil {
+		validate := g.ValidateSetupData
+		out.ValidateSetupData = func(setupData any, numPlayers int) string {
+			var sd SD
+			if setupData != nil {
+				sd = setupData.(SD)
+			}
+			return validate(sd, numPlayers)
+		}
 	}
 	if g.EndIf != nil {
 		ef := g.EndIf

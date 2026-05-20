@@ -13,7 +13,7 @@ import (
 type counterState struct{ Score int }
 
 func TestTypedGameBuildsAndRuns(t *testing.T) {
-	g := typedgame.Game[*counterState]{
+	g := typedgame.Game[*counterState, any]{
 		Name:       "counter",
 		MinPlayers: 1,
 		MaxPlayers: 1,
@@ -51,7 +51,7 @@ func TestTypedGameBuildsAndRuns(t *testing.T) {
 
 func TestTypedGameHooksReceiveTypedG(t *testing.T) {
 	var sawOnBegin int
-	g := typedgame.Game[*counterState]{
+	g := typedgame.Game[*counterState, any]{
 		Name:       "counter",
 		MinPlayers: 1,
 		MaxPlayers: 1,
@@ -77,7 +77,7 @@ func TestTypedGameHooksReceiveTypedG(t *testing.T) {
 }
 
 func TestTypedMoveLongFormCarriesFlags(t *testing.T) {
-	g := typedgame.Game[*counterState]{
+	g := typedgame.Game[*counterState, any]{
 		Name:       "counter",
 		MinPlayers: 1,
 		MaxPlayers: 1,
@@ -103,5 +103,113 @@ func TestTypedMoveLongFormCarriesFlags(t *testing.T) {
 	}
 	if s.Ctx.CurrentPlayer != "0" {
 		t.Fatalf("expected NoLimit to prevent auto-end-turn, got current=%s", s.Ctx.CurrentPlayer)
+	}
+}
+
+// MySetup is a non-trivial typed setup-data payload — proves the SD type
+// parameter actually constrains what Setup receives.
+type MySetup struct {
+	StartingScore int
+	DeckSeed      int64
+}
+
+func TestTypedSetupDataReachesSetupCallback(t *testing.T) {
+	type State struct {
+		Score int
+		Seed  int64
+	}
+	g := typedgame.Game[*State, *MySetup]{
+		Name: "typed-setup-test", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, sd *MySetup) *State {
+			if sd == nil {
+				return &State{Score: -1, Seed: -1}
+			}
+			return &State{Score: sd.StartingScore, Seed: sd.DeckSeed}
+		},
+		Turn: &typedgame.TurnConfig[*State]{MinMoves: 1, MaxMoves: 1},
+	}
+
+	cg := g.Build()
+	setup := &MySetup{StartingScore: 42, DeckSeed: 1234567}
+	st := core.NewMatch(cg, 0, setup)
+	s, ok := st.G.(*State)
+	if !ok {
+		t.Fatalf("state should be *State, got %T", st.G)
+	}
+	if s.Score != 42 {
+		t.Errorf("Score = %d, want 42 (setupData should arrive typed)", s.Score)
+	}
+	if s.Seed != 1234567 {
+		t.Errorf("Seed = %d, want 1234567", s.Seed)
+	}
+}
+
+func TestTypedSetupDataNilFallsThroughAsZero(t *testing.T) {
+	type State struct{ Got bool }
+	g := typedgame.Game[*State, *MySetup]{
+		Name: "typed-setup-nil", MinPlayers: 1, MaxPlayers: 1,
+		Setup: func(_ core.Ctx, sd *MySetup) *State {
+			return &State{Got: sd == nil}
+		},
+		Turn: &typedgame.TurnConfig[*State]{MinMoves: 1, MaxMoves: 1},
+	}
+	cg := g.Build()
+	st := core.NewMatch(cg, 0, nil)
+	s := st.G.(*State)
+	if !s.Got {
+		t.Errorf("nil setup data should arrive as nil-typed (zero value of *MySetup)")
+	}
+}
+
+func TestTypedSetupDataWrongTypePanics(t *testing.T) {
+	type State struct{}
+	g := typedgame.Game[*State, *MySetup]{
+		Name: "typed-setup-mismatch", MinPlayers: 1, MaxPlayers: 1,
+		Setup: func(_ core.Ctx, _ *MySetup) *State {
+			return &State{}
+		},
+		Turn: &typedgame.TurnConfig[*State]{MinMoves: 1, MaxMoves: 1},
+	}
+	cg := g.Build()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic on wrong setupData type, got no panic")
+		}
+	}()
+	_ = core.NewMatch(cg, 0, "not-a-MySetup")
+}
+
+func TestTypedValidateSetupDataReceivesTypedValue(t *testing.T) {
+	type State struct{}
+	var observed *MySetup
+	g := typedgame.Game[*State, *MySetup]{
+		Name: "typed-validate", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ *MySetup) *State { return &State{} },
+		ValidateSetupData: func(sd *MySetup, numPlayers int) string {
+			observed = sd
+			if sd == nil {
+				return "missing setup"
+			}
+			if sd.StartingScore < 0 {
+				return "negative score"
+			}
+			return ""
+		},
+		Turn: &typedgame.TurnConfig[*State]{MinMoves: 1, MaxMoves: 1},
+	}
+	cg := g.Build()
+	if cg.ValidateSetupData == nil {
+		t.Fatal("ValidateSetupData should not be nil after Build")
+	}
+
+	if msg := cg.ValidateSetupData(&MySetup{StartingScore: 5}, 2); msg != "" {
+		t.Errorf("valid setup should pass validation, got %q", msg)
+	}
+	if observed == nil || observed.StartingScore != 5 {
+		t.Errorf("ValidateSetupData callback should have received typed *MySetup, got %v", observed)
+	}
+
+	if msg := cg.ValidateSetupData(&MySetup{StartingScore: -1}, 2); msg != "negative score" {
+		t.Errorf("invalid setup should fail validation, got %q", msg)
 	}
 }
