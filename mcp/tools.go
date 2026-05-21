@@ -653,3 +653,55 @@ func (t *Tools) ModuleOp(ctx context.Context, args ModuleOpArgs) (ModuleOpResult
 	}
 	return ModuleOpResult{Result: res}, nil
 }
+
+// ----- describe_modules -----
+
+// DescribeModulesArgs optionally filters discovery to a single module.
+type DescribeModulesArgs struct {
+	Module string `json:"module,omitempty"`
+}
+
+// OpInfo names one invokable op. MCPTool is the flattened tool alias the
+// Starlark binding also exposes it under.
+type OpInfo struct {
+	Name    string `json:"name"`
+	MCPTool string `json:"mcpTool,omitempty"`
+}
+
+// ModuleInfo is one module and its ops.
+type ModuleInfo struct {
+	Module string   `json:"module"`
+	Ops    []OpInfo `json:"ops"`
+}
+
+type DescribeModulesResult struct {
+	Modules []ModuleInfo `json:"modules"`
+}
+
+// DescribeModules enumerates the engine modules reachable via module_op and
+// the op names each exposes. Static metadata: needs no match and mutates
+// nothing, so an agent can discover the surface before creating a draft.
+func (t *Tools) DescribeModules(ctx context.Context, args DescribeModulesArgs) (DescribeModulesResult, error) {
+	names := modulebridge.AllModules()
+	if args.Module != "" {
+		if modulebridge.RegistryFor(args.Module) == nil {
+			return DescribeModulesResult{}, fmt.Errorf("unknown module %q", args.Module)
+		}
+		names = []string{args.Module}
+	}
+
+	out := make([]ModuleInfo, 0, len(names))
+	for _, name := range names {
+		reg := modulebridge.RegistryFor(name)
+		if reg == nil {
+			continue
+		}
+		ops := make([]OpInfo, 0)
+		for _, op := range reg.Ops(name) {
+			ops = append(ops, OpInfo{Name: op.Name, MCPTool: op.MCPTool})
+		}
+		sort.Slice(ops, func(i, j int) bool { return ops[i].Name < ops[j].Name })
+		out = append(out, ModuleInfo{Module: name, Ops: ops})
+	}
+	return DescribeModulesResult{Modules: out}, nil
+}
