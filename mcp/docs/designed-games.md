@@ -144,8 +144,6 @@ it. `ctx.resuming_target()` returns the pending request dict (or `None`);
 `ctx.validate_selection(list)` rejects the move if the pick violates the
 request's cardinality or candidate set.
 
-Event hooks (HOOKS) land in a later phase.
-
 ## Semantic argument types
 
 Move `args` entries declare a `type`, validated at dispatch before `apply` runs.
@@ -160,6 +158,35 @@ types tie an arg to engine state:
 A move with no declared `args` is unconstrained. When `args` are declared, the
 arg count must match and each arg must satisfy its type — invalid moves are
 rejected before `apply`, so handlers can trust their inputs.
+
+## Reacting to events (HOOKS)
+
+Declare `HOOKS` to react to ccg domain events — triggered abilities like "when a
+creature dies, draw a card." A `HOOKS` entry maps an event type to a handler
+`fn(event, ctx)`; the handler reacts via `ctx.modules.*`. Requires `ccg` in
+MODULES. Fire events from a move with `ctx.modules.ccg.publish(type=...,
+source=..., target=..., data=...)`.
+
+    MODULES = ["ccg"]
+
+    def on_died(event, ctx):
+        # event = {"type": "died", "source": "ent:3", ...}
+        top = ctx.modules.ccg.draw(zone="deck", n=1)
+        ctx.modules.ccg.move_to(entity=top[0], zone="hand")
+
+    HOOKS = {"died": on_died}
+
+    def slay(state, ctx):
+        ctx.modules.ccg.move_to(entity=state["creature"], zone="grave")
+        ctx.modules.ccg.publish(type="died", source=state["creature"])
+        return state
+
+`event` is a dict `{type, source?, target?, data?}` (source/target are entity
+tokens when present). Handlers may only mutate **module state** (zones,
+counters) via `ctx.modules` — they do not receive the game's user `data` dict
+(it is frozen during a move). Handlers fire synchronously and may publish
+further events (bounded against runaway recursion). If a handler raises
+(`fail(...)`), the triggering move is rejected.
 
 ## Where games live
 
