@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/tjcran/boardgame-go/core"
+	"github.com/tjcran/boardgame-go/mcp/modulebridge"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -58,6 +59,9 @@ func (c *BridgeCtx) asStarlark() starlark.Value {
 	if c.Events != nil {
 		attrs["events"] = c.eventsAsStarlark()
 	}
+	if len(c.Modules) > 0 {
+		attrs["modules"] = c.modulesAsStarlark()
+	}
 	return starlarkstruct.FromStringDict(starlark.String("ctx"), attrs)
 }
 
@@ -91,6 +95,49 @@ func (c *BridgeCtx) eventsAsStarlark() starlark.Value {
 		"set_stage": setStage,
 		"end_stage": endStage,
 	})
+}
+
+// modulesAsStarlark builds the ctx.modules struct: one attribute per
+// live module, each a struct of op builtins bound to that module's
+// live state. Args are passed as Starlark keyword arguments.
+func (c *BridgeCtx) modulesAsStarlark() starlark.Value {
+	modAttrs := starlark.StringDict{}
+	for name, state := range c.Modules {
+		reg := modulebridge.RegistryFor(name)
+		if reg == nil {
+			continue
+		}
+		opAttrs := starlark.StringDict{}
+		for _, op := range reg.Ops(name) {
+			op := op
+			st := state
+			opAttrs[op.Name] = starlark.NewBuiltin(name+"."+op.Name,
+				func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+					if len(args) != 0 {
+						return nil, fmt.Errorf("%s.%s: use keyword args only", name, op.Name)
+					}
+					m := make(map[string]any, len(kwargs))
+					for _, kv := range kwargs {
+						k, ok := kv[0].(starlark.String)
+						if !ok {
+							return nil, fmt.Errorf("%s.%s: non-string kwarg", name, op.Name)
+						}
+						gv, err := ToGo(kv[1])
+						if err != nil {
+							return nil, err
+						}
+						m[string(k)] = gv
+					}
+					res, err := op.Call(st, m)
+					if err != nil {
+						return nil, err
+					}
+					return ToStarlark(res)
+				})
+		}
+		modAttrs[name] = starlarkstruct.FromStringDict(starlark.String(name), opAttrs)
+	}
+	return starlarkstruct.FromStringDict(starlark.String("modules"), modAttrs)
 }
 
 // bridgeRandom is defined in random.go (Task 5). It wraps core.Random and

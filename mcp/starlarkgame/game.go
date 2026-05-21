@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/tjcran/boardgame-go/core"
+	"github.com/tjcran/boardgame-go/mcp/modulebridge"
 )
 
 // BuildCoreGame synthesizes a *core.Game whose Setup / Moves / EndIf /
@@ -30,15 +31,23 @@ func BuildCoreGame(s *Spec) *core.Game {
 	}
 
 	g.Setup = func(ctx core.Ctx, _ any) core.G {
-		bc := &BridgeCtx{NumPlayers: ctx.NumPlayers}
+		// Instantiate a live state for each declared module before setup
+		// runs, so setup code can call ctx.modules.<name>.<op>(...).
+		mods := map[string]any{}
+		for _, name := range s.Modules {
+			if st := modulebridge.NewState(name); st != nil {
+				mods[name] = st
+			}
+		}
+		bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, Modules: mods}
 		bc.AttachSeededRandom(ctxSeed(ctx))
 		data, err := s.CallSetup(context.Background(), bc)
 		if err != nil {
 			// SetupFn has no error channel; encode failure as a state that
 			// will immediately fail end_if.
-			return &StarlarkG{Data: map[string]any{"__starlark_setup_error__": err.Error()}}
+			return &StarlarkG{Data: map[string]any{"__starlark_setup_error__": err.Error()}, Modules: mods}
 		}
-		return &StarlarkG{Data: data, Modules: map[string]any{}}
+		return &StarlarkG{Data: data, Modules: mods}
 	}
 
 	g.EndIf = func(mc *core.MoveContext) any {

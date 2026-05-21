@@ -3,6 +3,8 @@ package starlarkgame
 import (
 	"context"
 	"fmt"
+
+	"github.com/tjcran/boardgame-go/mcp/modulebridge"
 )
 
 // Validate runs registration-time smoke checks. Parse and META checks
@@ -15,7 +17,15 @@ import (
 // All calls run under the same step / wall caps as live play.
 func Validate(ctx context.Context, s *Spec) error {
 	for _, n := range []int{s.Meta.MinPlayers, s.Meta.MaxPlayers} {
-		bc := &BridgeCtx{NumPlayers: n}
+		// Instantiate declared modules so setup smoke can call
+		// ctx.modules.<name>.<op>(...), mirroring live Setup.
+		mods := map[string]any{}
+		for _, name := range s.Modules {
+			if st := modulebridge.NewState(name); st != nil {
+				mods[name] = st
+			}
+		}
+		bc := &BridgeCtx{NumPlayers: n, Modules: mods}
 		bc.AttachSeededRandom(0)
 		state, err := s.CallSetup(ctx, bc)
 		if err != nil {
