@@ -116,7 +116,11 @@ func (sk SkillSkeleton) RenderMarkdown() string {
 func renderArgSig(a ArgDef) string {
 	out := a.Name
 	if a.Type != "" {
-		out += ": " + a.Type
+		if a.Type == "entity" && a.Zone != "" {
+			out += ": entity(" + a.Zone + ")"
+		} else {
+			out += ": " + a.Type
+		}
 	}
 	if a.Min != nil && a.Max != nil {
 		out += fmt.Sprintf(" [%d..%d]", *a.Min, *a.Max)

@@ -146,6 +146,21 @@ request's cardinality or candidate set.
 
 Event hooks (HOOKS) land in a later phase.
 
+## Semantic argument types
+
+Move `args` entries declare a `type`, validated at dispatch before `apply` runs.
+Beyond `int` (with optional `min`/`max`), `string`, and `bool`, two semantic
+types tie an arg to engine state:
+
+- `{"name": "card", "type": "entity", "zone": "hand"}` — the arg must be a ccg
+  entity token (e.g. `"ent:7"`); with `zone` set, the entity must currently be
+  in that ccg zone, else the move is rejected. Omit `zone` to accept any entity.
+- `{"name": "to", "type": "hex"}` — the arg must be a `[x, y]` integer pair.
+
+A move with no declared `args` is unconstrained. When `args` are declared, the
+arg count must match and each arg must satisfy its type — invalid moves are
+rejected before `apply`, so handlers can trust their inputs.
+
 ## Where games live
 
 - Built-ins (tic-tac-toe, love-letter) come from the server binary.
