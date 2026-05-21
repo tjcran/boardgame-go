@@ -321,6 +321,7 @@ type MakeMoveArgs struct {
 	Credentials string `json:"credentials"`
 	Move        string `json:"move"`
 	Args        []any  `json:"args,omitempty"`
+	ResumeTag   string `json:"resumeTag,omitempty"`
 }
 
 type MakeMoveResult struct {
@@ -572,9 +573,10 @@ func (t *Tools) MakeMove(ctx context.Context, args MakeMoveArgs) (MakeMoveResult
 		return MakeMoveResult{}, err
 	}
 	state, err := t.Manager.MoveReqCtx(ctx, args.MatchID, args.PlayerID, args.Credentials, core.MoveRequest{
-		PlayerID: args.PlayerID,
-		Move:     args.Move,
-		Args:     args.Args,
+		PlayerID:  args.PlayerID,
+		Move:      args.Move,
+		Args:      args.Args,
+		ResumeTag: args.ResumeTag,
 	})
 	if err != nil {
 		return MakeMoveResult{}, err
