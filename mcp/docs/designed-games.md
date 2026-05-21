@@ -46,9 +46,36 @@ them through `ctx.modules.<name>.*` inside setup/apply:
         return state
 
 Entities are referenced by opaque tokens (e.g. `"ent:7"`); pass them back to
-module ops, don't parse them. Phase 1 ships the `ccg` module (zones, entities,
-`move_to`/`draw`/`size`/`members`). tabletop, economy/shop, target selection,
-and event hooks land in later phases.
+module ops, don't parse them. The `ccg` module ships zones, entities, and
+`move_to`/`draw`/`size`/`members`.
+
+### tabletop module (spatial games)
+
+For board/grid games, declare `tabletop` and build a board in setup, then place
+and move units by integer id on integer `(x, y)` coordinates:
+
+    MODULES = ["tabletop"]
+
+    def setup(ctx):
+        ctx.modules.tabletop.new_board(kind="hex", w=10, h=10)  # or kind="square"
+        ctx.modules.tabletop.place(unit=1, x=0, y=0)
+        return {}
+
+    def advance(state, ctx):
+        x, y = ctx.modules.tabletop.position_of(unit=1)
+        ns = ctx.modules.tabletop.neighbors(x=x, y=y)
+        ctx.modules.tabletop.move(unit=1, x=ns[0][0], y=ns[0][1])
+        return state
+
+Ops: `new_board(kind, w, h)`, `place(unit, x, y)`, `move(unit, x, y)`,
+`remove(unit)`, `position_of(unit)` → `[x, y]` or `None`, `entities_at(x, y)` →
+`[unit, …]`, `within(x, y, radius)` → `[unit, …]`, `neighbors(x, y)` →
+`[[x, y], …]`, `line_of_sight(fx, fy, tx, ty)` → bool (honors terrain tagged
+`"blocks_los"`), `tag_terrain(x, y, tag)`, `has_terrain(x, y, tag)`. Units are
+plain integer ids you choose; positions are plain coordinates. Dice/combat are
+not yet bridged.
+
+economy/shop, target selection, and event hooks land in later phases.
 
 ## Where games live
 
