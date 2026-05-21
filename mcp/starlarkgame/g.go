@@ -47,3 +47,35 @@ func (g *StarlarkG) UnmarshalJSON(b []byte) error {
 	g.Data = raw
 	return nil
 }
+
+// asStarlarkG normalizes a core.G into a *StarlarkG. The in-memory store
+// preserves the live *StarlarkG pointer across moves; a serializing store
+// (SQLite/Postgres) round-trips state through JSON, and since core.G is
+// `any`, G comes back as a bare map[string]any — this reconstructs the
+// StarlarkG from it (mirroring UnmarshalJSON).
+//
+// Caveat: for module-backed games the reconstructed Modules entries are
+// plain maps, not the live *ccg.State etc., so module ops won't rebind
+// after a serializing-store reload (module games rely on the in-memory
+// store, which keeps the live pointer). Module-free designed games
+// round-trip cleanly.
+func asStarlarkG(g any) (*StarlarkG, bool) {
+	switch v := g.(type) {
+	case *StarlarkG:
+		return v, true
+	case map[string]any:
+		sg := &StarlarkG{Data: map[string]any{}, Modules: map[string]any{}}
+		for k, val := range v {
+			if k == modulesKey {
+				if m, ok := val.(map[string]any); ok {
+					sg.Modules = m
+				}
+				continue
+			}
+			sg.Data[k] = val
+		}
+		return sg, true
+	default:
+		return nil, false
+	}
+}
