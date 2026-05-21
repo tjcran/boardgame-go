@@ -244,6 +244,24 @@ func RegisterTools(s *Server, t *Tools) {
 	}))
 
 	s.RegisterTool(ToolSpec{
+		Name:        "describe_modules",
+		Description: "Discovery: list the engine modules reachable via module_op and the op names each exposes. Static metadata; needs no match. Call this before module_op to learn the available (module, op) surface instead of guessing.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"module": {"type": "string", "description": "Optional: restrict output to one module, e.g. \"tabletop\". Omit to list all."}
+			},
+			"additionalProperties": false
+		}`),
+	}, wrap(func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args DescribeModulesArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		return t.DescribeModules(ctx, args)
+	}))
+
+	s.RegisterTool(ToolSpec{
 		Name:        "module_op",
 		Description: "Design-time: invoke an engine-module operation on a draft match's live module state. Lets you prototype mechanics interactively; runs the exact same op the Starlark binding uses.",
 		InputSchema: json.RawMessage(`{

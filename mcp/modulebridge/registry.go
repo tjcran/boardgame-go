@@ -1,6 +1,10 @@
 package modulebridge
 
-import "github.com/tjcran/boardgame-go/core"
+import (
+	"sort"
+
+	"github.com/tjcran/boardgame-go/core"
+)
 
 // Op is one engine operation, exposed on both surfaces (Starlark
 // ctx.modules.<Module>.<Name> and the MCP tool <MCPTool>).
@@ -62,5 +66,17 @@ var stateFactories = map[string]func() any{}
 // RegistryFor returns the op registry for a module name, or nil if the
 // module is unknown. Each binding file registers itself here.
 func RegistryFor(name string) *Registry { return registryByName[name] }
+
+// AllModules returns every registered module name, sorted. This is the
+// discovery entry point: it lets a client enumerate what module_op can
+// reach without a live match or out-of-band docs.
+func AllModules() []string {
+	out := make([]string, 0, len(registryByName))
+	for name := range registryByName {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
 
 var registryByName = map[string]*Registry{}
