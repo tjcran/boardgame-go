@@ -217,5 +217,21 @@ func buildCCGRegistry() *Registry {
 			return nil, nil
 		}})
 
+	r.Add(Op{Module: "ccg", Name: "shuffle", MCPTool: "ccg_shuffle",
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
+			s, err := ccgFrom(modules)
+			if err != nil {
+				return nil, err
+			}
+			if rng == nil {
+				return nil, fmt.Errorf("ccg.shuffle: no RNG available in this context")
+			}
+			zone, err := argStr(args, "zone")
+			if err != nil {
+				return nil, err
+			}
+			return nil, s.Shuffle(ccg.ZoneName(zone), rng)
+		}})
+
 	return r
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/modules/ccg"
 )
 
@@ -87,3 +88,62 @@ func TestCCG_Publish_RecoversHookError(t *testing.T) {
 }
 
 var errTestHook = fmt.Errorf("boom hook failed")
+
+func TestCCG_Shuffle_Deterministic(t *testing.T) {
+	build := func() *ccg.State {
+		s := ccg.NewState()
+		s.NewZone("deck", true)
+		for i := 0; i < 8; i++ {
+			id := s.NewEntity("card", "", nil)
+			_ = s.MoveTo(id, "deck")
+		}
+		return s
+	}
+	order := func(s *ccg.State) []ccg.EntityID {
+		return append([]ccg.EntityID(nil), s.Zones["deck"].Members...)
+	}
+	a, b := build(), build()
+	if _, err := ccgOp(t, "shuffle").Call(map[string]any{"ccg": a}, map[string]any{"zone": "deck"}, core.NewRandomFromState(seedPtr(42))); err != nil {
+		t.Fatalf("shuffle a: %v", err)
+	}
+	if _, err := ccgOp(t, "shuffle").Call(map[string]any{"ccg": b}, map[string]any{"zone": "deck"}, core.NewRandomFromState(seedPtr(42))); err != nil {
+		t.Fatalf("shuffle b: %v", err)
+	}
+	if !equalIDs(order(a), order(b)) {
+		t.Fatalf("same seed gave different orders:\n a=%v\n b=%v", order(a), order(b))
+	}
+	c := build()
+	ccgOp(t, "shuffle").Call(map[string]any{"ccg": c}, map[string]any{"zone": "deck"}, core.NewRandomFromState(seedPtr(7)))
+	if len(order(c)) != 8 {
+		t.Fatalf("shuffle changed deck size: %v", order(c))
+	}
+}
+
+func TestCCG_Shuffle_UnknownZone(t *testing.T) {
+	s := ccg.NewState()
+	if _, err := ccgOp(t, "shuffle").Call(map[string]any{"ccg": s}, map[string]any{"zone": "nope"}, core.NewRandomFromState(seedPtr(1))); err == nil {
+		t.Fatal("expected ErrUnknownZone")
+	}
+}
+
+func TestCCG_Shuffle_NilRNG(t *testing.T) {
+	s := ccg.NewState()
+	s.NewZone("deck", true)
+	if _, err := ccgOp(t, "shuffle").Call(map[string]any{"ccg": s}, map[string]any{"zone": "deck"}, nil); err == nil {
+		t.Fatal("expected error when rng is nil")
+	}
+}
+
+func seedPtr(v uint64) *uint64 { return &v }
+
+func equalIDs(a, b []ccg.EntityID) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
