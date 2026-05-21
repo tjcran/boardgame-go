@@ -194,7 +194,7 @@ func LoadSpec(source string) (*Spec, error) {
 	return s, nil
 }
 
-var knownModules = map[string]bool{"ccg": true}
+var knownModules = map[string]bool{"ccg": true, "tabletop": true}
 
 func readModules(globals starlark.StringDict, s *Spec) error {
 	raw, ok := globals["MODULES"]
