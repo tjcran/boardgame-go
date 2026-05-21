@@ -175,5 +175,46 @@ func buildCCGRegistry() *Registry {
 			return out, nil
 		}})
 
+	r.Add(Op{Module: "ccg", Name: "publish", MCPTool: "ccg_publish",
+		Call: func(modules map[string]any, args map[string]any) (res any, err error) {
+			s, e := ccgFrom(modules)
+			if e != nil {
+				return nil, e
+			}
+			typ, e := argStr(args, "type")
+			if e != nil {
+				return nil, e
+			}
+			ev := ccg.Event{Type: typ}
+			if tok, ok := args["source"].(string); ok && tok != "" {
+				id, e := ParseEntityToken(tok)
+				if e != nil {
+					return nil, e
+				}
+				ev.Source = id
+			}
+			if tok, ok := args["target"].(string); ok && tok != "" {
+				id, e := ParseEntityToken(tok)
+				if e != nil {
+					return nil, e
+				}
+				ev.Target = id
+			}
+			if d, ok := args["data"].(map[string]any); ok {
+				ev.Data = d
+			}
+			defer func() {
+				if r := recover(); r != nil {
+					if he, ok := r.(HookError); ok {
+						err = he
+						return
+					}
+					panic(r)
+				}
+			}()
+			s.Publish(ev)
+			return nil, nil
+		}})
+
 	return r
 }

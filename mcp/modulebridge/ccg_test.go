@@ -1,6 +1,7 @@
 package modulebridge
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/tjcran/boardgame-go/modules/ccg"
@@ -57,3 +58,32 @@ func TestCCG_StateFactory(t *testing.T) {
 		t.Fatal("NewState(ccg) did not return *ccg.State")
 	}
 }
+
+func TestCCG_Publish_FiresSubscriber(t *testing.T) {
+	st := ccg.NewState()
+	fired := 0
+	st.Subscribe(ccg.MatchType("died"), func(_ *ccg.State, e ccg.Event) {
+		fired++
+	})
+	mods := map[string]any{"ccg": st}
+	if _, err := ccgOp(t, "publish").Call(mods, map[string]any{"type": "died"}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if fired != 1 {
+		t.Fatalf("subscriber fired %d times, want 1", fired)
+	}
+}
+
+func TestCCG_Publish_RecoversHookError(t *testing.T) {
+	st := ccg.NewState()
+	st.Subscribe(ccg.MatchType("boom"), func(_ *ccg.State, e ccg.Event) {
+		panic(HookError{Err: errTestHook})
+	})
+	mods := map[string]any{"ccg": st}
+	_, err := ccgOp(t, "publish").Call(mods, map[string]any{"type": "boom"})
+	if err == nil {
+		t.Fatal("expected publish to surface the HookError panic as an error")
+	}
+}
+
+var errTestHook = fmt.Errorf("boom hook failed")

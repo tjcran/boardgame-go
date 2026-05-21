@@ -70,6 +70,12 @@ type Stage struct {
 	Next  string
 }
 
+// Hook binds a ccg event type to a Starlark handler fn(event, ctx).
+type Hook struct {
+	Type string
+	Fn   starlark.Callable
+}
+
 // Spec is a compiled, structurally validated game spec.
 type Spec struct {
 	Meta       Meta
@@ -94,6 +100,10 @@ type Spec struct {
 	// Modules is the optional top-level MODULES list naming engine
 	// modules the spec uses via ctx.modules.<name>.*. Empty when absent.
 	Modules []string
+
+	// Hooks is the optional ordered HOOKS table: ccg event type -> handler.
+	// Requires "ccg" in Modules. Registered on the live ccg state in Setup.
+	Hooks []Hook
 
 	source string
 }
@@ -194,8 +204,47 @@ func LoadSpec(source string) (*Spec, error) {
 	if err := readModules(globals, s); err != nil {
 		return nil, err
 	}
+	if err := readHooks(globals, s); err != nil {
+		return nil, err
+	}
 
 	return s, nil
+}
+
+func readHooks(globals starlark.StringDict, s *Spec) error {
+	raw, ok := globals["HOOKS"]
+	if !ok {
+		return nil
+	}
+	d, ok := raw.(*starlark.Dict)
+	if !ok {
+		return fmt.Errorf("HOOKS must be a dict, got %s", raw.Type())
+	}
+	if d.Len() == 0 {
+		return nil
+	}
+	hasCCG := false
+	for _, m := range s.Modules {
+		if m == "ccg" {
+			hasCCG = true
+		}
+	}
+	if !hasCCG {
+		return fmt.Errorf("HOOKS requires \"ccg\" in MODULES")
+	}
+	for _, k := range d.Keys() {
+		ks, ok := k.(starlark.String)
+		if !ok {
+			return fmt.Errorf("HOOKS key %v must be a string", k)
+		}
+		v, _, _ := d.Get(k)
+		fn, ok := v.(starlark.Callable)
+		if !ok {
+			return fmt.Errorf("HOOKS[%q] must be a function, got %s", string(ks), v.Type())
+		}
+		s.Hooks = append(s.Hooks, Hook{Type: string(ks), Fn: fn})
+	}
+	return nil
 }
 
 var knownModules = map[string]bool{"ccg": true, "tabletop": true, "economy": true, "shop": true}

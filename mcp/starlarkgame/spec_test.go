@@ -79,3 +79,38 @@ MOVES = {"pass": {"apply": lambda state, ctx: state}}
 		t.Fatal("expected error for unknown module")
 	}
 }
+
+func TestLoadSpec_ParsesHooks(t *testing.T) {
+	s, err := LoadSpec(`
+META = {"name":"h","min_players":1,"max_players":1}
+MODULES = ["ccg"]
+def setup(ctx): return {}
+def end_if(state, ctx): return None
+def legal_moves(state, ctx): return []
+def on_died(event, ctx): pass
+def on_drawn(event, ctx): pass
+HOOKS = {"died": on_died, "drawn": on_drawn}
+MOVES = {"noop": {"apply": lambda s, c: s}}
+`)
+	if err != nil {
+		t.Fatalf("LoadSpec: %v", err)
+	}
+	if len(s.Hooks) != 2 || s.Hooks[0].Type != "died" || s.Hooks[1].Type != "drawn" {
+		t.Fatalf("hooks wrong/!ordered: %#v", s.Hooks)
+	}
+}
+
+func TestLoadSpec_HooksRequireCCG(t *testing.T) {
+	_, err := LoadSpec(`
+META = {"name":"h","min_players":1,"max_players":1}
+def setup(ctx): return {}
+def end_if(state, ctx): return None
+def legal_moves(state, ctx): return []
+def on_died(event, ctx): pass
+HOOKS = {"died": on_died}
+MOVES = {"noop": {"apply": lambda s, c: s}}
+`)
+	if err == nil {
+		t.Fatal("expected HOOKS without ccg in MODULES to be rejected")
+	}
+}

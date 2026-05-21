@@ -47,7 +47,9 @@ func BuildCoreGame(s *Spec) *core.Game {
 			// will immediately fail end_if.
 			return &StarlarkG{Data: map[string]any{"__starlark_setup_error__": err.Error()}, Modules: mods}
 		}
-		return &StarlarkG{Data: data, Modules: mods}
+		sg := &StarlarkG{Data: data, Modules: mods}
+		registerHooks(s, mods)
+		return sg
 	}
 
 	g.EndIf = func(mc *core.MoveContext) any {
