@@ -80,6 +80,46 @@ registry. It owns the opaque-handle table, argument marshalling, and resolver
 registration. It lives inside the MCP go.mod (it depends on `modules/*`, which
 the root engine never imports).
 
+### Module state lives in G, not in the state dict
+
+Critical impedance mismatch the engine resolves: the Starlark adapter today uses
+a **pure `map[string]any` as `G`** — every engine call (`CallSetup`/`CallMove`/…
+in `call.go`) takes a frozen state dict and returns a new one; `apply` is a pure
+transform. But `modules/ccg` and friends work by **mutating a `*ccg.State` Go
+struct** with unexported, unserialized monotonic ID counters
+(`State.nextEntityID`, …). Serializing module state into the dict and rebuilding
+it each call would reset those counters and collide IDs.
+
+Resolution: designed games get a real struct `G`, not a bare dict:
+
+```go
+// mcp/starlarkgame/game.go
+type StarlarkG struct {
+    Data    map[string]any // user game state (what apply returns)
+    Modules map[string]any // live module states: "ccg" -> *ccg.State, …
+}
+```
+
+`Data` is the dict the spec's `apply` reads and returns (unchanged contract from
+the spec author's view). `Modules` holds the live Go module states, instantiated
+once in `Setup` per the `MODULES` declaration and carried in memory across moves
+exactly like a native Go game's `G`. `apply` never sees `Modules` as data — it
+reaches module operations only through `ctx.modules.<name>.*` bindings, which
+mutate the live structs. Counters persist because the structs persist.
+
+Consequences:
+- `game.go` closures change from `mc.G.(map[string]any)` to `mc.G.(*StarlarkG)`,
+  passing `.Data` to the `Call*` functions and reattaching `.Modules`.
+- `BridgeCtx` carries the module states so `ctx.modules.*` bindings can mutate
+  them; the input `Data` dict stays frozen (module mutations are Go-side, not
+  dict writes, so freezing is not violated).
+- **Replay** is correct: replay re-runs from `Setup`, rebuilding module states
+  deterministically. **Storage round-trip** (serializing `G` to disk between
+  moves) drops the unexported counters — but this is a *pre-existing* `ccg`
+  limitation that equally affects native Go games using `ccg`, so it is
+  consistent and out of scope here. The in-memory `Manager` holds the live `G`
+  across moves, so live play is unaffected.
+
 ## Components
 
 ### New: `mcp/modulebridge/`
@@ -115,13 +155,15 @@ the root engine never imports).
 
 ### Changed: `mcp/starlarkgame/` (additive, backward compatible)
 
-- **`host.go`** — curated `load()` whitelist. `load("modules/ccg.star", "ccg")`
-  resolves against an in-memory module built from `modulebridge.Registry`; the
-  "files" are synthetic, not on disk. Anything outside the whitelist stays
-  disabled.
+- **`bridge.go`** — module bindings are exposed as `ctx.modules.<name>.<op>()`,
+  matching the existing `ctx.events` / `ctx.random` sub-struct pattern. The
+  `ctx.modules` struct is built from `modulebridge.Registry`, with each op's
+  builtin closure backed by the live module state in `StarlarkG.Modules`. (No
+  synthetic `load()` files — `load()` stays disabled. `ctx.modules` is simpler
+  and the module state is already reachable via `BridgeCtx`.)
 - **`spec.go`** — new top-level `MODULES = ["ccg", "tabletop.hex", "economy"]`.
-  The host instantiates the corresponding Go state (`ccg.NewState()`, …) during
-  setup and attaches it to the spec's `G`.
+  `Setup` instantiates the corresponding Go state (`ccg.NewState()`, …) into
+  `StarlarkG.Modules` keyed by module name (see "Module state lives in G").
 - **Args schema** extended with semantic types: `{"type": "entity", "zone":
   "hand"}`, `{"type": "hex"}`, `{"type": "target"}`. The engine validates these
   against module state before `apply` runs. Existing primitive args unchanged.
@@ -270,7 +312,23 @@ sets) is out of scope here and tracked as separate gaps.
    blocks.
 2. Draft-only gating mechanism for the D1 module tools: a per-match `__draft__`
    flag vs. a separate MCP server mode.
-3. Handle-table reconstruction in hosted mode — confirm deterministic
-   token-from-entity-ID derivation is sufficient, or whether the token map must
-   be persisted alongside the match.
+3. Handle-table reconstruction — resolved by "module state lives in G": handles
+   are deterministic tokens derived from the underlying entity ID / coordinate
+   (`ent:7`, `hex:2,3`), so the table is a pure function of the live module
+   state and needs no separate persistence. Confirm during implementation that
+   every handle type has such a stable derivation.
+
+## Implementation phasing
+
+Built as a sequence of plans; each produces working, tested software:
+
+1. **Core bridge + ccg** (this plan): `StarlarkG`, the `modulebridge` registry +
+   handle table, the `MODULES`/`load()` wiring, the full `ccg` binding, the dual
+   MCP-tool surface, determinism + replay tests. ccg is chosen first because it
+   exercises every hard part (handles, live state across moves, dual surface,
+   determinism, events).
+2. **tabletop** binding (hex/square/terrain/combat) — reuses the mechanism.
+3. **economy + shop** bindings — reuse the mechanism.
+4. **TargetRequest** block/resume bindings + `submit_target` design-time tool.
+5. **HOOKS** event-bus registration + semantic arg schema types.
 ```
