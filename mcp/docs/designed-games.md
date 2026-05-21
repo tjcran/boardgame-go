@@ -111,7 +111,40 @@ shop ops: `fill(slots, stock, size)`, `roll(slots, stock, size, dest)`,
 in order (no shuffle yet — arrange Stock as you want it dealt). `buy` does not
 charge — pair it with `economy.spend` as above.
 
-Target selection and event hooks land in later phases.
+## Target selection (pausing for player input)
+
+A move can pause to ask a player to choose targets, then resume on their pick.
+In the requesting move call `ctx.request_target(kind=..., candidates=[...],
+min=1, max=1)` and mark the move `"ends_turn": False`. The match pauses with the
+pending request visible in `state.blocks`. Dispatch the follow-up via `make_move`
+with `resumeTag` set to the request's `kind`; that resume move reads
+`ctx.resuming_target()` and validates the player's pick with
+`ctx.validate_selection([...])`.
+
+    def cast_bolt(state, ctx):
+        ctx.request_target(kind="creature", candidates=state["creatures"], min=1, max=1)
+        return state
+
+    def resolve_bolt(state, ctx, target):
+        ctx.validate_selection([target])          # rejects an out-of-set pick
+        # … apply the effect to `target` …
+        return state
+
+    MOVES = {
+        "cast_bolt":    {"apply": cast_bolt, "ends_turn": False},
+        "resolve_bolt": {"apply": resolve_bolt, "ends_turn": False,
+                         "args": [{"name": "target", "type": "string"}]},
+    }
+
+`request_target` args: `kind` (required string; also the resume tag),
+`candidates` (list — entity tokens, ints, or strings), `min`/`max` (selection
+count; default 1/1), optional `source` and `data` (opaque context). While a
+request is pending, ordinary moves are rejected until a `resumeTag` move clears
+it. `ctx.resuming_target()` returns the pending request dict (or `None`);
+`ctx.validate_selection(list)` rejects the move if the pick violates the
+request's cardinality or candidate set.
+
+Event hooks (HOOKS) land in a later phase.
 
 ## Where games live
 
