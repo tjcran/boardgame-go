@@ -116,6 +116,10 @@ func (c *BridgeCtx) eventsAsStarlark() starlark.Value {
 // live module, each a struct of op builtins bound to that module's
 // live state. Args are passed as Starlark keyword arguments.
 func (c *BridgeCtx) modulesAsStarlark() starlark.Value {
+	var rng *core.Random
+	if c.rng != nil {
+		rng = c.rng.rng
+	}
 	modAttrs := starlark.StringDict{}
 	for name := range c.Modules {
 		reg := modulebridge.RegistryFor(name)
@@ -142,7 +146,7 @@ func (c *BridgeCtx) modulesAsStarlark() starlark.Value {
 						}
 						m[string(k)] = gv
 					}
-					res, err := op.Call(c.Modules, m)
+					res, err := op.Call(c.Modules, m, rng)
 					if err != nil {
 						return nil, err
 					}

@@ -3,6 +3,7 @@ package modulebridge
 import (
 	"fmt"
 
+	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/modules/ccg"
 )
 
@@ -63,7 +64,7 @@ func buildCCGRegistry() *Registry {
 	r := NewRegistry()
 
 	r.Add(Op{Module: "ccg", Name: "new_zone", MCPTool: "ccg_new_zone",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -77,7 +78,7 @@ func buildCCGRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "ccg", Name: "new_entity", MCPTool: "ccg_new_entity",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -96,7 +97,7 @@ func buildCCGRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "ccg", Name: "move_to", MCPTool: "ccg_move_to",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -117,7 +118,7 @@ func buildCCGRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "ccg", Name: "size", MCPTool: "ccg_size",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -130,7 +131,7 @@ func buildCCGRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "ccg", Name: "members", MCPTool: "ccg_members",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -151,7 +152,7 @@ func buildCCGRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "ccg", Name: "draw", MCPTool: "ccg_draw",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -176,7 +177,7 @@ func buildCCGRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "ccg", Name: "publish", MCPTool: "ccg_publish",
-		Call: func(modules map[string]any, args map[string]any) (res any, err error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (res any, err error) {
 			s, e := ccgFrom(modules)
 			if e != nil {
 				return nil, e
@@ -214,6 +215,22 @@ func buildCCGRegistry() *Registry {
 			}()
 			s.Publish(ev)
 			return nil, nil
+		}})
+
+	r.Add(Op{Module: "ccg", Name: "shuffle", MCPTool: "ccg_shuffle",
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
+			s, err := ccgFrom(modules)
+			if err != nil {
+				return nil, err
+			}
+			if rng == nil {
+				return nil, fmt.Errorf("ccg.shuffle: no RNG available in this context")
+			}
+			zone, err := argStr(args, "zone")
+			if err != nil {
+				return nil, err
+			}
+			return nil, s.Shuffle(ccg.ZoneName(zone), rng)
 		}})
 
 	return r

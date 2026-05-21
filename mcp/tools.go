@@ -647,7 +647,7 @@ func (t *Tools) ModuleOp(ctx context.Context, args ModuleOpArgs) (ModuleOpResult
 	if _, ok := sg.Modules[args.Module]; !ok {
 		return ModuleOpResult{}, fmt.Errorf("match %s did not declare module %q", args.MatchID, args.Module)
 	}
-	res, err := chosen.Call(sg.Modules, args.Args)
+	res, err := chosen.Call(sg.Modules, args.Args, core.NewRandomFromState(new(uint64)))
 	if err != nil {
 		return ModuleOpResult{}, err
 	}

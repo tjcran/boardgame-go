@@ -1,6 +1,7 @@
 package modulebridge
 
 import (
+	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/modules/ccg"
 	"github.com/tjcran/boardgame-go/modules/economy"
 )
@@ -49,7 +50,7 @@ func buildEconomyRegistry() *Registry {
 	r := NewRegistry()
 
 	r.Add(Op{Module: "economy", Name: "current", MCPTool: "economy_current",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			p, s, err := poolFrom(modules, args)
 			if err != nil {
 				return nil, err
@@ -58,7 +59,7 @@ func buildEconomyRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "economy", Name: "gain", MCPTool: "economy_gain",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			p, s, err := poolFrom(modules, args)
 			if err != nil {
 				return nil, err
@@ -71,7 +72,7 @@ func buildEconomyRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "economy", Name: "spend", MCPTool: "economy_spend",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			p, s, err := poolFrom(modules, args)
 			if err != nil {
 				return nil, err
@@ -84,7 +85,7 @@ func buildEconomyRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "economy", Name: "set", MCPTool: "economy_set",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			p, s, err := poolFrom(modules, args)
 			if err != nil {
 				return nil, err
@@ -97,7 +98,7 @@ func buildEconomyRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "economy", Name: "scaled", MCPTool: "economy_scaled",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			turn, err := argInt(args, "turn")
 			if err != nil {
 				return nil, err
