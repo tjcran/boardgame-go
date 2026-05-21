@@ -1,6 +1,7 @@
 package modulebridge
 
 import (
+	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/modules/ccg"
 	"github.com/tjcran/boardgame-go/modules/shop"
 )
@@ -48,7 +49,7 @@ func buildShopRegistry() *Registry {
 	r := NewRegistry()
 
 	r.Add(Op{Module: "shop", Name: "clear", MCPTool: "shop_clear",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -62,7 +63,7 @@ func buildShopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "shop", Name: "fill", MCPTool: "shop_fill",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -75,7 +76,7 @@ func buildShopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "shop", Name: "roll", MCPTool: "shop_roll",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -89,7 +90,7 @@ func buildShopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "shop", Name: "buy", MCPTool: "shop_buy",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -110,7 +111,7 @@ func buildShopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "shop", Name: "freeze", MCPTool: "shop_freeze",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -127,7 +128,7 @@ func buildShopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "shop", Name: "unfreeze", MCPTool: "shop_unfreeze",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
@@ -140,7 +141,7 @@ func buildShopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "shop", Name: "is_frozen", MCPTool: "shop_is_frozen",
-		Call: func(modules map[string]any, args map[string]any) (any, error) {
+		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err

@@ -1,5 +1,7 @@
 package modulebridge
 
+import "github.com/tjcran/boardgame-go/core"
+
 // Op is one engine operation, exposed on both surfaces (Starlark
 // ctx.modules.<Module>.<Name> and the MCP tool <MCPTool>).
 //
@@ -14,7 +16,8 @@ type Op struct {
 	// Call receives ALL live module states (keyed by module name) so a
 	// composing module (economy/shop over ccg) can reach another's state.
 	// An op pulls its own module via modules[op.Module].
-	Call func(modules map[string]any, args map[string]any) (any, error)
+	// rng is the move's seeded PRNG (nil at design-time); ops that don't need randomness ignore it.
+	Call func(modules map[string]any, args map[string]any, rng *core.Random) (any, error)
 }
 
 // emptyState is the placeholder a stateless module (economy, shop) puts

@@ -21,10 +21,10 @@ func ccgOp(t *testing.T, name string) Op {
 func TestCCG_NewZoneNewEntityMoveTo(t *testing.T) {
 	st := ccg.NewState()
 
-	if _, err := ccgOp(t, "new_zone").Call(map[string]any{"ccg": st}, map[string]any{"name": "hand", "ordered": false}); err != nil {
+	if _, err := ccgOp(t, "new_zone").Call(map[string]any{"ccg": st}, map[string]any{"name": "hand", "ordered": false}, nil); err != nil {
 		t.Fatalf("new_zone: %v", err)
 	}
-	res, err := ccgOp(t, "new_entity").Call(map[string]any{"ccg": st}, map[string]any{"type": "card", "owner": "0"})
+	res, err := ccgOp(t, "new_entity").Call(map[string]any{"ccg": st}, map[string]any{"type": "card", "owner": "0"}, nil)
 	if err != nil {
 		t.Fatalf("new_entity: %v", err)
 	}
@@ -32,10 +32,10 @@ func TestCCG_NewZoneNewEntityMoveTo(t *testing.T) {
 	if tok != "ent:1" {
 		t.Fatalf("got token %q, want ent:1", tok)
 	}
-	if _, err := ccgOp(t, "move_to").Call(map[string]any{"ccg": st}, map[string]any{"entity": tok, "zone": "hand"}); err != nil {
+	if _, err := ccgOp(t, "move_to").Call(map[string]any{"ccg": st}, map[string]any{"entity": tok, "zone": "hand"}, nil); err != nil {
 		t.Fatalf("move_to: %v", err)
 	}
-	sizeRes, err := ccgOp(t, "size").Call(map[string]any{"ccg": st}, map[string]any{"zone": "hand"})
+	sizeRes, err := ccgOp(t, "size").Call(map[string]any{"ccg": st}, map[string]any{"zone": "hand"}, nil)
 	if err != nil {
 		t.Fatalf("size: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestCCG_NewZoneNewEntityMoveTo(t *testing.T) {
 func TestCCG_MoveTo_BadHandle(t *testing.T) {
 	st := ccg.NewState()
 	st.NewZone("hand", false)
-	_, err := ccgOp(t, "move_to").Call(map[string]any{"ccg": st}, map[string]any{"entity": "ent:99", "zone": "hand"})
+	_, err := ccgOp(t, "move_to").Call(map[string]any{"ccg": st}, map[string]any{"entity": "ent:99", "zone": "hand"}, nil)
 	if err == nil {
 		t.Fatal("expected ErrUnknownEntity for missing entity")
 	}
@@ -66,7 +66,7 @@ func TestCCG_Publish_FiresSubscriber(t *testing.T) {
 		fired++
 	})
 	mods := map[string]any{"ccg": st}
-	if _, err := ccgOp(t, "publish").Call(mods, map[string]any{"type": "died"}); err != nil {
+	if _, err := ccgOp(t, "publish").Call(mods, map[string]any{"type": "died"}, nil); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	if fired != 1 {
@@ -80,7 +80,7 @@ func TestCCG_Publish_RecoversHookError(t *testing.T) {
 		panic(HookError{Err: errTestHook})
 	})
 	mods := map[string]any{"ccg": st}
-	_, err := ccgOp(t, "publish").Call(mods, map[string]any{"type": "boom"})
+	_, err := ccgOp(t, "publish").Call(mods, map[string]any{"type": "boom"}, nil)
 	if err == nil {
 		t.Fatal("expected publish to surface the HookError panic as an error")
 	}

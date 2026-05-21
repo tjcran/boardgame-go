@@ -37,7 +37,7 @@ func buildShopState(t *testing.T) (map[string]any, *ccg.State, []string) {
 func TestShop_FillBuyFreeze(t *testing.T) {
 	mods, st, _ := buildShopState(t)
 
-	if _, err := shopOp(t, "fill").Call(mods, map[string]any{"slots": "slots", "stock": "stock", "size": int64(2)}); err != nil {
+	if _, err := shopOp(t, "fill").Call(mods, map[string]any{"slots": "slots", "stock": "stock", "size": int64(2)}, nil); err != nil {
 		t.Fatalf("fill: %v", err)
 	}
 	if st.Size("slots") != 2 || st.Size("stock") != 1 {
@@ -45,7 +45,7 @@ func TestShop_FillBuyFreeze(t *testing.T) {
 	}
 
 	first := EntityToken(st.Zones["slots"].Members[0])
-	if _, err := shopOp(t, "buy").Call(mods, map[string]any{"slots": "slots", "item": first, "dest": "hand"}); err != nil {
+	if _, err := shopOp(t, "buy").Call(mods, map[string]any{"slots": "slots", "item": first, "dest": "hand"}, nil); err != nil {
 		t.Fatalf("buy: %v", err)
 	}
 	if st.Size("hand") != 1 || st.Size("slots") != 1 {
@@ -53,14 +53,14 @@ func TestShop_FillBuyFreeze(t *testing.T) {
 	}
 
 	keep := EntityToken(st.Zones["slots"].Members[0])
-	if _, err := shopOp(t, "freeze").Call(mods, map[string]any{"slots": "slots", "item": keep}); err != nil {
+	if _, err := shopOp(t, "freeze").Call(mods, map[string]any{"slots": "slots", "item": keep}, nil); err != nil {
 		t.Fatalf("freeze: %v", err)
 	}
-	frRes, _ := shopOp(t, "is_frozen").Call(mods, map[string]any{"item": keep})
+	frRes, _ := shopOp(t, "is_frozen").Call(mods, map[string]any{"item": keep}, nil)
 	if frRes.(bool) != true {
 		t.Fatalf("is_frozen = %v, want true", frRes)
 	}
-	if _, err := shopOp(t, "clear").Call(mods, map[string]any{"slots": "slots", "dest": "stock"}); err != nil {
+	if _, err := shopOp(t, "clear").Call(mods, map[string]any{"slots": "slots", "dest": "stock"}, nil); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 	if st.Size("slots") != 1 {
@@ -70,7 +70,7 @@ func TestShop_FillBuyFreeze(t *testing.T) {
 
 func TestShop_BuyNotInSlots(t *testing.T) {
 	mods, _, toks := buildShopState(t)
-	if _, err := shopOp(t, "buy").Call(mods, map[string]any{"slots": "slots", "item": toks[0], "dest": "hand"}); err == nil {
+	if _, err := shopOp(t, "buy").Call(mods, map[string]any{"slots": "slots", "item": toks[0], "dest": "hand"}, nil); err == nil {
 		t.Fatal("expected ErrNotInSlots")
 	}
 }
