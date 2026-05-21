@@ -44,7 +44,7 @@ func TestImplementAKnownGamePromptShape(t *testing.T) {
 		"MOVES",
 		"end_if",
 		"legal_moves",
-		"return the new state dict",
+		"the new state dict",
 		"fail(",
 		"playtest_draft",
 		"register_game",
@@ -54,15 +54,17 @@ func TestImplementAKnownGamePromptShape(t *testing.T) {
 		}
 	}
 
-	// Engine-limits callout — must flag the multi-action / phases gap so
-	// Claude doesn't try to implement Catan silently and produce a broken
-	// reduction.
+	// Engine-capabilities callout — must document multi-action turns and the
+	// PHASES/STAGES features so Claude reaches for them (e.g. Catan's
+	// roll-then-build, Stratego's place-then-play) instead of producing a
+	// broken single-flow reduction.
 	for _, want := range []string{
 		"Multi-action turns",
-		"phases or stages",
+		"Phases:",
+		"Stages:",
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("prompt missing limits anchor %q", want)
+			t.Errorf("prompt missing capability anchor %q", want)
 		}
 	}
 

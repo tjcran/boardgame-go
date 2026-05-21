@@ -17,7 +17,7 @@ type Player struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Seat        string `json:"seat"`        // seat index as string, matches ctx.PlayOrder
-	Credentials string `json:"-"`           // never serialise to client output
+	Credentials string `json:"credentials,omitempty"` // persisted by serializing stores (SQLite/Postgres); kept out of client output by the server DTOs, which never marshal storage.Player directly — not by this tag
 	Data        any    `json:"data,omitempty"`
 	IsConnected bool   `json:"isConnected,omitempty"`
 }

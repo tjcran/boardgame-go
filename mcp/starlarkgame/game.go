@@ -55,7 +55,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 	g.EndIf = func(mc *core.MoveContext) any {
 		bc := &BridgeCtx{NumPlayers: mc.Ctx.NumPlayers}
 		bc.AttachSeededRandom(ctxSeed(mc.Ctx))
-		sg, ok := mc.G.(*StarlarkG)
+		sg, ok := asStarlarkG(mc.G)
 		if !ok {
 			return nil
 		}
@@ -69,7 +69,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 	if s.PlayerView != nil {
 		g.PlayerView = func(gv core.G, ctx core.Ctx, playerID string) core.G {
 			bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, PlayerID: playerID}
-			sg, ok := gv.(*StarlarkG)
+			sg, ok := asStarlarkG(gv)
 			if !ok {
 				return gv
 			}
@@ -84,7 +84,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 	g.Enumerate = func(gv core.G, ctx core.Ctx, playerID string) []core.EnumerateAction {
 		bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, PlayerID: playerID}
 		bc.AttachSeededRandom(ctxSeed(ctx))
-		sg, ok := gv.(*StarlarkG)
+		sg, ok := asStarlarkG(gv)
 		if !ok {
 			return nil
 		}
@@ -131,7 +131,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 						Phase:      mc.Ctx.Phase,
 					}
 					bc.AttachSeededRandom(ctxSeed(mc.Ctx))
-					sg, ok := mc.G.(*StarlarkG)
+					sg, ok := asStarlarkG(mc.G)
 					if !ok {
 						return false, ""
 					}
@@ -160,7 +160,7 @@ func buildMovesMap(s *Spec, src map[string]Move) map[string]any {
 		mv := mv
 		endsTurn := mv.EndsTurn
 		out[name] = core.MoveFn(func(mc *core.MoveContext, args ...any) (core.G, error) {
-			sg, ok := mc.G.(*StarlarkG)
+			sg, ok := asStarlarkG(mc.G)
 			if !ok {
 				return nil, fmt.Errorf("starlarkgame: state is not *StarlarkG")
 			}
