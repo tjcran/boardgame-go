@@ -11,8 +11,16 @@ type Op struct {
 	Module  string
 	Name    string
 	MCPTool string
-	Call    func(state any, args map[string]any) (any, error)
+	// Call receives ALL live module states (keyed by module name) so a
+	// composing module (economy/shop over ccg) can reach another's state.
+	// An op pulls its own module via modules[op.Module].
+	Call func(modules map[string]any, args map[string]any) (any, error)
 }
+
+// emptyState is the placeholder a stateless module (economy, shop) puts
+// in StarlarkG.Modules so its ctx.modules.<name> binding exists. Such
+// modules operate on another module's state (ccg), not their own.
+type emptyState struct{}
 
 // Registry is the set of ops for one or more modules, built once at init.
 type Registry struct {
