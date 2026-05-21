@@ -332,3 +332,46 @@ Built as a sequence of plans; each produces working, tested software:
 4. **TargetRequest** block/resume bindings + `submit_target` design-time tool.
 5. **HOOKS** event-bus registration + semantic arg schema types.
 ```
+
+## Phase 6 — HOOKS (event-bus reactive handlers) design
+
+Phase 5 shipped only the semantic-arg-types half of the original phase 5; HOOKS
+was split out here because it has real design latitude. Decisions:
+
+- **Spec surface.** A top-level `HOOKS = {"<event_type>": fn}` dict maps a ccg
+  event type to a Starlark handler `fn(event, ctx)`. `event` is a dict
+  `{type, source?, target?, data?}` (source/target are entity tokens, present
+  only when non-zero). `ctx` exposes `ctx.modules.*` (live module states) so a
+  handler can react with module ops (`ctx.modules.ccg.draw(...)`, etc.).
+- **Firing.** Specs publish events with a new `ctx.modules.ccg.publish(type=,
+  source=, target=, data=)` op, which calls `ccg.State.Publish`. ccg routes the
+  event to matching subscribers synchronously. (Zone moves do not auto-publish;
+  only explicit `publish` fires hooks — predictable.)
+- **Re-entrancy (the hard part).** A ccg subscriber handler is
+  `func(*ccg.State, ccg.Event)` with no Starlark thread, and it fires *inside*
+  `Publish`, which runs inside the move's Starlark execution. Rather than a
+  re-entrant `starlark.Call` on the live move thread, each handler invocation
+  **spawns a fresh sandboxed Starlark thread** and calls `fn` on it. Starlark
+  functions close over their module globals, not a thread, so this is safe; the
+  handler mutates the **shared live module state** (thread-independent Go
+  structs), which is exactly what reactive triggers need.
+- **What handlers can/can't touch.** Handlers operate on **module state only**
+  (ccg zones/counters via `ctx.modules`). They do NOT receive or mutate the
+  user `Data` dict — `Data` is frozen during a move and the handler fires
+  outside the move's return path. Documented limitation; "when X dies, draw a
+  card" is a module-state mutation, which works.
+- **Registration + determinism.** Hooks are registered in `g.Setup`, after
+  `CallSetup` runs, by `Subscribe(MatchType(type), goHandler)` on the live ccg
+  state — in deterministic `HOOKS` insertion order. Subscribers are NOT
+  serialized (ccg's documented behavior); the in-memory store keeps the live G
+  across moves so they persist, and **replay re-runs Setup → re-registers**, so
+  replay stays byte-deterministic. Same serializing-store caveat as prior phases.
+- **Recursion guard.** A handler may publish an event that re-triggers handlers.
+  A per-match nested-publish depth counter (cap ~32, mirroring core's
+  `chainedMoves` cap) bounds runaway cascades; exceeding it fails the publish.
+- **Dependency.** Declaring `HOOKS` requires `ccg` in `MODULES` (the event bus
+  lives on `ccg.State`), enforced at load time like economy/shop.
+
+Out of scope for phase 6: binding the ccg Effect envelope (PushEffect/ResolveNext)
+and non-ccg event sources. The remaining cross-cutting item after phase 6 is
+seeded-RNG-to-ops threading (shop shuffle, tabletop dice).
