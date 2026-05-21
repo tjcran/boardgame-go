@@ -70,3 +70,12 @@ func TestValidateArgs_Hex(t *testing.T) {
 		t.Fatal("expected reject: hex must be a list")
 	}
 }
+
+func TestRenderArgSig_EntityZone(t *testing.T) {
+	if got := renderArgSig(ArgDef{Name: "card", Type: "entity", Zone: "hand"}); got != "card: entity(hand)" {
+		t.Fatalf("got %q, want card: entity(hand)", got)
+	}
+	if got := renderArgSig(ArgDef{Name: "c", Type: "entity"}); got != "c: entity" {
+		t.Fatalf("got %q, want c: entity", got)
+	}
+}
