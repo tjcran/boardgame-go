@@ -162,11 +162,13 @@ func buildMovesMap(s *Spec, src map[string]Move) map[string]any {
 				return nil, fmt.Errorf("starlarkgame: state is not *StarlarkG")
 			}
 			bc := &BridgeCtx{
-				NumPlayers: mc.Ctx.NumPlayers,
-				PlayerID:   mc.PlayerID,
-				Phase:      mc.Ctx.Phase,
-				Events:     mc.Events,
-				Modules:    sg.Modules,
+				NumPlayers:    mc.Ctx.NumPlayers,
+				PlayerID:      mc.PlayerID,
+				Phase:         mc.Ctx.Phase,
+				Events:        mc.Events,
+				Modules:       sg.Modules,
+				Queue:         mc.Queue,
+				ResumingBlock: mc.ResumingBlock,
 			}
 			bc.AttachSeededRandom(ctxSeed(mc.Ctx))
 			newData, err := s.CallMove(context.Background(), bc, name, sg.Data, args)
