@@ -241,6 +241,28 @@ func RegisterTools(s *Server, t *Tools) {
 		}
 		return t.PlaytestDraft(ctx, args)
 	}))
+
+	s.RegisterTool(ToolSpec{
+		Name:        "module_op",
+		Description: "Design-time: invoke an engine-module operation on a draft match's live module state. Lets you prototype mechanics interactively; runs the exact same op the Starlark binding uses.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"matchId": {"type": "string", "description": "Match whose live module state to operate on."},
+				"module":  {"type": "string", "description": "Engine module name, e.g. \"ccg\"."},
+				"op":      {"type": "string", "description": "Op name within the module, e.g. \"new_zone\"."},
+				"args":    {"type": "object", "description": "Op arguments."}
+			},
+			"required": ["matchId", "module", "op"],
+			"additionalProperties": false
+		}`),
+	}, wrap(func(ctx context.Context, raw json.RawMessage) (any, error) {
+		var args ModuleOpArgs
+		if err := unmarshal(raw, &args); err != nil {
+			return nil, err
+		}
+		return t.ModuleOp(ctx, args)
+	}))
 }
 
 // wrap is a tiny adapter so handler bodies above can return (any, error)

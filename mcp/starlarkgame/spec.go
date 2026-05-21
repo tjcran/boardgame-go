@@ -87,8 +87,15 @@ type Spec struct {
 	// legal for that player. ctx.events.end_stage() pops them out.
 	Stages map[string]Stage
 
+	// Modules is the optional top-level MODULES list naming engine
+	// modules the spec uses via ctx.modules.<name>.*. Empty when absent.
+	Modules []string
+
 	source string
 }
+
+// Source returns the original spec source text.
+func (s *Spec) Source() string { return s.source }
 
 var nameRe = regexp.MustCompile(`^[a-z0-9-]{1,40}$`)
 
@@ -180,8 +187,38 @@ func LoadSpec(source string) (*Spec, error) {
 	if err := readStages(globals, s); err != nil {
 		return nil, err
 	}
+	if err := readModules(globals, s); err != nil {
+		return nil, err
+	}
 
 	return s, nil
+}
+
+var knownModules = map[string]bool{"ccg": true}
+
+func readModules(globals starlark.StringDict, s *Spec) error {
+	raw, ok := globals["MODULES"]
+	if !ok {
+		return nil
+	}
+	lst, ok := raw.(*starlark.List)
+	if !ok {
+		return fmt.Errorf("MODULES must be a list, got %s", raw.Type())
+	}
+	iter := lst.Iterate()
+	defer iter.Done()
+	var x starlark.Value
+	for iter.Next(&x) {
+		name, ok := x.(starlark.String)
+		if !ok {
+			return fmt.Errorf("MODULES entry %v must be a string", x)
+		}
+		if !knownModules[string(name)] {
+			return fmt.Errorf("MODULES: unknown module %q", string(name))
+		}
+		s.Modules = append(s.Modules, string(name))
+	}
+	return nil
 }
 
 // readStages parses the optional top-level STAGES dict.
