@@ -102,7 +102,7 @@ func (c *BridgeCtx) eventsAsStarlark() starlark.Value {
 // live state. Args are passed as Starlark keyword arguments.
 func (c *BridgeCtx) modulesAsStarlark() starlark.Value {
 	modAttrs := starlark.StringDict{}
-	for name, state := range c.Modules {
+	for name := range c.Modules {
 		reg := modulebridge.RegistryFor(name)
 		if reg == nil {
 			continue
@@ -110,7 +110,6 @@ func (c *BridgeCtx) modulesAsStarlark() starlark.Value {
 		opAttrs := starlark.StringDict{}
 		for _, op := range reg.Ops(name) {
 			op := op
-			st := state
 			opAttrs[op.Name] = starlark.NewBuiltin(name+"."+op.Name,
 				func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 					if len(args) != 0 {
@@ -128,7 +127,7 @@ func (c *BridgeCtx) modulesAsStarlark() starlark.Value {
 						}
 						m[string(k)] = gv
 					}
-					res, err := op.Call(st, m)
+					res, err := op.Call(c.Modules, m)
 					if err != nil {
 						return nil, err
 					}

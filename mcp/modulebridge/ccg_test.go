@@ -20,10 +20,10 @@ func ccgOp(t *testing.T, name string) Op {
 func TestCCG_NewZoneNewEntityMoveTo(t *testing.T) {
 	st := ccg.NewState()
 
-	if _, err := ccgOp(t, "new_zone").Call(st, map[string]any{"name": "hand", "ordered": false}); err != nil {
+	if _, err := ccgOp(t, "new_zone").Call(map[string]any{"ccg": st}, map[string]any{"name": "hand", "ordered": false}); err != nil {
 		t.Fatalf("new_zone: %v", err)
 	}
-	res, err := ccgOp(t, "new_entity").Call(st, map[string]any{"type": "card", "owner": "0"})
+	res, err := ccgOp(t, "new_entity").Call(map[string]any{"ccg": st}, map[string]any{"type": "card", "owner": "0"})
 	if err != nil {
 		t.Fatalf("new_entity: %v", err)
 	}
@@ -31,10 +31,10 @@ func TestCCG_NewZoneNewEntityMoveTo(t *testing.T) {
 	if tok != "ent:1" {
 		t.Fatalf("got token %q, want ent:1", tok)
 	}
-	if _, err := ccgOp(t, "move_to").Call(st, map[string]any{"entity": tok, "zone": "hand"}); err != nil {
+	if _, err := ccgOp(t, "move_to").Call(map[string]any{"ccg": st}, map[string]any{"entity": tok, "zone": "hand"}); err != nil {
 		t.Fatalf("move_to: %v", err)
 	}
-	sizeRes, err := ccgOp(t, "size").Call(st, map[string]any{"zone": "hand"})
+	sizeRes, err := ccgOp(t, "size").Call(map[string]any{"ccg": st}, map[string]any{"zone": "hand"})
 	if err != nil {
 		t.Fatalf("size: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestCCG_NewZoneNewEntityMoveTo(t *testing.T) {
 func TestCCG_MoveTo_BadHandle(t *testing.T) {
 	st := ccg.NewState()
 	st.NewZone("hand", false)
-	_, err := ccgOp(t, "move_to").Call(st, map[string]any{"entity": "ent:99", "zone": "hand"})
+	_, err := ccgOp(t, "move_to").Call(map[string]any{"ccg": st}, map[string]any{"entity": "ent:99", "zone": "hand"})
 	if err == nil {
 		t.Fatal("expected ErrUnknownEntity for missing entity")
 	}

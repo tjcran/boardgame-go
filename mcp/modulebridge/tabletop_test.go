@@ -22,10 +22,10 @@ func TestTabletop_StateFactory(t *testing.T) {
 
 func TestTabletop_NewBoard_Square(t *testing.T) {
 	st := NewState("tabletop")
-	if _, err := ttOp(t, "new_board").Call(st, map[string]any{"kind": "square", "w": int64(8), "h": int64(8)}); err != nil {
+	if _, err := ttOp(t, "new_board").Call(map[string]any{"tabletop": st}, map[string]any{"kind": "square", "w": int64(8), "h": int64(8)}); err != nil {
 		t.Fatalf("new_board: %v", err)
 	}
-	res, err := ttOp(t, "distance").Call(st, map[string]any{"ax": int64(0), "ay": int64(0), "bx": int64(3), "by": int64(2)})
+	res, err := ttOp(t, "distance").Call(map[string]any{"tabletop": st}, map[string]any{"ax": int64(0), "ay": int64(0), "bx": int64(3), "by": int64(2)})
 	if err != nil {
 		t.Fatalf("distance: %v", err)
 	}
@@ -36,26 +36,26 @@ func TestTabletop_NewBoard_Square(t *testing.T) {
 
 func TestTabletop_NewBoard_RejectsUnknownKind(t *testing.T) {
 	st := NewState("tabletop")
-	if _, err := ttOp(t, "new_board").Call(st, map[string]any{"kind": "triangular", "w": int64(4), "h": int64(4)}); err == nil {
+	if _, err := ttOp(t, "new_board").Call(map[string]any{"tabletop": st}, map[string]any{"kind": "triangular", "w": int64(4), "h": int64(4)}); err == nil {
 		t.Fatal("expected error for unknown board kind")
 	}
 }
 
 func TestTabletop_DistanceWithoutBoard_Errors(t *testing.T) {
 	st := NewState("tabletop")
-	if _, err := ttOp(t, "distance").Call(st, map[string]any{"ax": int64(0), "ay": int64(0), "bx": int64(1), "by": int64(1)}); err == nil {
+	if _, err := ttOp(t, "distance").Call(map[string]any{"tabletop": st}, map[string]any{"ax": int64(0), "ay": int64(0), "bx": int64(1), "by": int64(1)}); err == nil {
 		t.Fatal("expected error: distance before new_board")
 	}
 }
 
 func TestTabletop_PlaceMovePositionEntities(t *testing.T) {
 	st := NewState("tabletop")
-	ttOp(t, "new_board").Call(st, map[string]any{"kind": "square", "w": int64(8), "h": int64(8)})
+	ttOp(t, "new_board").Call(map[string]any{"tabletop": st}, map[string]any{"kind": "square", "w": int64(8), "h": int64(8)})
 
-	if _, err := ttOp(t, "place").Call(st, map[string]any{"unit": int64(1), "x": int64(2), "y": int64(3)}); err != nil {
+	if _, err := ttOp(t, "place").Call(map[string]any{"tabletop": st}, map[string]any{"unit": int64(1), "x": int64(2), "y": int64(3)}); err != nil {
 		t.Fatalf("place: %v", err)
 	}
-	posRes, err := ttOp(t, "position_of").Call(st, map[string]any{"unit": int64(1)})
+	posRes, err := ttOp(t, "position_of").Call(map[string]any{"tabletop": st}, map[string]any{"unit": int64(1)})
 	if err != nil {
 		t.Fatalf("position_of: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestTabletop_PlaceMovePositionEntities(t *testing.T) {
 	if xy[0].(int64) != 2 || xy[1].(int64) != 3 {
 		t.Fatalf("position_of = %v, want [2 3]", xy)
 	}
-	none, err := ttOp(t, "position_of").Call(st, map[string]any{"unit": int64(99)})
+	none, err := ttOp(t, "position_of").Call(map[string]any{"tabletop": st}, map[string]any{"unit": int64(99)})
 	if err != nil {
 		t.Fatalf("position_of(99): %v", err)
 	}
@@ -71,8 +71,8 @@ func TestTabletop_PlaceMovePositionEntities(t *testing.T) {
 		t.Fatalf("position_of(99) = %v, want nil", none)
 	}
 
-	ttOp(t, "move").Call(st, map[string]any{"unit": int64(1), "x": int64(4), "y": int64(4)})
-	atRes, err := ttOp(t, "entities_at").Call(st, map[string]any{"x": int64(4), "y": int64(4)})
+	ttOp(t, "move").Call(map[string]any{"tabletop": st}, map[string]any{"unit": int64(1), "x": int64(4), "y": int64(4)})
+	atRes, err := ttOp(t, "entities_at").Call(map[string]any{"tabletop": st}, map[string]any{"x": int64(4), "y": int64(4)})
 	if err != nil {
 		t.Fatalf("entities_at: %v", err)
 	}
@@ -81,10 +81,10 @@ func TestTabletop_PlaceMovePositionEntities(t *testing.T) {
 		t.Fatalf("entities_at(4,4) = %v, want [1]", at)
 	}
 
-	if _, err := ttOp(t, "remove").Call(st, map[string]any{"unit": int64(1)}); err != nil {
+	if _, err := ttOp(t, "remove").Call(map[string]any{"tabletop": st}, map[string]any{"unit": int64(1)}); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	atRes2, _ := ttOp(t, "entities_at").Call(st, map[string]any{"x": int64(4), "y": int64(4)})
+	atRes2, _ := ttOp(t, "entities_at").Call(map[string]any{"tabletop": st}, map[string]any{"x": int64(4), "y": int64(4)})
 	if len(atRes2.([]any)) != 0 {
 		t.Fatalf("entities_at after remove = %v, want []", atRes2)
 	}
@@ -92,9 +92,9 @@ func TestTabletop_PlaceMovePositionEntities(t *testing.T) {
 
 func TestTabletop_NeighborsWithinLOSTerrain(t *testing.T) {
 	st := NewState("tabletop")
-	ttOp(t, "new_board").Call(st, map[string]any{"kind": "square", "w": int64(8), "h": int64(8)})
+	ttOp(t, "new_board").Call(map[string]any{"tabletop": st}, map[string]any{"kind": "square", "w": int64(8), "h": int64(8)})
 
-	nRes, err := ttOp(t, "neighbors").Call(st, map[string]any{"x": int64(4), "y": int64(4)})
+	nRes, err := ttOp(t, "neighbors").Call(map[string]any{"tabletop": st}, map[string]any{"x": int64(4), "y": int64(4)})
 	if err != nil {
 		t.Fatalf("neighbors: %v", err)
 	}
@@ -102,9 +102,9 @@ func TestTabletop_NeighborsWithinLOSTerrain(t *testing.T) {
 		t.Fatalf("neighbors count = %d, want 8", len(nRes.([]any)))
 	}
 
-	ttOp(t, "place").Call(st, map[string]any{"unit": int64(1), "x": int64(5), "y": int64(4)})
-	ttOp(t, "place").Call(st, map[string]any{"unit": int64(2), "x": int64(0), "y": int64(0)})
-	wRes, err := ttOp(t, "within").Call(st, map[string]any{"x": int64(4), "y": int64(4), "radius": int64(1)})
+	ttOp(t, "place").Call(map[string]any{"tabletop": st}, map[string]any{"unit": int64(1), "x": int64(5), "y": int64(4)})
+	ttOp(t, "place").Call(map[string]any{"tabletop": st}, map[string]any{"unit": int64(2), "x": int64(0), "y": int64(0)})
+	wRes, err := ttOp(t, "within").Call(map[string]any{"tabletop": st}, map[string]any{"x": int64(4), "y": int64(4), "radius": int64(1)})
 	if err != nil {
 		t.Fatalf("within: %v", err)
 	}
@@ -113,18 +113,18 @@ func TestTabletop_NeighborsWithinLOSTerrain(t *testing.T) {
 		t.Fatalf("within(4,4,1) = %v, want [1]", w)
 	}
 
-	losRes, _ := ttOp(t, "line_of_sight").Call(st, map[string]any{"fx": int64(4), "fy": int64(2), "tx": int64(4), "ty": int64(4)})
+	losRes, _ := ttOp(t, "line_of_sight").Call(map[string]any{"tabletop": st}, map[string]any{"fx": int64(4), "fy": int64(2), "tx": int64(4), "ty": int64(4)})
 	if losRes.(bool) != true {
 		t.Fatalf("LOS before terrain = %v, want true", losRes)
 	}
-	if _, err := ttOp(t, "tag_terrain").Call(st, map[string]any{"x": int64(4), "y": int64(3), "tag": "blocks_los"}); err != nil {
+	if _, err := ttOp(t, "tag_terrain").Call(map[string]any{"tabletop": st}, map[string]any{"x": int64(4), "y": int64(3), "tag": "blocks_los"}); err != nil {
 		t.Fatalf("tag_terrain: %v", err)
 	}
-	hasRes, _ := ttOp(t, "has_terrain").Call(st, map[string]any{"x": int64(4), "y": int64(3), "tag": "blocks_los"})
+	hasRes, _ := ttOp(t, "has_terrain").Call(map[string]any{"tabletop": st}, map[string]any{"x": int64(4), "y": int64(3), "tag": "blocks_los"})
 	if hasRes.(bool) != true {
 		t.Fatalf("has_terrain = %v, want true", hasRes)
 	}
-	losRes2, _ := ttOp(t, "line_of_sight").Call(st, map[string]any{"fx": int64(4), "fy": int64(2), "tx": int64(4), "ty": int64(4)})
+	losRes2, _ := ttOp(t, "line_of_sight").Call(map[string]any{"tabletop": st}, map[string]any{"fx": int64(4), "fy": int64(2), "tx": int64(4), "ty": int64(4)})
 	if losRes2.(bool) != false {
 		t.Fatalf("LOS through blocker = %v, want false", losRes2)
 	}

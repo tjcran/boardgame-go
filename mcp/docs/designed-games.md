@@ -75,7 +75,43 @@ Ops: `new_board(kind, w, h)`, `place(unit, x, y)`, `move(unit, x, y)`,
 plain integer ids you choose; positions are plain coordinates. Dice/combat are
 not yet bridged.
 
-economy/shop, target selection, and event hooks land in later phases.
+### economy + shop modules (resource/market games)
+
+`economy` and `shop` are stateless logic over `ccg`, so declaring either REQUIRES
+`ccg` in MODULES (`MODULES = ["ccg", "economy", "shop"]`). economy operates on
+ccg counters for a per-player resource; shop manages a refreshable market over
+two ccg zones.
+
+    MODULES = ["ccg", "economy", "shop"]
+
+    def setup(ctx):
+        p = ctx.modules.ccg.new_entity(type="player", owner="0")
+        ctx.modules.economy.set(owner=p, kind="gold", cap=10, n=3)
+        ctx.modules.ccg.new_zone(name="slots", ordered=False)
+        ctx.modules.ccg.new_zone(name="stock", ordered=True)
+        ctx.modules.ccg.new_zone(name="hand", ordered=False)
+        # … seed stock with items …
+        ctx.modules.shop.fill(slots="slots", stock="stock", size=5)
+        return {"player": p}
+
+    def buy(state, ctx):
+        item = ctx.modules.ccg.members(zone="slots")[0]
+        ctx.modules.economy.spend(owner=state["player"], kind="gold", n=1)
+        ctx.modules.shop.buy(slots="slots", item=item, dest="hand")
+        return state
+
+economy ops: `current(owner, kind)`, `gain(owner, kind, cap, n)` → applied delta,
+`spend(owner, kind, n)` (errors if insufficient), `set(owner, kind, cap, n)` →
+final value, `scaled(turn, base, per, max)` → per-turn income. `owner` is a ccg
+entity token.
+
+shop ops: `fill(slots, stock, size)`, `roll(slots, stock, size, dest)`,
+`clear(slots, dest)`, `buy(slots, item, dest)`, `freeze(slots, item)`,
+`unfreeze(item)`, `is_frozen(item)`. Items are ccg entity tokens. Stock is drawn
+in order (no shuffle yet — arrange Stock as you want it dealt). `buy` does not
+charge — pair it with `economy.spend` as above.
+
+Target selection and event hooks land in later phases.
 
 ## Where games live
 

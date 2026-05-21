@@ -40,10 +40,10 @@ func TabletopRegistry() *Registry {
 	return tabletopReg
 }
 
-func asTabletop(state any) (*tabletopState, error) {
-	s, ok := state.(*tabletopState)
+func tabletopFrom(modules map[string]any) (*tabletopState, error) {
+	s, ok := modules["tabletop"].(*tabletopState)
 	if !ok {
-		return nil, fmt.Errorf("modulebridge: tabletop op got %T, want *tabletopState", state)
+		return nil, fmt.Errorf("modulebridge: tabletop op needs tabletop state, got %T", modules["tabletop"])
 	}
 	return s, nil
 }
@@ -66,8 +66,8 @@ func buildTabletopRegistry() *Registry {
 	r := NewRegistry()
 
 	r.Add(Op{Module: "tabletop", Name: "new_board", MCPTool: "tabletop_new_board",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -95,8 +95,8 @@ func buildTabletopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "tabletop", Name: "distance", MCPTool: "tabletop_distance",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -115,8 +115,8 @@ func buildTabletopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "tabletop", Name: "place", MCPTool: "tabletop_place",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -133,8 +133,8 @@ func buildTabletopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "tabletop", Name: "move", MCPTool: "tabletop_move",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -151,8 +151,8 @@ func buildTabletopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "tabletop", Name: "remove", MCPTool: "tabletop_remove",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -165,8 +165,8 @@ func buildTabletopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "tabletop", Name: "position_of", MCPTool: "tabletop_position_of",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -182,8 +182,8 @@ func buildTabletopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "tabletop", Name: "entities_at", MCPTool: "tabletop_entities_at",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -200,8 +200,8 @@ func buildTabletopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "tabletop", Name: "within", MCPTool: "tabletop_within",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -225,8 +225,8 @@ func buildTabletopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "tabletop", Name: "neighbors", MCPTool: "tabletop_neighbors",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -246,8 +246,8 @@ func buildTabletopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "tabletop", Name: "line_of_sight", MCPTool: "tabletop_line_of_sight",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -266,8 +266,8 @@ func buildTabletopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "tabletop", Name: "tag_terrain", MCPTool: "tabletop_tag_terrain",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -284,8 +284,8 @@ func buildTabletopRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "tabletop", Name: "has_terrain", MCPTool: "tabletop_has_terrain",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asTabletop(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := tabletopFrom(modules)
 			if err != nil {
 				return nil, err
 			}

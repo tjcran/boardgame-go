@@ -21,10 +21,10 @@ func CCGRegistry() *Registry {
 	return ccgReg
 }
 
-func asCCG(state any) (*ccg.State, error) {
-	s, ok := state.(*ccg.State)
+func ccgFrom(modules map[string]any) (*ccg.State, error) {
+	s, ok := modules["ccg"].(*ccg.State)
 	if !ok {
-		return nil, fmt.Errorf("modulebridge: ccg op got %T, want *ccg.State", state)
+		return nil, fmt.Errorf("modulebridge: ccg op needs ccg state, got %T", modules["ccg"])
 	}
 	return s, nil
 }
@@ -63,8 +63,8 @@ func buildCCGRegistry() *Registry {
 	r := NewRegistry()
 
 	r.Add(Op{Module: "ccg", Name: "new_zone", MCPTool: "ccg_new_zone",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asCCG(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -77,8 +77,8 @@ func buildCCGRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "ccg", Name: "new_entity", MCPTool: "ccg_new_entity",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asCCG(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -96,8 +96,8 @@ func buildCCGRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "ccg", Name: "move_to", MCPTool: "ccg_move_to",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asCCG(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -117,8 +117,8 @@ func buildCCGRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "ccg", Name: "size", MCPTool: "ccg_size",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asCCG(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -130,8 +130,8 @@ func buildCCGRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "ccg", Name: "members", MCPTool: "ccg_members",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asCCG(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
 			}
@@ -151,8 +151,8 @@ func buildCCGRegistry() *Registry {
 		}})
 
 	r.Add(Op{Module: "ccg", Name: "draw", MCPTool: "ccg_draw",
-		Call: func(state any, args map[string]any) (any, error) {
-			s, err := asCCG(state)
+		Call: func(modules map[string]any, args map[string]any) (any, error) {
+			s, err := ccgFrom(modules)
 			if err != nil {
 				return nil, err
 			}

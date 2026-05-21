@@ -194,7 +194,7 @@ func LoadSpec(source string) (*Spec, error) {
 	return s, nil
 }
 
-var knownModules = map[string]bool{"ccg": true, "tabletop": true}
+var knownModules = map[string]bool{"ccg": true, "tabletop": true, "economy": true, "shop": true}
 
 func readModules(globals starlark.StringDict, s *Spec) error {
 	raw, ok := globals["MODULES"]
@@ -217,6 +217,15 @@ func readModules(globals starlark.StringDict, s *Spec) error {
 			return fmt.Errorf("MODULES: unknown module %q", string(name))
 		}
 		s.Modules = append(s.Modules, string(name))
+	}
+	declared := map[string]bool{}
+	for _, m := range s.Modules {
+		declared[m] = true
+	}
+	for _, m := range s.Modules {
+		if (m == "economy" || m == "shop") && !declared["ccg"] {
+			return fmt.Errorf("MODULES: %q requires \"ccg\" to also be declared", m)
+		}
 	}
 	return nil
 }
