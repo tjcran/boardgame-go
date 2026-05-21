@@ -94,10 +94,11 @@ func TestStages_PrincePattern_SetThenEnd(t *testing.T) {
 		t.Fatalf("P0 pick_target: %v", err)
 	}
 	m, _ = mgr.State(mid)
-	g, ok := m.State.G.(map[string]any)
+	sg, ok := m.State.G.(*starlarkgame.StarlarkG)
 	if !ok {
-		t.Fatalf("G is not map: %T", m.State.G)
+		t.Fatalf("G is not *StarlarkG: %T", m.State.G)
 	}
+	g := sg.Data
 	if g["affected"] != "1" || g["actor"] != "0" {
 		t.Errorf("after pick_target, G = %#v; want affected=1 actor=0", g)
 	}

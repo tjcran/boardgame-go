@@ -23,6 +23,10 @@ type BridgeCtx struct {
 	// don't get an events object exposed at all.
 	Events *core.Events
 
+	// Modules holds live engine-module states for ctx.modules.* bindings.
+	// Keyed by module name ("ccg"). Nil when the spec declares no MODULES.
+	Modules map[string]any
+
 	// rng is set by attachRandom (Task 5). Nil → ctx.random raises.
 	rng *bridgeRandom
 }

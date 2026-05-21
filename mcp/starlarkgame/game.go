@@ -32,23 +32,23 @@ func BuildCoreGame(s *Spec) *core.Game {
 	g.Setup = func(ctx core.Ctx, _ any) core.G {
 		bc := &BridgeCtx{NumPlayers: ctx.NumPlayers}
 		bc.AttachSeededRandom(ctxSeed(ctx))
-		state, err := s.CallSetup(context.Background(), bc)
+		data, err := s.CallSetup(context.Background(), bc)
 		if err != nil {
 			// SetupFn has no error channel; encode failure as a state that
 			// will immediately fail end_if.
-			return map[string]any{"__starlark_setup_error__": err.Error()}
+			return &StarlarkG{Data: map[string]any{"__starlark_setup_error__": err.Error()}}
 		}
-		return state
+		return &StarlarkG{Data: data, Modules: map[string]any{}}
 	}
 
 	g.EndIf = func(mc *core.MoveContext) any {
 		bc := &BridgeCtx{NumPlayers: mc.Ctx.NumPlayers}
 		bc.AttachSeededRandom(ctxSeed(mc.Ctx))
-		state, ok := mc.G.(map[string]any)
+		sg, ok := mc.G.(*StarlarkG)
 		if !ok {
 			return nil
 		}
-		out, err := s.CallEndIf(context.Background(), bc, state)
+		out, err := s.CallEndIf(context.Background(), bc, sg.Data)
 		if err != nil {
 			return nil
 		}
@@ -58,26 +58,26 @@ func BuildCoreGame(s *Spec) *core.Game {
 	if s.PlayerView != nil {
 		g.PlayerView = func(gv core.G, ctx core.Ctx, playerID string) core.G {
 			bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, PlayerID: playerID}
-			state, ok := gv.(map[string]any)
+			sg, ok := gv.(*StarlarkG)
 			if !ok {
 				return gv
 			}
-			out, err := s.CallPlayerView(context.Background(), bc, state, playerID)
+			out, err := s.CallPlayerView(context.Background(), bc, sg.Data, playerID)
 			if err != nil {
 				return gv
 			}
-			return out
+			return &StarlarkG{Data: out, Modules: sg.Modules}
 		}
 	}
 
 	g.Enumerate = func(gv core.G, ctx core.Ctx, playerID string) []core.EnumerateAction {
 		bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, PlayerID: playerID}
 		bc.AttachSeededRandom(ctxSeed(ctx))
-		state, ok := gv.(map[string]any)
+		sg, ok := gv.(*StarlarkG)
 		if !ok {
 			return nil
 		}
-		out, err := s.CallLegalMoves(context.Background(), bc, state)
+		out, err := s.CallLegalMoves(context.Background(), bc, sg.Data)
 		if err != nil {
 			return nil
 		}
@@ -120,11 +120,11 @@ func BuildCoreGame(s *Spec) *core.Game {
 						Phase:      mc.Ctx.Phase,
 					}
 					bc.AttachSeededRandom(ctxSeed(mc.Ctx))
-					state, ok := mc.G.(map[string]any)
+					sg, ok := mc.G.(*StarlarkG)
 					if !ok {
 						return false, ""
 					}
-					next, err := s.CallPhaseEndIf(context.Background(), bc, state, phaseName)
+					next, err := s.CallPhaseEndIf(context.Background(), bc, sg.Data, phaseName)
 					if err != nil || next == "" {
 						return false, ""
 					}
@@ -148,25 +148,26 @@ func buildMovesMap(s *Spec, src map[string]Move) map[string]any {
 		name := name
 		endsTurn := mv.EndsTurn
 		out[name] = core.MoveFn(func(mc *core.MoveContext, args ...any) (core.G, error) {
+			sg, ok := mc.G.(*StarlarkG)
+			if !ok {
+				return nil, fmt.Errorf("starlarkgame: state is not *StarlarkG")
+			}
 			bc := &BridgeCtx{
 				NumPlayers: mc.Ctx.NumPlayers,
 				PlayerID:   mc.PlayerID,
 				Phase:      mc.Ctx.Phase,
 				Events:     mc.Events,
+				Modules:    sg.Modules,
 			}
 			bc.AttachSeededRandom(ctxSeed(mc.Ctx))
-			state, ok := mc.G.(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("starlarkgame: state is not map[string]any")
-			}
-			newState, err := s.CallMove(context.Background(), bc, name, state, args)
+			newData, err := s.CallMove(context.Background(), bc, name, sg.Data, args)
 			if err != nil {
 				return nil, err
 			}
 			if endsTurn && mc.Events != nil {
 				mc.Events.EndTurn()
 			}
-			return newState, nil
+			return &StarlarkG{Data: newData, Modules: sg.Modules}, nil
 		})
 	}
 	return out
