@@ -1,6 +1,6 @@
 // Command boardgame-server runs an HTTP/WebSocket server hosting the
-// built-in reference games (tic-tac-toe and Love Letter). It's the
-// MVP entry point — adapt freely when adding more games.
+// built-in reference games (tic-tac-toe, Love Letter, and rock-paper-scissors).
+// It's the MVP entry point — adapt freely when adding more games.
 package main
 
 import (
@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/tjcran/boardgame-go/games/loveletter"
+	"github.com/tjcran/boardgame-go/games/rps"
 	"github.com/tjcran/boardgame-go/games/tictactoe"
 	"github.com/tjcran/boardgame-go/match"
 	"github.com/tjcran/boardgame-go/server"
@@ -26,6 +27,7 @@ func main() {
 	m := match.NewManager(storage.NewMemory())
 	m.Register(tictactoe.New())
 	m.Register(loveletter.New())
+	m.Register(rps.New())
 
 	srv := server.New(m)
 	srv.Origins = []string{server.OriginLocalhostInDevelopment}
