@@ -49,6 +49,11 @@ Entities are referenced by opaque tokens (e.g. `"ent:7"`); pass them back to
 module ops, don't parse them. The `ccg` module ships zones, entities, and
 `move_to`/`draw`/`size`/`members`.
 
+Shuffle a zone with `ctx.modules.ccg.shuffle(zone="deck")` — it uses the move's
+seeded PRNG, so shuffles are replay-deterministic (replaying the match reproduces
+the same order). Note: the seed is derived per-turn, so two shuffles of
+equal-size zones within the same turn draw the same sequence.
+
 ### tabletop module (spatial games)
 
 For board/grid games, declare `tabletop` and build a board in setup, then place
