@@ -35,9 +35,13 @@ type Move struct {
 // ArgDef is a single positional argument declaration.
 type ArgDef struct {
 	Name string
-	Type string // "int", "string", "bool"
+	Type string // "int", "string", "bool", "entity", "hex"
 	Min  *int64
 	Max  *int64
+
+	// Zone, for Type=="entity", optionally constrains the entity to be in
+	// this ccg zone at dispatch time. Empty means any registered entity.
+	Zone string
 }
 
 // Phase is one entry in the spec's optional PHASES dict.
@@ -524,6 +528,9 @@ func readArgDef(v starlark.Value) (ArgDef, error) {
 	name, _ := pickString("name")
 	typ, _ := pickString("type")
 	a := ArgDef{Name: name, Type: typ}
+	if z, ok := pickString("zone"); ok {
+		a.Zone = z
+	}
 	if v, ok, _ := d.Get(starlark.String("min")); ok {
 		if i, ok := v.(starlark.Int); ok {
 			n, _ := i.Int64()
