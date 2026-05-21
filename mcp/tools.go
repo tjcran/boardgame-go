@@ -9,6 +9,7 @@ import (
 
 	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/match"
+	"github.com/tjcran/boardgame-go/mcp/modulebridge"
 	"github.com/tjcran/boardgame-go/mcp/starlarkgame"
 )
 
@@ -591,4 +592,63 @@ func (t *Tools) MakeMove(ctx context.Context, args MakeMoveArgs) (MakeMoveResult
 		CurrentPlayer: state.Ctx.CurrentPlayer,
 		Gameover:      state.Ctx.Gameover,
 	}, nil
+}
+
+// ----- module_op -----
+
+// ModuleOpArgs invokes one engine-module op against a draft match's live
+// module state. Design-time only: lets Claude prototype mechanics on a
+// draft game interactively. Match-scoped + ownership-checked.
+type ModuleOpArgs struct {
+	MatchID string         `json:"matchId"`
+	Module  string         `json:"module"`
+	Op      string         `json:"op"`
+	Args    map[string]any `json:"args,omitempty"`
+}
+
+type ModuleOpResult struct {
+	Result any `json:"result,omitempty"`
+}
+
+// ModuleOp resolves the live module state from the named match's
+// *starlarkgame.StarlarkG and invokes the exact same modulebridge Op.Call
+// the Starlark binding uses, guaranteeing parity between design-time pokes
+// and in-game behavior.
+func (t *Tools) ModuleOp(ctx context.Context, args ModuleOpArgs) (ModuleOpResult, error) {
+	if err := t.requireOwnership(ctx, args.MatchID); err != nil {
+		return ModuleOpResult{}, err
+	}
+	reg := modulebridge.RegistryFor(args.Module)
+	if reg == nil {
+		return ModuleOpResult{}, fmt.Errorf("unknown module %q", args.Module)
+	}
+	var chosen *modulebridge.Op
+	for _, op := range reg.Ops(args.Module) {
+		if op.Name == args.Op {
+			op := op
+			chosen = &op
+			break
+		}
+	}
+	if chosen == nil {
+		return ModuleOpResult{}, fmt.Errorf("unknown op %q for module %q", args.Op, args.Module)
+	}
+
+	m, err := t.Manager.State(args.MatchID)
+	if err != nil {
+		return ModuleOpResult{}, err
+	}
+	sg, ok := m.State.G.(*starlarkgame.StarlarkG)
+	if !ok {
+		return ModuleOpResult{}, fmt.Errorf("match %s is not a designed game", args.MatchID)
+	}
+	st, ok := sg.Modules[args.Module]
+	if !ok {
+		return ModuleOpResult{}, fmt.Errorf("match %s did not declare module %q", args.MatchID, args.Module)
+	}
+	res, err := chosen.Call(st, args.Args)
+	if err != nil {
+		return ModuleOpResult{}, err
+	}
+	return ModuleOpResult{Result: res}, nil
 }
