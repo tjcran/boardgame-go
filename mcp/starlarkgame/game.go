@@ -155,11 +155,15 @@ func buildMovesMap(s *Spec, src map[string]Move) map[string]any {
 	out := make(map[string]any, len(src))
 	for name, mv := range src {
 		name := name
+		mv := mv
 		endsTurn := mv.EndsTurn
 		out[name] = core.MoveFn(func(mc *core.MoveContext, args ...any) (core.G, error) {
 			sg, ok := mc.G.(*StarlarkG)
 			if !ok {
 				return nil, fmt.Errorf("starlarkgame: state is not *StarlarkG")
+			}
+			if err := validateArgs(mv, args, sg.Modules); err != nil {
+				return nil, err
 			}
 			bc := &BridgeCtx{
 				NumPlayers:    mc.Ctx.NumPlayers,
