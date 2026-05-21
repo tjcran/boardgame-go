@@ -117,7 +117,7 @@ func buildCCGRegistry() *Registry {
 			return nil, s.MoveTo(id, ccg.ZoneName(zone))
 		}})
 
-	r.Add(Op{Module: "ccg", Name: "size", MCPTool: "ccg_size",
+	r.Add(Op{Module: "ccg", Name: "size", MCPTool: "ccg_size", ReadOnly: true,
 		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {
@@ -130,7 +130,7 @@ func buildCCGRegistry() *Registry {
 			return int64(s.Size(ccg.ZoneName(zone))), nil
 		}})
 
-	r.Add(Op{Module: "ccg", Name: "members", MCPTool: "ccg_members",
+	r.Add(Op{Module: "ccg", Name: "members", MCPTool: "ccg_members", ReadOnly: true,
 		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {

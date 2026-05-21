@@ -662,10 +662,12 @@ type DescribeModulesArgs struct {
 }
 
 // OpInfo names one invokable op. MCPTool is the flattened tool alias the
-// Starlark binding also exposes it under.
+// Starlark binding also exposes it under. ReadOnly marks a pure query that
+// is safe to call from read-only callbacks (legal_moves/end_if/player_view).
 type OpInfo struct {
-	Name    string `json:"name"`
-	MCPTool string `json:"mcpTool,omitempty"`
+	Name     string `json:"name"`
+	MCPTool  string `json:"mcpTool,omitempty"`
+	ReadOnly bool   `json:"readOnly"`
 }
 
 // ModuleInfo is one module and its ops.
@@ -698,7 +700,7 @@ func (t *Tools) DescribeModules(ctx context.Context, args DescribeModulesArgs) (
 		}
 		ops := make([]OpInfo, 0)
 		for _, op := range reg.Ops(name) {
-			ops = append(ops, OpInfo{Name: op.Name, MCPTool: op.MCPTool})
+			ops = append(ops, OpInfo{Name: op.Name, MCPTool: op.MCPTool, ReadOnly: op.ReadOnly})
 		}
 		sort.Slice(ops, func(i, j int) bool { return ops[i].Name < ops[j].Name })
 		out = append(out, ModuleInfo{Module: name, Ops: ops})

@@ -28,6 +28,11 @@ type BridgeCtx struct {
 	// Keyed by module name ("ccg"). Nil when the spec declares no MODULES.
 	Modules map[string]any
 
+	// ReadOnly marks a speculative callback (legal_moves, end_if,
+	// player_view) where the module state is shared with the live game.
+	// When set, ctx.modules exposes only read ops; mutating ops error.
+	ReadOnly bool
+
 	// Queue, when set, exposes ctx.request_target to pause a move for a
 	// player target selection. Set only for move applies.
 	Queue *core.Queue
@@ -129,6 +134,16 @@ func (c *BridgeCtx) modulesAsStarlark() starlark.Value {
 		opAttrs := starlark.StringDict{}
 		for _, op := range reg.Ops(name) {
 			op := op
+			// In read-only contexts (legal_moves / end_if / player_view),
+			// mutating ops are exposed as a stub that errors instead of
+			// running — they would corrupt the speculative shared state.
+			if c.ReadOnly && !op.ReadOnly {
+				opAttrs[op.Name] = starlark.NewBuiltin(name+"."+op.Name,
+					func(_ *starlark.Thread, _ *starlark.Builtin, _ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
+						return nil, fmt.Errorf("%s.%s mutates state and is not callable from a read-only context (legal_moves/end_if/player_view); only read ops are", name, op.Name)
+					})
+				continue
+			}
 			opAttrs[op.Name] = starlark.NewBuiltin(name+"."+op.Name,
 				func(_ *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 					if len(args) != 0 {

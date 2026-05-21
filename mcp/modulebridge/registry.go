@@ -17,6 +17,11 @@ type Op struct {
 	Module  string
 	Name    string
 	MCPTool string
+	// ReadOnly marks an op as a pure query that never mutates module state.
+	// Only read-only ops are callable from speculative engine callbacks
+	// (legal_moves, end_if, player_view) where mutation would corrupt the
+	// shared live state. Mutating ops (default) are rejected there.
+	ReadOnly bool
 	// Call receives ALL live module states (keyed by module name) so a
 	// composing module (economy/shop over ccg) can reach another's state.
 	// An op pulls its own module via modules[op.Module].
