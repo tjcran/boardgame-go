@@ -3,9 +3,29 @@ package starlarkgame
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/tjcran/boardgame-go/mcp/modulebridge"
 )
+
+var moduleRefRe = regexp.MustCompile(`ctx\.modules\.([a-z_]+)`)
+
+// checkModuleRefs statically rejects any ctx.modules.<name> reference whose
+// <name> is not declared in the top-level MODULES list. This surfaces a clear
+// error at validate time instead of a confusing runtime "no .modules
+// attribute" failure during the setup smoke check.
+func checkModuleRefs(s *Spec) error {
+	declared := map[string]bool{}
+	for _, m := range s.Modules {
+		declared[m] = true
+	}
+	for _, mm := range moduleRefRe.FindAllStringSubmatch(s.Source(), -1) {
+		if !declared[mm[1]] {
+			return fmt.Errorf("spec uses ctx.modules.%s but %q is not in MODULES", mm[1], mm[1])
+		}
+	}
+	return nil
+}
 
 // Validate runs registration-time smoke checks. Parse and META checks
 // already happened in LoadSpec; this layer is the dynamic part:
@@ -16,6 +36,9 @@ import (
 //
 // All calls run under the same step / wall caps as live play.
 func Validate(ctx context.Context, s *Spec) error {
+	if err := checkModuleRefs(s); err != nil {
+		return err
+	}
 	for _, n := range []int{s.Meta.MinPlayers, s.Meta.MaxPlayers} {
 		// Instantiate declared modules so setup smoke can call
 		// ctx.modules.<name>.<op>(...), mirroring live Setup.

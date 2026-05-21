@@ -94,6 +94,9 @@ type Spec struct {
 	source string
 }
 
+// Source returns the original spec source text.
+func (s *Spec) Source() string { return s.source }
+
 var nameRe = regexp.MustCompile(`^[a-z0-9-]{1,40}$`)
 
 // LoadSpec compiles and structurally validates a spec source. It does NOT

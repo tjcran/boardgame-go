@@ -25,6 +25,31 @@ Both prompts produce the same kind of artefact: a Starlark spec registered again
 
 Engine limits to know about: every successful move ends the player's turn (no multi-action turns yet), no phases or stages, args are positional primitives. Games that need those features (Catan, Magic, Stratego's setup phase, trick-takers) need a reduced v1 or wait for the upcoming phase/stage support.
 
+## Using engine modules (MODULES)
+
+Declare engine modules your game uses with a top-level `MODULES` list and call
+them through `ctx.modules.<name>.*` inside setup/apply:
+
+    MODULES = ["ccg"]
+
+    def setup(ctx):
+        ctx.modules.ccg.new_zone(name="deck", ordered=True)
+        ctx.modules.ccg.new_zone(name="hand", ordered=False)
+        for i in range(40):
+            c = ctx.modules.ccg.new_entity(type="card", owner="0")
+            ctx.modules.ccg.move_to(entity=c, zone="deck")
+        return {}
+
+    def draw(state, ctx):
+        top = ctx.modules.ccg.draw(zone="deck", n=1)
+        ctx.modules.ccg.move_to(entity=top[0], zone="hand")
+        return state
+
+Entities are referenced by opaque tokens (e.g. `"ent:7"`); pass them back to
+module ops, don't parse them. Phase 1 ships the `ccg` module (zones, entities,
+`move_to`/`draw`/`size`/`members`). tabletop, economy/shop, target selection,
+and event hooks land in later phases.
+
 ## Where games live
 
 - Built-ins (tic-tac-toe, love-letter) come from the server binary.
