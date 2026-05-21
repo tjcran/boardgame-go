@@ -49,7 +49,7 @@ func poolFrom(modules map[string]any, args map[string]any) (economy.Pool, *ccg.S
 func buildEconomyRegistry() *Registry {
 	r := NewRegistry()
 
-	r.Add(Op{Module: "economy", Name: "current", MCPTool: "economy_current",
+	r.Add(Op{Module: "economy", Name: "current", MCPTool: "economy_current", ReadOnly: true,
 		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			p, s, err := poolFrom(modules, args)
 			if err != nil {
@@ -97,7 +97,7 @@ func buildEconomyRegistry() *Registry {
 			return int64(p.Set(s, n)), nil
 		}})
 
-	r.Add(Op{Module: "economy", Name: "scaled", MCPTool: "economy_scaled",
+	r.Add(Op{Module: "economy", Name: "scaled", MCPTool: "economy_scaled", ReadOnly: true,
 		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			turn, err := argInt(args, "turn")
 			if err != nil {

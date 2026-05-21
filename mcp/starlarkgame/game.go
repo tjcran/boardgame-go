@@ -53,12 +53,12 @@ func BuildCoreGame(s *Spec) *core.Game {
 	}
 
 	g.EndIf = func(mc *core.MoveContext) any {
-		bc := &BridgeCtx{NumPlayers: mc.Ctx.NumPlayers}
-		bc.AttachSeededRandom(ctxSeed(mc.Ctx))
 		sg, ok := asStarlarkG(mc.G)
 		if !ok {
 			return nil
 		}
+		bc := &BridgeCtx{NumPlayers: mc.Ctx.NumPlayers, Modules: sg.Modules, ReadOnly: true}
+		bc.AttachSeededRandom(ctxSeed(mc.Ctx))
 		out, err := s.CallEndIf(context.Background(), bc, sg.Data)
 		if err != nil {
 			return nil
@@ -68,11 +68,11 @@ func BuildCoreGame(s *Spec) *core.Game {
 
 	if s.PlayerView != nil {
 		g.PlayerView = func(gv core.G, ctx core.Ctx, playerID string) core.G {
-			bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, PlayerID: playerID}
 			sg, ok := asStarlarkG(gv)
 			if !ok {
 				return gv
 			}
+			bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, PlayerID: playerID, Modules: sg.Modules, ReadOnly: true}
 			out, err := s.CallPlayerView(context.Background(), bc, sg.Data, playerID)
 			if err != nil {
 				return gv
@@ -82,12 +82,12 @@ func BuildCoreGame(s *Spec) *core.Game {
 	}
 
 	g.Enumerate = func(gv core.G, ctx core.Ctx, playerID string) []core.EnumerateAction {
-		bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, PlayerID: playerID}
-		bc.AttachSeededRandom(ctxSeed(ctx))
 		sg, ok := asStarlarkG(gv)
 		if !ok {
 			return nil
 		}
+		bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, PlayerID: playerID, Modules: sg.Modules, ReadOnly: true}
+		bc.AttachSeededRandom(ctxSeed(ctx))
 		out, err := s.CallLegalMoves(context.Background(), bc, sg.Data)
 		if err != nil {
 			return nil
@@ -125,16 +125,18 @@ func BuildCoreGame(s *Spec) *core.Game {
 			}
 			if ph.EndIf != nil {
 				pc.EndIf = func(mc *core.MoveContext) (bool, string) {
-					bc := &BridgeCtx{
-						NumPlayers: mc.Ctx.NumPlayers,
-						PlayerID:   mc.PlayerID,
-						Phase:      mc.Ctx.Phase,
-					}
-					bc.AttachSeededRandom(ctxSeed(mc.Ctx))
 					sg, ok := asStarlarkG(mc.G)
 					if !ok {
 						return false, ""
 					}
+					bc := &BridgeCtx{
+						NumPlayers: mc.Ctx.NumPlayers,
+						PlayerID:   mc.PlayerID,
+						Phase:      mc.Ctx.Phase,
+						Modules:    sg.Modules,
+						ReadOnly:   true,
+					}
+					bc.AttachSeededRandom(ctxSeed(mc.Ctx))
 					next, err := s.CallPhaseEndIf(context.Background(), bc, sg.Data, phaseName)
 					if err != nil || next == "" {
 						return false, ""

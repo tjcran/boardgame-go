@@ -140,7 +140,7 @@ func buildShopRegistry() *Registry {
 			return nil, shop.Shop{}.Unfreeze(s, item)
 		}})
 
-	r.Add(Op{Module: "shop", Name: "is_frozen", MCPTool: "shop_is_frozen",
+	r.Add(Op{Module: "shop", Name: "is_frozen", MCPTool: "shop_is_frozen", ReadOnly: true,
 		Call: func(modules map[string]any, args map[string]any, rng *core.Random) (any, error) {
 			s, err := ccgFrom(modules)
 			if err != nil {

@@ -32,12 +32,20 @@ func TestDescribeModules_AllModules(t *testing.T) {
 	if len(ccg.Ops) == 0 {
 		t.Fatalf("ccg has no ops")
 	}
-	opNames := map[string]bool{}
+	ro := map[string]bool{}
+	seen := map[string]bool{}
 	for _, op := range ccg.Ops {
-		opNames[op.Name] = true
+		ro[op.Name] = op.ReadOnly
+		seen[op.Name] = true
 	}
-	if !opNames["new_zone"] {
+	if !seen["new_zone"] {
 		t.Errorf("ccg missing op new_zone; got %v", ccg.Ops)
+	}
+	if !ro["size"] {
+		t.Errorf("ccg.size should report ReadOnly=true")
+	}
+	if ro["new_zone"] {
+		t.Errorf("ccg.new_zone should report ReadOnly=false")
 	}
 }
 

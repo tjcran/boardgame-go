@@ -55,7 +55,14 @@ func Validate(ctx context.Context, s *Spec) error {
 			return fmt.Errorf("setup smoke (n=%d): %w", n, err)
 		}
 
-		end, err := s.CallEndIf(ctx, bc, state)
+		// Read-side smoke (end_if, legal_moves) runs under the same
+		// read-only module contract as live play: same module states, but
+		// mutating ops error. PlayerID "0" is the canonical seat-0 viewpoint
+		// — multi-action specs (Catan-shape) crash on an empty player_id.
+		smokeBC := &BridgeCtx{NumPlayers: n, PlayerID: "0", Modules: mods, ReadOnly: true}
+		smokeBC.AttachSeededRandom(0)
+
+		end, err := s.CallEndIf(ctx, smokeBC, state)
 		if err != nil {
 			return fmt.Errorf("end_if smoke (n=%d): %w", n, err)
 		}
@@ -63,13 +70,6 @@ func Validate(ctx context.Context, s *Spec) error {
 			return fmt.Errorf("end_if returned non-nil at setup (n=%d): %v", n, end)
 		}
 
-		// legal_moves smoke needs a concrete player_id — multi-action
-		// specs (Catan-shape) look up per-player state from ctx.player_id
-		// and crash if it's "". Use "0" as the canonical seat-0 viewpoint;
-		// the smoke is just a "this function runs at all" check, not a
-		// per-player audit.
-		smokeBC := &BridgeCtx{NumPlayers: n, PlayerID: "0"}
-		smokeBC.AttachSeededRandom(0)
 		lm, err := s.CallLegalMoves(ctx, smokeBC, state)
 		if err != nil {
 			return fmt.Errorf("legal_moves smoke (n=%d): %w", n, err)
