@@ -114,5 +114,191 @@ func buildTabletopRegistry() *Registry {
 			return int64(s.Board.Distance(a, b)), nil
 		}})
 
+	r.Add(Op{Module: "tabletop", Name: "place", MCPTool: "tabletop_place",
+		Call: func(state any, args map[string]any) (any, error) {
+			s, err := asTabletop(state)
+			if err != nil {
+				return nil, err
+			}
+			unit, err := argInt(args, "unit")
+			if err != nil {
+				return nil, err
+			}
+			p, err := pos(args, "x", "y")
+			if err != nil {
+				return nil, err
+			}
+			s.Space.Place(tabletop.UnitID(unit), p)
+			return nil, nil
+		}})
+
+	r.Add(Op{Module: "tabletop", Name: "move", MCPTool: "tabletop_move",
+		Call: func(state any, args map[string]any) (any, error) {
+			s, err := asTabletop(state)
+			if err != nil {
+				return nil, err
+			}
+			unit, err := argInt(args, "unit")
+			if err != nil {
+				return nil, err
+			}
+			p, err := pos(args, "x", "y")
+			if err != nil {
+				return nil, err
+			}
+			s.Space.Move(tabletop.UnitID(unit), p)
+			return nil, nil
+		}})
+
+	r.Add(Op{Module: "tabletop", Name: "remove", MCPTool: "tabletop_remove",
+		Call: func(state any, args map[string]any) (any, error) {
+			s, err := asTabletop(state)
+			if err != nil {
+				return nil, err
+			}
+			unit, err := argInt(args, "unit")
+			if err != nil {
+				return nil, err
+			}
+			s.Space.Remove(tabletop.UnitID(unit))
+			return nil, nil
+		}})
+
+	r.Add(Op{Module: "tabletop", Name: "position_of", MCPTool: "tabletop_position_of",
+		Call: func(state any, args map[string]any) (any, error) {
+			s, err := asTabletop(state)
+			if err != nil {
+				return nil, err
+			}
+			unit, err := argInt(args, "unit")
+			if err != nil {
+				return nil, err
+			}
+			p, ok := s.Space.PositionOf(tabletop.UnitID(unit))
+			if !ok {
+				return nil, nil
+			}
+			return posList(p), nil
+		}})
+
+	r.Add(Op{Module: "tabletop", Name: "entities_at", MCPTool: "tabletop_entities_at",
+		Call: func(state any, args map[string]any) (any, error) {
+			s, err := asTabletop(state)
+			if err != nil {
+				return nil, err
+			}
+			p, err := pos(args, "x", "y")
+			if err != nil {
+				return nil, err
+			}
+			units := s.Space.EntitiesAt(p)
+			out := make([]any, 0, len(units))
+			for _, u := range units {
+				out = append(out, int64(u))
+			}
+			return out, nil
+		}})
+
+	r.Add(Op{Module: "tabletop", Name: "within", MCPTool: "tabletop_within",
+		Call: func(state any, args map[string]any) (any, error) {
+			s, err := asTabletop(state)
+			if err != nil {
+				return nil, err
+			}
+			if s.Board == nil {
+				return nil, fmt.Errorf("tabletop.within: no board; call new_board first")
+			}
+			center, err := pos(args, "x", "y")
+			if err != nil {
+				return nil, err
+			}
+			radius, err := argInt(args, "radius")
+			if err != nil {
+				return nil, err
+			}
+			units := s.Space.Within(s.Board, center, radius)
+			out := make([]any, 0, len(units))
+			for _, u := range units {
+				out = append(out, int64(u))
+			}
+			return out, nil
+		}})
+
+	r.Add(Op{Module: "tabletop", Name: "neighbors", MCPTool: "tabletop_neighbors",
+		Call: func(state any, args map[string]any) (any, error) {
+			s, err := asTabletop(state)
+			if err != nil {
+				return nil, err
+			}
+			if s.Board == nil {
+				return nil, fmt.Errorf("tabletop.neighbors: no board; call new_board first")
+			}
+			p, err := pos(args, "x", "y")
+			if err != nil {
+				return nil, err
+			}
+			cells := s.Board.Neighbors(p)
+			out := make([]any, 0, len(cells))
+			for _, c := range cells {
+				out = append(out, posList(c))
+			}
+			return out, nil
+		}})
+
+	r.Add(Op{Module: "tabletop", Name: "line_of_sight", MCPTool: "tabletop_line_of_sight",
+		Call: func(state any, args map[string]any) (any, error) {
+			s, err := asTabletop(state)
+			if err != nil {
+				return nil, err
+			}
+			if s.Board == nil {
+				return nil, fmt.Errorf("tabletop.line_of_sight: no board; call new_board first")
+			}
+			from, err := pos(args, "fx", "fy")
+			if err != nil {
+				return nil, err
+			}
+			target, err := pos(args, "tx", "ty")
+			if err != nil {
+				return nil, err
+			}
+			return tabletop.LineOfSight(s.Board, from, target, s.Terrain.Blocks), nil
+		}})
+
+	r.Add(Op{Module: "tabletop", Name: "tag_terrain", MCPTool: "tabletop_tag_terrain",
+		Call: func(state any, args map[string]any) (any, error) {
+			s, err := asTabletop(state)
+			if err != nil {
+				return nil, err
+			}
+			p, err := pos(args, "x", "y")
+			if err != nil {
+				return nil, err
+			}
+			tag, err := argStr(args, "tag")
+			if err != nil {
+				return nil, err
+			}
+			s.Terrain.Tag(p, tag)
+			return nil, nil
+		}})
+
+	r.Add(Op{Module: "tabletop", Name: "has_terrain", MCPTool: "tabletop_has_terrain",
+		Call: func(state any, args map[string]any) (any, error) {
+			s, err := asTabletop(state)
+			if err != nil {
+				return nil, err
+			}
+			p, err := pos(args, "x", "y")
+			if err != nil {
+				return nil, err
+			}
+			tag, err := argStr(args, "tag")
+			if err != nil {
+				return nil, err
+			}
+			return s.Terrain.HasTag(p, tag), nil
+		}})
+
 	return r
 }
