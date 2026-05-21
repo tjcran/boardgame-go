@@ -47,3 +47,35 @@ func TestLoadSpecBadName(t *testing.T) {
 		t.Fatalf("expected name-format error, got %v", err)
 	}
 }
+
+func TestLoadSpec_ParsesModules(t *testing.T) {
+	src := `
+META = {"name": "m", "min_players": 2, "max_players": 2}
+MODULES = ["ccg"]
+def setup(ctx): return {}
+def end_if(state, ctx): return None
+def legal_moves(state, ctx): return []
+MOVES = {"pass": {"apply": lambda state, ctx: state}}
+`
+	s, err := LoadSpec(src)
+	if err != nil {
+		t.Fatalf("LoadSpec: %v", err)
+	}
+	if len(s.Modules) != 1 || s.Modules[0] != "ccg" {
+		t.Fatalf("got modules %v, want [ccg]", s.Modules)
+	}
+}
+
+func TestLoadSpec_RejectsUnknownModule(t *testing.T) {
+	src := `
+META = {"name": "m", "min_players": 2, "max_players": 2}
+MODULES = ["nope"]
+def setup(ctx): return {}
+def end_if(state, ctx): return None
+def legal_moves(state, ctx): return []
+MOVES = {"pass": {"apply": lambda state, ctx: state}}
+`
+	if _, err := LoadSpec(src); err == nil {
+		t.Fatal("expected error for unknown module")
+	}
+}
