@@ -11,11 +11,12 @@ const TerrainTagBlocksLOS = "blocks_los"
 // occupy a map slot. Tag names are arbitrary game-defined strings
 // ("cover", "blocks_los", "difficult", "objective_zone", …).
 //
-// TerrainMap is JSON-friendly when marshalled via the standard
-// encoding/json: Pos becomes "{X,Y}" via Go's default struct
-// marshalling (which works because Pos has no map keys).
+// TerrainMap uses a custom JSON codec (MarshalJSON / UnmarshalJSON)
+// because encoding/json cannot use struct types as map keys. The
+// wire format is a JSON array of {"pos": …, "tags": […]} objects,
+// one entry per occupied cell.
 type TerrainMap struct {
-	Cells map[Pos]map[string]bool `json:"cells,omitempty"`
+	Cells map[Pos]map[string]bool
 }
 
 // NewTerrainMap returns an empty TerrainMap.
