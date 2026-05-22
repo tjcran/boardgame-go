@@ -67,5 +67,19 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	s.nextSubID = w.Counters.NextSubID
 	s.nextAbilityID = w.Counters.NextAbilityID
 	s.nextEffectID = w.Counters.NextEffectID
+	// Restore NewState's non-nil-map invariant: omitempty writes JSON null
+	// for empty maps, so after a round-trip through an empty state the maps
+	// land as nil. NewEntity / zone / modifier ops all assign into these
+	// maps and will panic on nil — re-initialise any that were not populated
+	// by the decode.
+	if s.Entities == nil {
+		s.Entities = map[EntityID]Entity{}
+	}
+	if s.Zones == nil {
+		s.Zones = map[ZoneName]*Zone{}
+	}
+	if s.Modifiers == nil {
+		s.Modifiers = map[ModifierID]Modifier{}
+	}
 	return nil
 }

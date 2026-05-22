@@ -5,6 +5,44 @@ import (
 	"testing"
 )
 
+// TestCCGStateJSON_EmptyMapsRehydrateNonNil verifies that unmarshalling a
+// state whose Entities/Zones/Modifiers were empty (omitempty → JSON null)
+// leaves those maps non-nil, so subsequent NewEntity/zone/modifier calls do
+// not panic with "assignment to entry in nil map".
+func TestCCGStateJSON_EmptyMapsRehydrateNonNil(t *testing.T) {
+	// A brand-new state has empty (but non-nil) maps — marshal produces
+	// omitempty nulls for Entities, Zones, Modifiers.
+	s := NewState()
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Unmarshal into a zero-value State (simulates what the engine does).
+	var got State
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Calling NewEntity must not panic (nil-map assignment).
+	var id EntityID
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("NewEntity panicked after unmarshal: %v", r)
+			}
+		}()
+		id = got.NewEntity("card", "player0", nil)
+	}()
+
+	if id == 0 {
+		t.Fatalf("expected a valid non-zero EntityID, got 0")
+	}
+	if _, ok := got.Entities[id]; !ok {
+		t.Fatalf("entity %d missing from rehydrated Entities map", id)
+	}
+}
+
 // TestCCGStateJSON_CountersSurvive verifies that unexported monotonic
 // ID counters are preserved across a JSON round-trip, so that entity
 // IDs minted after reload do not collide with IDs minted before.
