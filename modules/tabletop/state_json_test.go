@@ -5,54 +5,62 @@ import (
 	"testing"
 )
 
-func TestTabletopStateJSON_RoundTrip(t *testing.T) {
+// TestTabletopState_PositionsRoundTrip confirms that default encoding/json
+// round-trips State.Positions correctly and that the byCell reverse index is
+// rebuilt lazily after unmarshal (so EntitiesAt works without any explicit
+// index rebuild call).
+func TestTabletopState_PositionsRoundTrip(t *testing.T) {
 	s := NewState()
-	s.Board = NewSquareBoard(4, 4)
-	s.Terrain = NewTerrainMap()
-	s.Place(UnitID(1), Pos{1, 1})
-	s.Terrain.Tag(Pos{2, 2}, "lake")
+	s.Place(UnitID(1), Pos{X: 1, Y: 1})
+	s.Place(UnitID(2), Pos{X: 3, Y: 0})
 
 	raw, err := json.Marshal(s)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
+
 	got := NewState()
 	if err := json.Unmarshal(raw, got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if p, ok := got.PositionOf(UnitID(1)); !ok || p != (Pos{1, 1}) {
-		t.Fatalf("unit position lost: %v %v", p, ok)
+
+	// PositionOf reads from Positions directly — check unit 1.
+	p, ok := got.PositionOf(UnitID(1))
+	if !ok || p != (Pos{X: 1, Y: 1}) {
+		t.Fatalf("PositionOf(1) = %v %v, want {1,1} true", p, ok)
 	}
-	if got.Terrain == nil || !got.Terrain.HasTag(Pos{2, 2}, "lake") {
-		t.Fatalf("terrain tag lost")
+
+	// EntitiesAt reads through byCell (rebuilt lazily after unmarshal).
+	at := got.EntitiesAt(Pos{X: 1, Y: 1})
+	if len(at) != 1 || at[0] != UnitID(1) {
+		t.Fatalf("EntitiesAt({1,1}) = %v, want [1]", at)
 	}
-	if got.Board == nil {
-		t.Fatalf("board lost")
+
+	// Second unit also survives.
+	p2, ok2 := got.PositionOf(UnitID(2))
+	if !ok2 || p2 != (Pos{X: 3, Y: 0}) {
+		t.Fatalf("PositionOf(2) = %v %v, want {3,0} true", p2, ok2)
+	}
+
+	at2 := got.EntitiesAt(Pos{X: 3, Y: 0})
+	if len(at2) != 1 || at2[0] != UnitID(2) {
+		t.Fatalf("EntitiesAt({3,0}) = %v, want [2]", at2)
 	}
 }
 
-func TestTabletopStateJSON_NilBoardOK(t *testing.T) {
-	// A State with no board should still round-trip cleanly.
+// TestTabletopState_EmptyRoundTrip ensures an empty State (no units placed)
+// marshals and unmarshals without error and produces a valid, usable State.
+func TestTabletopState_EmptyRoundTrip(t *testing.T) {
 	s := NewState()
-	s.Terrain = NewTerrainMap()
-	s.Place(UnitID(5), Pos{3, 0})
-	s.Terrain.Tag(Pos{0, 0}, "forest")
-
 	raw, err := json.Marshal(s)
 	if err != nil {
-		t.Fatalf("marshal nil-board state: %v", err)
+		t.Fatalf("marshal empty state: %v", err)
 	}
 	got := NewState()
 	if err := json.Unmarshal(raw, got); err != nil {
-		t.Fatalf("unmarshal nil-board state: %v", err)
+		t.Fatalf("unmarshal empty state: %v", err)
 	}
-	if got.Board != nil {
-		t.Fatalf("expected nil Board after round-trip, got %v", got.Board)
-	}
-	if p, ok := got.PositionOf(UnitID(5)); !ok || p != (Pos{3, 0}) {
-		t.Fatalf("unit position lost in nil-board round-trip: %v %v", p, ok)
-	}
-	if got.Terrain == nil || !got.Terrain.HasTag(Pos{0, 0}, "forest") {
-		t.Fatalf("terrain tag lost in nil-board round-trip")
+	if units := got.EntitiesAt(Pos{X: 0, Y: 0}); len(units) != 0 {
+		t.Fatalf("EntitiesAt on empty state = %v, want []", units)
 	}
 }

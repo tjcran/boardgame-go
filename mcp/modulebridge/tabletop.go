@@ -1,6 +1,7 @@
 package modulebridge
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/tjcran/boardgame-go/core"
@@ -9,14 +10,60 @@ import (
 
 // tabletopState bundles the three live tabletop objects a spatial game
 // needs. Board is nil until new_board runs; geometry ops error until then.
-// JSON note: Space and Terrain marshal cleanly; Board is an interface and
-// marshals as its concrete struct fields without a type tag — fine for the
-// in-memory store (modules are not round-tripped between moves) and client
-// views; replay rebuilds the board via setup's new_board call.
+// JSON: Space and Terrain have their own codecs and round-trip cleanly.
+// Board is a Go interface, so MarshalJSON/UnmarshalJSON below delegate to
+// tabletop.MarshalBoard/UnmarshalBoard which embed a "kind" discriminator
+// in the JSON so the concrete type can be reconstructed on unmarshal.
 type tabletopState struct {
 	Space   *tabletop.State      `json:"space"`
 	Board   tabletop.Board       `json:"board,omitempty"`
 	Terrain *tabletop.TerrainMap `json:"terrain"`
+}
+
+// tabletopStateJSON is the on-wire shape for tabletopState. Board is
+// captured as raw JSON so we can pass it through tabletop.UnmarshalBoard
+// on decode.
+type tabletopStateJSON struct {
+	Space   *tabletop.State      `json:"space"`
+	Board   json.RawMessage      `json:"board,omitempty"`
+	Terrain *tabletop.TerrainMap `json:"terrain"`
+}
+
+// MarshalJSON encodes tabletopState, using tabletop.MarshalBoard to
+// serialize the Board interface with a kind discriminator.
+func (s *tabletopState) MarshalJSON() ([]byte, error) {
+	j := tabletopStateJSON{
+		Space:   s.Space,
+		Terrain: s.Terrain,
+	}
+	if s.Board != nil {
+		raw, err := tabletop.MarshalBoard(s.Board)
+		if err != nil {
+			return nil, err
+		}
+		j.Board = json.RawMessage(raw)
+	}
+	return json.Marshal(j)
+}
+
+// UnmarshalJSON decodes tabletopState, using tabletop.UnmarshalBoard to
+// reconstruct the concrete Board from the kind discriminator. A missing or
+// null board key is treated as nil.
+func (s *tabletopState) UnmarshalJSON(data []byte) error {
+	var j tabletopStateJSON
+	if err := json.Unmarshal(data, &j); err != nil {
+		return err
+	}
+	s.Space = j.Space
+	s.Terrain = j.Terrain
+	if len(j.Board) > 0 && string(j.Board) != "null" {
+		b, err := tabletop.UnmarshalBoard(j.Board)
+		if err != nil {
+			return err
+		}
+		s.Board = b
+	}
+	return nil
 }
 
 func newTabletopState() *tabletopState {
