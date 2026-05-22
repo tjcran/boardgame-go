@@ -2,9 +2,9 @@ package ccg
 
 import "encoding/json"
 
-// stateAlias is a type alias for State that does NOT inherit State's
-// MarshalJSON / UnmarshalJSON methods, breaking the recursion that
-// would otherwise occur inside those methods.
+// stateAlias is a defined type over State (not a `= State` alias) so it
+// does NOT inherit State's MarshalJSON / UnmarshalJSON methods, breaking
+// the recursion that would otherwise occur inside those methods.
 type stateAlias State
 
 // stateCountersJSON carries the unexported monotonic ID counters that
