@@ -43,7 +43,7 @@ func MarshalBoard(b Board) ([]byte, error) {
 	case *HexBoard:
 		return json.Marshal(boardJSON{"hex", t.Width, t.Height})
 	default:
-		return nil, fmt.Errorf("tabletop: unmarshalable board %T", b)
+		return nil, fmt.Errorf("tabletop: cannot marshal board type %T", b)
 	}
 }
 
