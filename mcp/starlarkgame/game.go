@@ -174,6 +174,15 @@ func buildMovesMap(s *Spec, src map[string]Move) map[string]any {
 			if err := validateArgs(mv, args, sg.Modules); err != nil {
 				return nil, err
 			}
+			// On a serializing store the match reloads each move as a bare
+			// map, so asStarlarkG rehydrates fresh module states with no
+			// event subscriptions. Re-register the spec's HOOKS against
+			// them. On the in-memory store mc.G is already *StarlarkG
+			// (subs registered at Setup persist) — skip to avoid
+			// double-subscribing.
+			if _, wasLive := mc.G.(*StarlarkG); !wasLive {
+				registerHooks(s, sg.Modules)
+			}
 			bc := NewWriteCtx(mc.Ctx.NumPlayers, mc.PlayerID, sg.Modules)
 			bc.Phase = mc.Ctx.Phase
 			bc.Events = mc.Events
