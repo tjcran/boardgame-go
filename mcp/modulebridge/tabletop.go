@@ -76,6 +76,7 @@ func newTabletopState() *tabletopState {
 func init() {
 	stateFactories["tabletop"] = func() any { return newTabletopState() }
 	registryByName["tabletop"] = TabletopRegistry()
+	rehydrators["tabletop"] = func(m map[string]any) (any, error) { return jsonRehydrate("tabletop", m) }
 }
 
 var tabletopReg *Registry
