@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-
-	"github.com/tjcran/boardgame-go/mcp/modulebridge"
 )
 
 var moduleRefRe = regexp.MustCompile(`ctx\.modules\.([a-z_]+)`)
@@ -42,12 +40,7 @@ func Validate(ctx context.Context, s *Spec) error {
 	for _, n := range []int{s.Meta.MinPlayers, s.Meta.MaxPlayers} {
 		// Instantiate declared modules so setup smoke can call
 		// ctx.modules.<name>.<op>(...), mirroring live Setup.
-		mods := map[string]any{}
-		for _, name := range s.Modules {
-			if st := modulebridge.NewState(name); st != nil {
-				mods[name] = st
-			}
-		}
+		mods := s.NewModuleStates()
 		bc := &BridgeCtx{NumPlayers: n, Modules: mods}
 		bc.AttachSeededRandom(0)
 		state, err := s.CallSetup(ctx, bc)

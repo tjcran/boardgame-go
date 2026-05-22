@@ -405,7 +405,10 @@ func (t *Tools) PlaytestDraft(ctx context.Context, args PlaytestDraftArgs) (Play
 		res.ValidationErrors = []string{"validate: " + err.Error()}
 		return res, nil
 	}
-	bc := &starlarkgame.BridgeCtx{NumPlayers: spec.Meta.MinPlayers}
+	// Instantiate declared modules so setup/move callbacks can use
+	// ctx.modules.<name>.<op>(...), exactly as a live match does.
+	mods := spec.NewModuleStates()
+	bc := &starlarkgame.BridgeCtx{NumPlayers: spec.Meta.MinPlayers, Modules: mods}
 	bc.AttachSeededRandom(0)
 	state, err := spec.CallSetup(ctx, bc)
 	if err != nil {
@@ -429,10 +432,14 @@ func (t *Tools) PlaytestDraft(ctx context.Context, args PlaytestDraftArgs) (Play
 		}
 		state = next
 		tr.StateAfter = deepCopyMap(state)
-		if end, _ := spec.CallEndIf(ctx, bc, state); end != nil {
+		// end_if / legal_moves are speculative reads: mirror the live
+		// engine's read-only module contract over the same module states.
+		roBC := &starlarkgame.BridgeCtx{NumPlayers: spec.Meta.MinPlayers, PlayerID: step.PlayerID, Modules: mods, ReadOnly: true}
+		roBC.AttachSeededRandom(0)
+		if end, _ := spec.CallEndIf(ctx, roBC, state); end != nil {
 			tr.EndIfResult = end
 		}
-		lm, _ := spec.CallLegalMoves(ctx, bc, state)
+		lm, _ := spec.CallLegalMoves(ctx, roBC, state)
 		tr.LegalMovesAfter = lm
 		res.Trace = append(res.Trace, tr)
 	}
