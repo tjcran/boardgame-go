@@ -41,7 +41,7 @@ func Validate(ctx context.Context, s *Spec) error {
 		// Instantiate declared modules so setup smoke can call
 		// ctx.modules.<name>.<op>(...), mirroring live Setup.
 		mods := s.NewModuleStates()
-		bc := &BridgeCtx{NumPlayers: n, Modules: mods}
+		bc := NewWriteCtx(n, "", mods)
 		bc.AttachSeededRandom(0)
 		state, err := s.CallSetup(ctx, bc)
 		if err != nil {
@@ -52,7 +52,7 @@ func Validate(ctx context.Context, s *Spec) error {
 		// read-only module contract as live play: same module states, but
 		// mutating ops error. PlayerID "0" is the canonical seat-0 viewpoint
 		// — multi-action specs (Catan-shape) crash on an empty player_id.
-		smokeBC := &BridgeCtx{NumPlayers: n, PlayerID: "0", Modules: mods, ReadOnly: true}
+		smokeBC := NewReadCtx(n, "0", mods)
 		smokeBC.AttachSeededRandom(0)
 
 		end, err := s.CallEndIf(ctx, smokeBC, state)

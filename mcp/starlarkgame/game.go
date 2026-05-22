@@ -49,7 +49,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 		// Instantiate a live state for each declared module before setup
 		// runs, so setup code can call ctx.modules.<name>.<op>(...).
 		mods := s.NewModuleStates()
-		bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, Modules: mods}
+		bc := NewWriteCtx(ctx.NumPlayers, "", mods)
 		bc.AttachSeededRandom(ctxSeed(ctx))
 		data, err := s.CallSetup(context.Background(), bc)
 		if err != nil {
@@ -67,7 +67,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 		if !ok {
 			return nil
 		}
-		bc := &BridgeCtx{NumPlayers: mc.Ctx.NumPlayers, Modules: sg.Modules, ReadOnly: true}
+		bc := NewReadCtx(mc.Ctx.NumPlayers, "", sg.Modules)
 		bc.AttachSeededRandom(ctxSeed(mc.Ctx))
 		out, err := s.CallEndIf(context.Background(), bc, sg.Data)
 		if err != nil {
@@ -82,7 +82,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 			if !ok {
 				return gv
 			}
-			bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, PlayerID: playerID, Modules: sg.Modules, ReadOnly: true}
+			bc := NewReadCtx(ctx.NumPlayers, playerID, sg.Modules)
 			out, err := s.CallPlayerView(context.Background(), bc, sg.Data, playerID)
 			if err != nil {
 				return gv
@@ -96,7 +96,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 		if !ok {
 			return nil
 		}
-		bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, PlayerID: playerID, Modules: sg.Modules, ReadOnly: true}
+		bc := NewReadCtx(ctx.NumPlayers, playerID, sg.Modules)
 		bc.AttachSeededRandom(ctxSeed(ctx))
 		out, err := s.CallLegalMoves(context.Background(), bc, sg.Data)
 		if err != nil {
@@ -139,13 +139,8 @@ func BuildCoreGame(s *Spec) *core.Game {
 					if !ok {
 						return false, ""
 					}
-					bc := &BridgeCtx{
-						NumPlayers: mc.Ctx.NumPlayers,
-						PlayerID:   mc.PlayerID,
-						Phase:      mc.Ctx.Phase,
-						Modules:    sg.Modules,
-						ReadOnly:   true,
-					}
+					bc := NewReadCtx(mc.Ctx.NumPlayers, mc.PlayerID, sg.Modules)
+					bc.Phase = mc.Ctx.Phase
 					bc.AttachSeededRandom(ctxSeed(mc.Ctx))
 					next, err := s.CallPhaseEndIf(context.Background(), bc, sg.Data, phaseName)
 					if err != nil || next == "" {
@@ -179,15 +174,11 @@ func buildMovesMap(s *Spec, src map[string]Move) map[string]any {
 			if err := validateArgs(mv, args, sg.Modules); err != nil {
 				return nil, err
 			}
-			bc := &BridgeCtx{
-				NumPlayers:    mc.Ctx.NumPlayers,
-				PlayerID:      mc.PlayerID,
-				Phase:         mc.Ctx.Phase,
-				Events:        mc.Events,
-				Modules:       sg.Modules,
-				Queue:         mc.Queue,
-				ResumingBlock: mc.ResumingBlock,
-			}
+			bc := NewWriteCtx(mc.Ctx.NumPlayers, mc.PlayerID, sg.Modules)
+			bc.Phase = mc.Ctx.Phase
+			bc.Events = mc.Events
+			bc.Queue = mc.Queue
+			bc.ResumingBlock = mc.ResumingBlock
 			bc.AttachSeededRandom(ctxSeed(mc.Ctx))
 			newData, err := s.CallMove(context.Background(), bc, name, sg.Data, args)
 			if err != nil {
