@@ -8,6 +8,21 @@ import (
 	"github.com/tjcran/boardgame-go/mcp/modulebridge"
 )
 
+// NewModuleStates mints a fresh live state for each module the spec
+// declares in MODULES, keyed by module name. The result populates
+// BridgeCtx.Modules so ctx.modules.<name>.<op>(...) bindings exist.
+// Every code path that runs spec callbacks (live Setup, Validate,
+// playtest) must call this — otherwise ctx.modules is silently absent.
+func (s *Spec) NewModuleStates() map[string]any {
+	mods := map[string]any{}
+	for _, name := range s.Modules {
+		if st := modulebridge.NewState(name); st != nil {
+			mods[name] = st
+		}
+	}
+	return mods
+}
+
 // BuildCoreGame synthesizes a *core.Game whose Setup / Moves / EndIf /
 // PlayerView / Enumerate function fields are closures dispatching to
 // the Spec's Starlark callables.
@@ -33,12 +48,7 @@ func BuildCoreGame(s *Spec) *core.Game {
 	g.Setup = func(ctx core.Ctx, _ any) core.G {
 		// Instantiate a live state for each declared module before setup
 		// runs, so setup code can call ctx.modules.<name>.<op>(...).
-		mods := map[string]any{}
-		for _, name := range s.Modules {
-			if st := modulebridge.NewState(name); st != nil {
-				mods[name] = st
-			}
-		}
+		mods := s.NewModuleStates()
 		bc := &BridgeCtx{NumPlayers: ctx.NumPlayers, Modules: mods}
 		bc.AttachSeededRandom(ctxSeed(ctx))
 		data, err := s.CallSetup(context.Background(), bc)
