@@ -1,6 +1,9 @@
 package tabletop
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // TerrainTagBlocksLOS is the conventional tag name for "this cell
 // blocks line of sight." Callers are free to use their own tags;
@@ -78,6 +81,9 @@ type terrainCellJSON struct {
 
 // MarshalJSON encodes TerrainMap as a JSON array of {pos, tags} objects.
 // Using a slice avoids the map-with-struct-key limitation in encoding/json.
+// The output is deterministic: cells are sorted by (X then Y) and each
+// cell's tags are sorted alphabetically, so byte-identical output is
+// produced for identical map contents regardless of Go map iteration order.
 func (t *TerrainMap) MarshalJSON() ([]byte, error) {
 	cells := make([]terrainCellJSON, 0, len(t.Cells))
 	for p, tagSet := range t.Cells {
@@ -85,8 +91,15 @@ func (t *TerrainMap) MarshalJSON() ([]byte, error) {
 		for tag := range tagSet {
 			tags = append(tags, tag)
 		}
+		sort.Strings(tags)
 		cells = append(cells, terrainCellJSON{Pos: p, Tags: tags})
 	}
+	sort.Slice(cells, func(i, j int) bool {
+		if cells[i].Pos.X != cells[j].Pos.X {
+			return cells[i].Pos.X < cells[j].Pos.X
+		}
+		return cells[i].Pos.Y < cells[j].Pos.Y
+	})
 	return json.Marshal(cells)
 }
 
