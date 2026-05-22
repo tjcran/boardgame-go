@@ -45,6 +45,26 @@ type BridgeCtx struct {
 	rng *bridgeRandom
 }
 
+// NewReadCtx builds the ctx for a speculative read callback — end_if,
+// legal_moves, player_view, phase end_if. Module ops are exposed
+// read-only so the callback cannot mutate the shared live state.
+//
+// NewWriteCtx / NewReadCtx are the only sanctioned ways to build a
+// callback ctx: mods is a required argument (a forgotten struct field
+// is exactly how playtest_draft once ran with no modules) and ReadOnly
+// is fixed by the choice of constructor, not left to each call site.
+// Callers layer on the per-callback extras afterward (Phase, Events,
+// Queue, ResumingBlock) and attach the seeded RNG where applicable.
+func NewReadCtx(numPlayers int, playerID string, mods map[string]any) *BridgeCtx {
+	return &BridgeCtx{NumPlayers: numPlayers, PlayerID: playerID, Modules: mods, ReadOnly: true}
+}
+
+// NewWriteCtx builds the ctx for a mutating callback — setup, move
+// apply, hooks. Module ops may mutate the live state.
+func NewWriteCtx(numPlayers int, playerID string, mods map[string]any) *BridgeCtx {
+	return &BridgeCtx{NumPlayers: numPlayers, PlayerID: playerID, Modules: mods}
+}
+
 // asStarlark returns the `ctx` value Starlark code receives. It's a
 // starlarkstruct whose attributes proxy to BridgeCtx fields, so updates
 // (e.g. ctx.log) flow back to the Go side.

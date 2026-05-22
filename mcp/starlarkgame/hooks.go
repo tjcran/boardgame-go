@@ -37,7 +37,7 @@ func registerHooks(s *Spec, mods map[string]any) {
 			depth++
 			defer func() { depth-- }()
 
-			bc := &BridgeCtx{Modules: mods}
+			bc := NewWriteCtx(0, "", mods)
 			sv, err := ToStarlark(eventToDict(e))
 			if err != nil {
 				panic(modulebridge.HookError{Err: err})
