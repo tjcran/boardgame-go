@@ -1,16 +1,25 @@
 package tabletop
 
-import "sort"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // State tracks the spatial layer: which UnitID is at which Pos, plus
 // an internal reverse index for fast cell→units queries. State is
 // game-state — embed it (or hold a pointer) in your G alongside ccg
 // state and engine fields.
 //
-// State is JSON-friendly: Positions marshals cleanly via the default
-// encoding/json (UnitID is uint64, Pos is a plain struct). The reverse
-// index is unexported and is rebuilt on first access after deserialise.
+// State also optionally holds the Board geometry and a TerrainMap so
+// that the entire tabletop context can be serialised as a single value.
+// MarshalJSON/UnmarshalJSON handle the Board interface (which default
+// encoding/json cannot reconstruct) via MarshalBoard/UnmarshalBoard.
 type State struct {
+	// Board is the optional geometry for this state. May be nil if the
+	// caller manages the board separately (e.g. in a wargameG wrapper).
+	Board Board `json:"-"`
+	// Terrain is the optional per-cell tag store. May be nil.
+	Terrain *TerrainMap `json:"-"`
 	// Positions is the canonical unit → cell map. Marshalled.
 	Positions map[UnitID]Pos `json:"positions,omitempty"`
 	// byCell is the reverse index, built lazily. Not serialised — it's
@@ -24,6 +33,52 @@ func NewState() *State {
 		Positions: map[UnitID]Pos{},
 		byCell:    map[Pos][]UnitID{},
 	}
+}
+
+// stateJSON is the on-wire shape for a State value.
+type stateJSON struct {
+	Board     json.RawMessage    `json:"board,omitempty"`
+	Terrain   *TerrainMap        `json:"terrain,omitempty"`
+	Positions map[UnitID]Pos     `json:"positions,omitempty"`
+}
+
+// MarshalJSON encodes State to JSON, using MarshalBoard for the Board
+// interface field so that the concrete type can be recovered on unmarshal.
+func (s *State) MarshalJSON() ([]byte, error) {
+	sj := stateJSON{
+		Terrain:   s.Terrain,
+		Positions: s.Positions,
+	}
+	if s.Board != nil {
+		raw, err := MarshalBoard(s.Board)
+		if err != nil {
+			return nil, err
+		}
+		sj.Board = json.RawMessage(raw)
+	}
+	return json.Marshal(sj)
+}
+
+// UnmarshalJSON decodes State from JSON, reconstructing the Board concrete
+// type via UnmarshalBoard. A missing or null board key is treated as nil.
+func (s *State) UnmarshalJSON(data []byte) error {
+	var sj stateJSON
+	if err := json.Unmarshal(data, &sj); err != nil {
+		return err
+	}
+	if len(sj.Board) > 0 && string(sj.Board) != "null" {
+		b, err := UnmarshalBoard(sj.Board)
+		if err != nil {
+			return err
+		}
+		s.Board = b
+	}
+	s.Terrain = sj.Terrain
+	s.Positions = sj.Positions
+	// byCell is rebuilt lazily; leave it nil so ensureIndex triggers on
+	// first EntitiesAt/Within call.
+	s.byCell = nil
+	return nil
 }
 
 // Place puts unit at pos. If unit already has a position, it's moved —
