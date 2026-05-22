@@ -52,6 +52,11 @@ func (g *StarlarkG) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// AsStarlarkG normalizes a core.G (a live *StarlarkG, or the map a
+// serializing store returns) into a *StarlarkG with live, rehydrated
+// module states. Returns false if g is not a designed-game state.
+func AsStarlarkG(g any) (*StarlarkG, bool) { return asStarlarkG(g) }
+
 // asStarlarkG normalizes a core.G into a *StarlarkG. The in-memory store
 // preserves the live *StarlarkG pointer across moves; a serializing store
 // (SQLite/Postgres) round-trips state through JSON, and since core.G is
