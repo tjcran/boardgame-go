@@ -1,6 +1,10 @@
 package starlarkgame
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/tjcran/boardgame-go/mcp/modulebridge"
+)
 
 // StarlarkG is the game state (core.G) for designed games. Data is the
 // user dict the spec's apply reads and returns. Modules holds live
@@ -48,17 +52,23 @@ func (g *StarlarkG) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// AsStarlarkG normalizes a core.G (a live *StarlarkG, or the map a
+// serializing store returns) into a *StarlarkG with live, rehydrated
+// module states. Returns false if g is not a designed-game state.
+func AsStarlarkG(g any) (*StarlarkG, bool) { return asStarlarkG(g) }
+
 // asStarlarkG normalizes a core.G into a *StarlarkG. The in-memory store
 // preserves the live *StarlarkG pointer across moves; a serializing store
 // (SQLite/Postgres) round-trips state through JSON, and since core.G is
 // `any`, G comes back as a bare map[string]any — this reconstructs the
 // StarlarkG from it (mirroring UnmarshalJSON).
 //
-// Caveat: for module-backed games the reconstructed Modules entries are
-// plain maps, not the live *ccg.State etc., so module ops won't rebind
-// after a serializing-store reload (module games rely on the in-memory
-// store, which keeps the live pointer). Module-free designed games
-// round-trip cleanly.
+// Module rehydration: for module-backed games, each entry under __modules__
+// is passed through modulebridge.Rehydrate so the plain map that came back
+// from JSON decode is converted to the live typed state (*ccg.State,
+// *tabletopState, etc.) that the module's ops expect. If rehydration fails
+// for a given module (unknown or forward-compat module), the raw value is
+// kept as-is so unrecognised modules don't hard-fail the reload.
 func asStarlarkG(g any) (*StarlarkG, bool) {
 	switch v := g.(type) {
 	case *StarlarkG:
@@ -68,7 +78,17 @@ func asStarlarkG(g any) (*StarlarkG, bool) {
 		for k, val := range v {
 			if k == modulesKey {
 				if m, ok := val.(map[string]any); ok {
-					sg.Modules = m
+					out := make(map[string]any, len(m))
+					for name, entry := range m {
+						if em, ok := entry.(map[string]any); ok {
+							if live, err := modulebridge.Rehydrate(name, em); err == nil {
+								out[name] = live
+								continue
+							}
+						}
+						out[name] = entry // fallback: leave as-is
+					}
+					sg.Modules = out
 				}
 				continue
 			}

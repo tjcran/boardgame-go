@@ -647,16 +647,8 @@ func (t *Tools) ModuleOp(ctx context.Context, args ModuleOpArgs) (ModuleOpResult
 	if err != nil {
 		return ModuleOpResult{}, err
 	}
-	sg, ok := m.State.G.(*starlarkgame.StarlarkG)
+	sg, ok := starlarkgame.AsStarlarkG(m.State.G)
 	if !ok {
-		// A designed game loaded from a serializing store (SQLite/Postgres)
-		// comes back as a bare map: core.G is `any`, so JSON round-tripping
-		// loses the concrete *StarlarkG and, with it, the live typed module
-		// states (a *tabletop.State becomes a plain map). module_op needs the
-		// live state, which today only the in-memory store preserves.
-		if _, isMap := m.State.G.(map[string]any); isMap {
-			return ModuleOpResult{}, fmt.Errorf("match %s has no live module state: it was loaded from a persistent store, which does not yet retain engine-module state. Run the server with the in-memory store (no --db-path / --database-url) to prototype modules via module_op", args.MatchID)
-		}
 		return ModuleOpResult{}, fmt.Errorf("match %s is not a designed game", args.MatchID)
 	}
 	if _, ok := sg.Modules[args.Module]; !ok {

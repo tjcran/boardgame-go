@@ -9,6 +9,7 @@ import (
 func init() {
 	stateFactories["economy"] = func() any { return &emptyState{} }
 	registryByName["economy"] = EconomyRegistry()
+	rehydrators["economy"] = func(m map[string]any) (any, error) { return jsonRehydrate("economy", m) }
 }
 
 var economyReg *Registry

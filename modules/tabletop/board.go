@@ -1,5 +1,10 @@
 package tabletop
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
 // Board is the geometry primitive. Implementations are pure: they
 // return positions and distances without consulting any game state.
 // Layer game state (terrain, units, fog of war) on top via the free
@@ -20,6 +25,43 @@ type Board interface {
 	// cells are NOT filtered — callers wanting to ignore them must
 	// check InBounds themselves.
 	Line(a, b Pos) []Pos
+}
+
+// boardJSON is the on-wire representation used by MarshalBoard/UnmarshalBoard.
+type boardJSON struct {
+	Kind string `json:"kind"`
+	W    int    `json:"w"`
+	H    int    `json:"h"`
+}
+
+// MarshalBoard encodes a Board to JSON using a kind discriminator so the
+// concrete type can be recovered by UnmarshalBoard.
+func MarshalBoard(b Board) ([]byte, error) {
+	switch t := b.(type) {
+	case *SquareBoard:
+		return json.Marshal(boardJSON{"square", t.Width, t.Height})
+	case *HexBoard:
+		return json.Marshal(boardJSON{"hex", t.Width, t.Height})
+	default:
+		return nil, fmt.Errorf("tabletop: cannot marshal board type %T", b)
+	}
+}
+
+// UnmarshalBoard reconstructs the concrete Board that was encoded by
+// MarshalBoard.
+func UnmarshalBoard(raw []byte) (Board, error) {
+	var bj boardJSON
+	if err := json.Unmarshal(raw, &bj); err != nil {
+		return nil, err
+	}
+	switch bj.Kind {
+	case "square":
+		return NewSquareBoard(bj.W, bj.H), nil
+	case "hex":
+		return NewHexBoard(bj.W, bj.H), nil
+	default:
+		return nil, fmt.Errorf("tabletop: unknown board kind %q", bj.Kind)
+	}
 }
 
 // LineOfSight reports whether sight is clear from `from` to `target` on

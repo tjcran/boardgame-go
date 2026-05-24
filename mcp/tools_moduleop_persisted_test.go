@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/tjcran/boardgame-go/match"
@@ -24,10 +23,11 @@ def noop(state, ctx): return state
 MOVES = {"noop": {"apply": noop}}
 `
 
-// On a serializing store the match's module state isn't live, so module_op
-// can't run. It must say so in an actionable way — not the misleading
-// "not a designed game", which sent the design session down a rabbit hole.
-func TestModuleOp_PersistedMatch_ActionableError(t *testing.T) {
+// TestModuleOp_PersistedMatch_NowWorks replaces the old "ActionableError"
+// test from PR #72. Now that AsStarlarkG rehydrates live module states from
+// the bare map a serializing store returns, module_op works on persisted
+// matches — no error, correct result.
+func TestModuleOp_PersistedMatch_NowWorks(t *testing.T) {
 	store, err := sqlitestore.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatalf("sqlite open: %v", err)
@@ -46,17 +46,24 @@ func TestModuleOp_PersistedMatch_ActionableError(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = (&Tools{Manager: mgr}).ModuleOp(context.Background(), ModuleOpArgs{
-		MatchID: id, Module: "tabletop", Op: "position_of", Args: map[string]any{"unit": 1},
+	// setup placed unit 1 at (0,0); position_of must succeed and return [0,0].
+	res, err := (&Tools{Manager: mgr}).ModuleOp(context.Background(), ModuleOpArgs{
+		MatchID: id, Module: "tabletop", Op: "position_of", Args: map[string]any{"unit": int64(1)},
 	})
-	if err == nil {
-		t.Fatalf("expected an error for module_op on a persisted match")
+	if err != nil {
+		t.Fatalf("module_op on persisted match: %v", err)
 	}
-	msg := err.Error()
-	if strings.Contains(msg, "not a designed game") {
-		t.Fatalf("misleading error retained: %q", msg)
+	list, ok := res.Result.([]any)
+	if !ok {
+		t.Fatalf("position_of result type = %T, want []any", res.Result)
 	}
-	if !strings.Contains(msg, "in-memory") {
-		t.Fatalf("error not actionable (should point at the in-memory store): %q", msg)
+	if len(list) != 2 {
+		t.Fatalf("position_of result len = %d, want 2; got %v", len(list), list)
+	}
+	if list[0] != int64(0) {
+		t.Errorf("position_of x = %v (%T), want int64(0)", list[0], list[0])
+	}
+	if list[1] != int64(0) {
+		t.Errorf("position_of y = %v (%T), want int64(0)", list[1], list[1])
 	}
 }

@@ -1,15 +1,20 @@
 package tabletop
 
-import "sort"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // State tracks the spatial layer: which UnitID is at which Pos, plus
 // an internal reverse index for fast cell→units queries. State is
 // game-state — embed it (or hold a pointer) in your G alongside ccg
 // state and engine fields.
 //
-// State is JSON-friendly: Positions marshals cleanly via the default
-// encoding/json (UnitID is uint64, Pos is a plain struct). The reverse
-// index is unexported and is rebuilt on first access after deserialise.
+// State uses default MarshalJSON (Positions is the only exported field).
+// UnmarshalJSON is customised only to nil out byCell after decode so
+// ensureIndex correctly rebuilds it on the first EntitiesAt/Within call
+// (NewState primes byCell to non-nil, which would fool the nil-check guard
+// if left untouched).
 type State struct {
 	// Positions is the canonical unit → cell map. Marshalled.
 	Positions map[UnitID]Pos `json:"positions,omitempty"`
@@ -24,6 +29,25 @@ func NewState() *State {
 		Positions: map[UnitID]Pos{},
 		byCell:    map[Pos][]UnitID{},
 	}
+}
+
+// stateOnWire is the JSON alias used only for unmarshaling, to avoid
+// infinite recursion if we called json.Unmarshal(data, s) inside
+// UnmarshalJSON.
+type stateOnWire struct {
+	Positions map[UnitID]Pos `json:"positions,omitempty"`
+}
+
+// UnmarshalJSON restores Positions from JSON and nils out byCell so
+// ensureIndex will rebuild it lazily on the first query call.
+func (s *State) UnmarshalJSON(data []byte) error {
+	var w stateOnWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	s.Positions = w.Positions
+	s.byCell = nil // force ensureIndex to rebuild from Positions
+	return nil
 }
 
 // Place puts unit at pos. If unit already has a position, it's moved —

@@ -10,6 +10,7 @@ import (
 func init() {
 	stateFactories["ccg"] = func() any { return ccg.NewState() }
 	registryByName["ccg"] = CCGRegistry()
+	rehydrators["ccg"] = func(m map[string]any) (any, error) { return jsonRehydrate("ccg", m) }
 }
 
 var ccgReg *Registry
