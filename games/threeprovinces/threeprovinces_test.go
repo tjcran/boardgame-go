@@ -6,11 +6,10 @@ import (
 	"github.com/tjcran/boardgame-go/core"
 )
 
-// TestPluralityScoringEndOfGame plays 8 moves (4 per player). The
-// scripted plan is engineered so alice cleanly wins top (2 vs 1) and
-// ties bob in both middle (1 vs 1) and bottom (2 vs 2). With Plurality
-// + Split: alice gets 1 from top; middle and bottom tie at 1pt and
-// split (1/2 = 0 each). Final: alice 1, bob 0.
+// TestPluralityScoringEndOfGame plays 8 moves (4 per player). Alice
+// wins "top" cleanly (2 vs 1), middle ties 1-1 (Split awards 0 each),
+// bob wins "bottom" cleanly (1 vs 2). Expected total: alice 1, bob 1.
+// Exercises the Plurality clear-winner path and the Split tie path.
 func TestPluralityScoringEndOfGame(t *testing.T) {
 	g := New()
 	s := core.NewMatch(g, 2, nil)
@@ -22,8 +21,8 @@ func TestPluralityScoringEndOfGame(t *testing.T) {
 		{1, 3, 1}, // bob middle
 		{0, 0, 1}, // alice middle (1 vs 1)  -- this ties for middle
 		{1, 3, 2}, // bob bottom
-		{0, 0, 2}, // alice bottom (1 vs 1)
-		{1, 0, 3}, // bob bottom (1 vs 2)
+		{0, 0, 2}, // alice bottom (now 1 vs 1)
+		{1, 0, 3}, // bob bottom (1 vs 2, bob wins)
 	}
 
 	for i, mv := range plan {
@@ -52,7 +51,7 @@ func TestPluralityScoringEndOfGame(t *testing.T) {
 	if scores["0"] != 1 {
 		t.Errorf("alice score = %v, want 1", scores["0"])
 	}
-	if scores["1"] != 0 {
-		t.Errorf("bob score = %v, want 0", scores["1"])
+	if scores["1"] != 1 {
+		t.Errorf("bob score = %v, want 1", scores["1"])
 	}
 }
