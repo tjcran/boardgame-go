@@ -1,6 +1,10 @@
 package regions
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/tjcran/boardgame-go/modules/tabletop"
+)
 
 func TestPluralityClearWinner(t *testing.T) {
 	infl := map[string]int{"alice": 3, "bob": 1}
@@ -155,5 +159,28 @@ func TestCustomTieBreak(t *testing.T) {
 	got := ScoreRegion(infl, rule)
 	if got["alice"] != 10 || got["bob"] != 0 {
 		t.Errorf("Custom tie-break: got %v, want alice:10 bob:0", got)
+	}
+}
+
+func TestScoreAllSumsAcrossRegions(t *testing.T) {
+	s := tabletop.NewState()
+	s.Place(1, tabletop.Pos{0, 0}) // north
+	s.Place(2, tabletop.Pos{0, 1}) // south
+	owner := func(u tabletop.UnitID) string {
+		switch u {
+		case 1, 2:
+			return "alice"
+		}
+		return ""
+	}
+	m, _ := NewMap([]Region{
+		{ID: "north", Cells: []tabletop.Pos{{0, 0}}},
+		{ID: "south", Cells: []tabletop.Pos{{0, 1}}},
+	})
+	pts := m.ScoreAll(s, owner, ScoringRule{
+		Kind: Plurality, PerPlace: []int{3}, TieBreak: Split,
+	})
+	if pts["alice"] != 6 {
+		t.Fatalf("alice: got %d, want 6 (3 per region × 2 regions)", pts["alice"])
 	}
 }

@@ -1,6 +1,10 @@
 package regions
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/tjcran/boardgame-go/modules/tabletop"
+)
 
 // ScoringKind enumerates the rule shapes the standard scope supports.
 type ScoringKind int
@@ -207,4 +211,23 @@ func scoreThreshold(infl map[string]int, rule ScoringRule) map[string]int {
 		}
 	}
 	return result
+}
+
+// ScoreAll iterates every region in m and sums per-player points across
+// all regions. Equivalent to calling ScoreRegion in a loop and summing.
+// Returns playerID → total points across the whole map for this rule.
+func (m *Map) ScoreAll(
+	s *tabletop.State,
+	owner OwnerFn,
+	rule ScoringRule,
+) map[string]int {
+	totals := map[string]int{}
+	infl := m.Influence(s, owner)
+	for _, r := range m.Regions {
+		per := ScoreRegion(infl[r.ID], rule)
+		for pid, pts := range per {
+			totals[pid] += pts
+		}
+	}
+	return totals
 }
