@@ -104,3 +104,56 @@ func TestTopNFewerPlayersThanPlaces(t *testing.T) {
 		t.Errorf("alice: got %d, want 4", got["alice"])
 	}
 }
+
+func TestThresholdQualifies(t *testing.T) {
+	infl := map[string]int{"alice": 5, "bob": 3, "carol": 7}
+	rule := ScoringRule{Kind: Threshold, Threshold: 5, Payout: 10}
+	got := ScoreRegion(infl, rule)
+	if got["alice"] != 10 {
+		t.Errorf("alice: got %d, want 10 (5 >= 5)", got["alice"])
+	}
+	if got["bob"] != 0 {
+		t.Errorf("bob: got %d, want 0 (3 < 5)", got["bob"])
+	}
+	if got["carol"] != 10 {
+		t.Errorf("carol: got %d, want 10 (7 >= 5)", got["carol"])
+	}
+}
+
+func TestThresholdNobodyQualifies(t *testing.T) {
+	infl := map[string]int{"alice": 1, "bob": 2}
+	rule := ScoringRule{Kind: Threshold, Threshold: 5, Payout: 10}
+	got := ScoreRegion(infl, rule)
+	if got["alice"] != 0 || got["bob"] != 0 {
+		t.Errorf("nobody should qualify, got %v", got)
+	}
+}
+
+func TestCustomTieBreak(t *testing.T) {
+	// Custom rule that always awards the alphabetically first player
+	// all of the first place's points and zero to the rest.
+	rule := ScoringRule{
+		Kind:     TopN,
+		PerPlace: []int{10},
+		TieBreak: Custom,
+		CustomTie: func(infl map[string]int, _ ScoringRule) map[string]int {
+			out := map[string]int{}
+			var first string
+			for pid := range infl {
+				if first == "" || pid < first {
+					first = pid
+				}
+				out[pid] = 0
+			}
+			if first != "" {
+				out[first] = 10
+			}
+			return out
+		},
+	}
+	infl := map[string]int{"bob": 5, "alice": 5}
+	got := ScoreRegion(infl, rule)
+	if got["alice"] != 10 || got["bob"] != 0 {
+		t.Errorf("Custom tie-break: got %v, want alice:10 bob:0", got)
+	}
+}

@@ -197,6 +197,14 @@ func scoreTopN(infl map[string]int, rule ScoringRule) map[string]int {
 	return result
 }
 
-func scoreThreshold(_ map[string]int, _ ScoringRule) map[string]int {
-	return map[string]int{}
+func scoreThreshold(infl map[string]int, rule ScoringRule) map[string]int {
+	result := map[string]int{}
+	for pid, v := range infl {
+		if v >= rule.Threshold {
+			result[pid] = rule.Payout
+		} else {
+			result[pid] = 0
+		}
+	}
+	return result
 }
