@@ -70,3 +70,35 @@ func NewMap(regions []Region) (*Map, error) {
 	}
 	return &Map{Regions: out, cellToRegion: cells}, nil
 }
+
+// Of returns the region containing pos. The boolean is false when
+// pos belongs to no region.
+func (m *Map) Of(pos tabletop.Pos) (RegionID, bool) {
+	if m.cellToRegion == nil {
+		m.buildIndex()
+	}
+	id, ok := m.cellToRegion[pos]
+	return id, ok
+}
+
+// Cells returns the cells of the named region, or nil if no such
+// region exists. The returned slice is a defensive copy.
+func (m *Map) Cells(id RegionID) []tabletop.Pos {
+	for _, r := range m.Regions {
+		if r.ID == id {
+			return append([]tabletop.Pos(nil), r.Cells...)
+		}
+	}
+	return nil
+}
+
+// buildIndex populates cellToRegion. Called lazily by Of after a
+// JSON unmarshal nils the map.
+func (m *Map) buildIndex() {
+	m.cellToRegion = make(map[tabletop.Pos]RegionID)
+	for _, r := range m.Regions {
+		for _, p := range r.Cells {
+			m.cellToRegion[p] = r.ID
+		}
+	}
+}
