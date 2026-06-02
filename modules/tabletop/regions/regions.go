@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/tjcran/boardgame-go/modules/ccg"
 	"github.com/tjcran/boardgame-go/modules/tabletop"
 )
 
@@ -128,4 +129,19 @@ func (m *Map) Influence(s *tabletop.State, owner OwnerFn) map[RegionID]map[strin
 		out[r.ID] = inner
 	}
 	return out
+}
+
+// ByCCGOwner is an OwnerFn that reads each unit's owner attribute from
+// a ccg.State. The unitID is reinterpreted as a ccg.EntityID — they
+// share uint64 representation, and the canonical ccg+tabletop pairing
+// places a ccg entity onto the board as a tabletop unit. Unknown
+// entities and entities with empty owner attribute return "".
+func ByCCGOwner(cs *ccg.State) OwnerFn {
+	return func(u tabletop.UnitID) string {
+		e, ok := cs.Entities[ccg.EntityID(u)]
+		if !ok {
+			return ""
+		}
+		return e.AttrStr("owner", "")
+	}
 }

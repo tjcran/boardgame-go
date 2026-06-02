@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/tjcran/boardgame-go/modules/ccg"
 	"github.com/tjcran/boardgame-go/modules/tabletop"
 )
 
@@ -145,5 +146,27 @@ func TestInfluenceUnitOutsideAllRegions(t *testing.T) {
 	infl := m.Influence(s, owner)
 	if got := infl["n"]["alice"]; got != 0 {
 		t.Errorf("n/alice = %d, want 0 (unit is in no region)", got)
+	}
+}
+
+func TestByCCGOwner(t *testing.T) {
+	cs := ccg.NewState()
+	idA := cs.NewEntity("pawn", "", map[string]any{"owner": "alice"})
+	idB := cs.NewEntity("pawn", "", map[string]any{"owner": "bob"})
+	idEmpty := cs.NewEntity("pawn", "", nil)
+
+	owner := ByCCGOwner(cs)
+
+	if got := owner(tabletop.UnitID(idA)); got != "alice" {
+		t.Errorf("owner of A = %q, want alice", got)
+	}
+	if got := owner(tabletop.UnitID(idB)); got != "bob" {
+		t.Errorf("owner of B = %q, want bob", got)
+	}
+	if got := owner(tabletop.UnitID(idEmpty)); got != "" {
+		t.Errorf("owner of empty-attrs entity = %q, want \"\"", got)
+	}
+	if got := owner(tabletop.UnitID(99999)); got != "" {
+		t.Errorf("owner of unknown unit = %q, want \"\"", got)
 	}
 }
