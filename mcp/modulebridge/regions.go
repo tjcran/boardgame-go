@@ -106,6 +106,10 @@ func buildRegionsRegistry() *Registry {
 			return out, nil
 		}})
 
+	// influence and score_all hardwire the canonical ccg+tabletop pairing
+	// rather than accepting a generic OwnerFn — there's no way to express a
+	// Go closure over the MCP wire. Callers needing a non-ccg owner source
+	// should compute scoring in-process via the regions package directly.
 	r.Add(Op{Module: "regions", Name: "influence", MCPTool: "regions_influence", ReadOnly: true,
 		Call: func(modules map[string]any, args map[string]any, _ *core.Random) (any, error) {
 			rs, err := regionsFrom(modules)
