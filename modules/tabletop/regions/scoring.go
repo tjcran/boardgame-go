@@ -151,8 +151,50 @@ func scorePlurality(infl map[string]int, rule ScoringRule) map[string]int {
 	return result
 }
 
-func scoreTopN(_ map[string]int, _ ScoringRule) map[string]int {
-	return map[string]int{}
+func scoreTopN(infl map[string]int, rule ScoringRule) map[string]int {
+	result := map[string]int{}
+	for pid := range infl {
+		result[pid] = 0
+	}
+	if len(rule.PerPlace) == 0 {
+		return result
+	}
+	groups := rankedGroups(infl)
+	place := 0 // index into PerPlace
+	for _, group := range groups {
+		if place >= len(rule.PerPlace) {
+			break
+		}
+		if len(group) == 1 {
+			result[group[0]] = rule.PerPlace[place]
+			place++
+			continue
+		}
+		// Tie spanning places [place, place + len(group)).
+		switch rule.TieBreak {
+		case Split:
+			pot := 0
+			n := len(group)
+			for i := 0; i < n && place+i < len(rule.PerPlace); i++ {
+				pot += rule.PerPlace[place+i]
+			}
+			share := pot / n
+			for _, pid := range group {
+				result[pid] = share
+			}
+			place += n
+		case NoAward:
+			// All tied players get 0; subsequent places skipped.
+			place += len(group)
+		case BothAward:
+			pts := rule.PerPlace[place]
+			for _, pid := range group {
+				result[pid] = pts
+			}
+			place++ // BothAward consumes only one slot; next group takes the next
+		}
+	}
+	return result
 }
 
 func scoreThreshold(_ map[string]int, _ ScoringRule) map[string]int {
