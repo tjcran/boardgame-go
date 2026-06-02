@@ -11,8 +11,8 @@ import (
 
 func TestNewMapValid(t *testing.T) {
 	m, err := NewMap([]Region{
-		{ID: "north", Cells: []tabletop.Pos{{0, 0}, {1, 0}}},
-		{ID: "south", Cells: []tabletop.Pos{{0, 1}, {1, 1}}},
+		{ID: "north", Cells: []tabletop.Pos{{X: 0, Y: 0}, {X: 1, Y: 0}}},
+		{ID: "south", Cells: []tabletop.Pos{{X: 0, Y: 1}, {X: 1, Y: 1}}},
 	})
 	if err != nil {
 		t.Fatalf("NewMap: %v", err)
@@ -24,7 +24,7 @@ func TestNewMapValid(t *testing.T) {
 
 func TestNewMapEmptyID(t *testing.T) {
 	_, err := NewMap([]Region{
-		{ID: "", Cells: []tabletop.Pos{{0, 0}}},
+		{ID: "", Cells: []tabletop.Pos{{X: 0, Y: 0}}},
 	})
 	if !errors.Is(err, ErrEmptyID) {
 		t.Fatalf("err = %v, want ErrEmptyID", err)
@@ -33,8 +33,8 @@ func TestNewMapEmptyID(t *testing.T) {
 
 func TestNewMapDuplicateID(t *testing.T) {
 	_, err := NewMap([]Region{
-		{ID: "north", Cells: []tabletop.Pos{{0, 0}}},
-		{ID: "north", Cells: []tabletop.Pos{{1, 0}}},
+		{ID: "north", Cells: []tabletop.Pos{{X: 0, Y: 0}}},
+		{ID: "north", Cells: []tabletop.Pos{{X: 1, Y: 0}}},
 	})
 	if !errors.Is(err, ErrDuplicateID) {
 		t.Fatalf("err = %v, want ErrDuplicateID", err)
@@ -43,8 +43,8 @@ func TestNewMapDuplicateID(t *testing.T) {
 
 func TestNewMapOverlap(t *testing.T) {
 	_, err := NewMap([]Region{
-		{ID: "north", Cells: []tabletop.Pos{{0, 0}, {1, 0}}},
-		{ID: "south", Cells: []tabletop.Pos{{1, 0}, {2, 0}}},
+		{ID: "north", Cells: []tabletop.Pos{{X: 0, Y: 0}, {X: 1, Y: 0}}},
+		{ID: "south", Cells: []tabletop.Pos{{X: 1, Y: 0}, {X: 2, Y: 0}}},
 	})
 	if !errors.Is(err, ErrOverlap) {
 		t.Fatalf("err = %v, want ErrOverlap", err)
@@ -53,10 +53,10 @@ func TestNewMapOverlap(t *testing.T) {
 
 func TestMapOfHit(t *testing.T) {
 	m, _ := NewMap([]Region{
-		{ID: "north", Cells: []tabletop.Pos{{0, 0}, {1, 0}}},
-		{ID: "south", Cells: []tabletop.Pos{{0, 1}, {1, 1}}},
+		{ID: "north", Cells: []tabletop.Pos{{X: 0, Y: 0}, {X: 1, Y: 0}}},
+		{ID: "south", Cells: []tabletop.Pos{{X: 0, Y: 1}, {X: 1, Y: 1}}},
 	})
-	got, ok := m.Of(tabletop.Pos{0, 0})
+	got, ok := m.Of(tabletop.Pos{X: 0, Y: 0})
 	if !ok || got != "north" {
 		t.Fatalf("Of({0,0}) = (%q, %v), want (\"north\", true)", got, ok)
 	}
@@ -64,9 +64,9 @@ func TestMapOfHit(t *testing.T) {
 
 func TestMapOfMiss(t *testing.T) {
 	m, _ := NewMap([]Region{
-		{ID: "north", Cells: []tabletop.Pos{{0, 0}}},
+		{ID: "north", Cells: []tabletop.Pos{{X: 0, Y: 0}}},
 	})
-	_, ok := m.Of(tabletop.Pos{9, 9})
+	_, ok := m.Of(tabletop.Pos{X: 9, Y: 9})
 	if ok {
 		t.Fatalf("Of({9,9}) ok = true, want false (no region)")
 	}
@@ -74,22 +74,22 @@ func TestMapOfMiss(t *testing.T) {
 
 func TestMapCellsHit(t *testing.T) {
 	m, _ := NewMap([]Region{
-		{ID: "north", Cells: []tabletop.Pos{{0, 0}, {1, 0}}},
+		{ID: "north", Cells: []tabletop.Pos{{X: 0, Y: 0}, {X: 1, Y: 0}}},
 	})
 	cells := m.Cells("north")
 	if len(cells) != 2 {
 		t.Fatalf("Cells len = %d, want 2", len(cells))
 	}
 	// Defensive copy: mutating the returned slice must not affect the Map.
-	cells[0] = tabletop.Pos{99, 99}
+	cells[0] = tabletop.Pos{X: 99, Y: 99}
 	again := m.Cells("north")
-	if again[0] != (tabletop.Pos{0, 0}) {
+	if again[0] != (tabletop.Pos{X: 0, Y: 0}) {
 		t.Fatalf("returned slice was not defensively copied")
 	}
 }
 
 func TestMapCellsMiss(t *testing.T) {
-	m, _ := NewMap([]Region{{ID: "north", Cells: []tabletop.Pos{{0, 0}}}})
+	m, _ := NewMap([]Region{{ID: "north", Cells: []tabletop.Pos{{X: 0, Y: 0}}}})
 	if got := m.Cells("nowhere"); got != nil {
 		t.Fatalf("Cells(\"nowhere\") = %v, want nil", got)
 	}
@@ -97,9 +97,9 @@ func TestMapCellsMiss(t *testing.T) {
 
 func TestInfluenceBasic(t *testing.T) {
 	s := tabletop.NewState()
-	s.Place(1, tabletop.Pos{0, 0}) // unit 1 in north
-	s.Place(2, tabletop.Pos{1, 0}) // unit 2 in north
-	s.Place(3, tabletop.Pos{0, 1}) // unit 3 in south
+	s.Place(1, tabletop.Pos{X: 0, Y: 0}) // unit 1 in north
+	s.Place(2, tabletop.Pos{X: 1, Y: 0}) // unit 2 in north
+	s.Place(3, tabletop.Pos{X: 0, Y: 1}) // unit 3 in south
 	owner := func(u tabletop.UnitID) string {
 		switch u {
 		case 1, 3:
@@ -110,8 +110,8 @@ func TestInfluenceBasic(t *testing.T) {
 		return ""
 	}
 	m, _ := NewMap([]Region{
-		{ID: "north", Cells: []tabletop.Pos{{0, 0}, {1, 0}}},
-		{ID: "south", Cells: []tabletop.Pos{{0, 1}, {1, 1}}},
+		{ID: "north", Cells: []tabletop.Pos{{X: 0, Y: 0}, {X: 1, Y: 0}}},
+		{ID: "south", Cells: []tabletop.Pos{{X: 0, Y: 1}, {X: 1, Y: 1}}},
 	})
 	infl := m.Influence(s, owner)
 	if got := infl["north"]["alice"]; got != 1 {
@@ -130,9 +130,9 @@ func TestInfluenceBasic(t *testing.T) {
 
 func TestInfluenceEmptyOwnerSkipped(t *testing.T) {
 	s := tabletop.NewState()
-	s.Place(1, tabletop.Pos{0, 0})
+	s.Place(1, tabletop.Pos{X: 0, Y: 0})
 	owner := func(_ tabletop.UnitID) string { return "" }
-	m, _ := NewMap([]Region{{ID: "n", Cells: []tabletop.Pos{{0, 0}}}})
+	m, _ := NewMap([]Region{{ID: "n", Cells: []tabletop.Pos{{X: 0, Y: 0}}}})
 	infl := m.Influence(s, owner)
 	if len(infl["n"]) != 0 {
 		t.Errorf("expected no entries for region n, got %v", infl["n"])
@@ -141,9 +141,9 @@ func TestInfluenceEmptyOwnerSkipped(t *testing.T) {
 
 func TestInfluenceUnitOutsideAllRegions(t *testing.T) {
 	s := tabletop.NewState()
-	s.Place(1, tabletop.Pos{9, 9})
+	s.Place(1, tabletop.Pos{X: 9, Y: 9})
 	owner := func(_ tabletop.UnitID) string { return "alice" }
-	m, _ := NewMap([]Region{{ID: "n", Cells: []tabletop.Pos{{0, 0}}}})
+	m, _ := NewMap([]Region{{ID: "n", Cells: []tabletop.Pos{{X: 0, Y: 0}}}})
 	infl := m.Influence(s, owner)
 	if got := infl["n"]["alice"]; got != 0 {
 		t.Errorf("n/alice = %d, want 0 (unit is in no region)", got)
@@ -174,8 +174,8 @@ func TestByCCGOwner(t *testing.T) {
 
 func TestMapJSONRoundTrip(t *testing.T) {
 	original, err := NewMap([]Region{
-		{ID: "north", Cells: []tabletop.Pos{{0, 0}, {1, 0}}, Label: "Northern Province"},
-		{ID: "south", Cells: []tabletop.Pos{{0, 1}, {1, 1}}},
+		{ID: "north", Cells: []tabletop.Pos{{X: 0, Y: 0}, {X: 1, Y: 0}}, Label: "Northern Province"},
+		{ID: "south", Cells: []tabletop.Pos{{X: 0, Y: 1}, {X: 1, Y: 1}}},
 	})
 	if err != nil {
 		t.Fatalf("NewMap: %v", err)
@@ -204,7 +204,7 @@ func TestMapJSONRoundTrip(t *testing.T) {
 	if restored.Regions[0].ID != "north" || restored.Regions[0].Label != "Northern Province" {
 		t.Errorf("region 0 = %+v, want north/Northern Province", restored.Regions[0])
 	}
-	if got, ok := restored.Of(tabletop.Pos{1, 1}); !ok || got != "south" {
+	if got, ok := restored.Of(tabletop.Pos{X: 1, Y: 1}); !ok || got != "south" {
 		t.Errorf("restored Of({1,1}) = (%q, %v), want (south, true)", got, ok)
 	}
 }

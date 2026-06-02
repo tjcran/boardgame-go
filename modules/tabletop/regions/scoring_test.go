@@ -164,8 +164,8 @@ func TestCustomTieBreak(t *testing.T) {
 
 func TestScoreAllSumsAcrossRegions(t *testing.T) {
 	s := tabletop.NewState()
-	s.Place(1, tabletop.Pos{0, 0}) // north
-	s.Place(2, tabletop.Pos{0, 1}) // south
+	s.Place(1, tabletop.Pos{X: 0, Y: 0}) // north
+	s.Place(2, tabletop.Pos{X: 0, Y: 1}) // south
 	owner := func(u tabletop.UnitID) string {
 		switch u {
 		case 1, 2:
@@ -174,8 +174,8 @@ func TestScoreAllSumsAcrossRegions(t *testing.T) {
 		return ""
 	}
 	m, _ := NewMap([]Region{
-		{ID: "north", Cells: []tabletop.Pos{{0, 0}}},
-		{ID: "south", Cells: []tabletop.Pos{{0, 1}}},
+		{ID: "north", Cells: []tabletop.Pos{{X: 0, Y: 0}}},
+		{ID: "south", Cells: []tabletop.Pos{{X: 0, Y: 1}}},
 	})
 	pts := m.ScoreAll(s, owner, ScoringRule{
 		Kind: Plurality, PerPlace: []int{3}, TieBreak: Split,
