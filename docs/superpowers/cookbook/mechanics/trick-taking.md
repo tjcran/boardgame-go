@@ -167,6 +167,84 @@ func rotationFrom(leader string, order []string) *core.ActivePlayersConfig {
   (no follow constraint), use the [sealed-reveal](sealed-reveal.md)
   pattern instead.
 
+## Rotation: `TurnOrder.Next` is often cleaner than `ActivePlayers`
+
+The sketch above sets up the next trick with
+`mc.Events.SetActivePlayers(...)` — a chain that activates the winner,
+then each remaining seat in order. That works, but a custom
+`TurnOrder.Next` consulting `G` is usually a better fit for
+trick-taking, because the rotation pivots on game state ("whoever won
+the last trick") rather than a scripted sequence:
+
+```go
+var trickOrder = core.TurnOrder{
+    First: func(mc *core.MoveContext) int {
+        return mc.G.(*State).LeaderSeat
+    },
+    Next: func(mc *core.MoveContext) *int {
+        g := mc.G.(*State)
+        var next int
+        if len(g.Plays) == 0 {
+            // Trick just resolved; LeaderSeat now points at the
+            // winner of the last trick.
+            next = g.LeaderSeat
+        } else {
+            last := g.Plays[len(g.Plays)-1].PlayerID
+            next = (seatOf(last, mc.Ctx.PlayOrder) + 1) % len(mc.Ctx.PlayOrder)
+        }
+        return &next
+    },
+}
+```
+
+This is the approach the `games/hearts` reference uses. It removes the
+need to rebuild an `ActivePlayersInOrder` chain at every trick boundary
+and reads directly off the game state.
+
+## Setup-time deals need a deterministic shuffle
+
+`Game.Setup` runs before `mc.Random` is available — the Random plugin is
+populated when the engine first dispatches a move. For a deterministic
+deal at match start, take a seed in `SetupData` and use
+`core.NewRandomFromState(&seed)`:
+
+```go
+func setup(_ core.Ctx, raw any) core.G {
+    seed := uint64(0)
+    if sd, ok := raw.(SetupData); ok { seed = sd.Seed }
+    state := seed
+    r := core.NewRandomFromState(&state)
+    deck = core.Shuffle(r, deck)
+    // ...deal...
+}
+```
+
+After the first move, `mc.Random` is available and any subsequent
+shuffles should go through it.
+
+## Defining `Enumerate` enables a full-hand smoke test
+
+A `Game.Enumerate` that lists every legal card (filtered by the
+follow-suit and hearts-not-broken constraints) is one of the highest-
+leverage things you can write — it lets a single test loop play a
+complete hand:
+
+```go
+for i := 0; i < 52; i++ {
+    legal := g.Enumerate(s.G, s.Ctx, s.Ctx.CurrentPlayer)
+    if len(legal) == 0 { t.Fatalf("no legal moves") }
+    s, _ = core.Apply(g, s, core.MoveRequest{
+        PlayerID: s.Ctx.CurrentPlayer,
+        Move:     legal[0].Move,
+        Args:     legal[0].Args,
+    })
+}
+```
+
+If the enumerator ever returns zero moves mid-hand, your trick / hand
+state has gone inconsistent — that single assertion catches an enormous
+class of bugs.
+
 ## When to promote to a module
 
 If a second trick game lands in the repo, this is the candidate to
@@ -177,9 +255,13 @@ extract: a `modules/trick` package with `Trick{LeadSuit, Trump, Plays}`,
 
 ## See also
 
+- `games/hearts/` — reference implementation of this pattern: 4-player
+  Hearts, 13-trick hand, opening-lead constraint, hearts-broken rule,
+  Q♠/heart scoring. Validates everything on this page.
 - `modules/ccg/zone.go` — Zone API (`Contains`, `MoveTo`, `Draw`,
   `Shuffle`).
 - `modules/ccg/entity.go` — `Entity.Attrs` for suit/rank.
 - `core/turn.go` — `TurnOrder.First` / `Next` if you need stronger control
   over who plays when.
-- `core/stage.go` — `ActivePlayersInOrder` for the next-leader rotation.
+- `core/stage.go` — `ActivePlayersInOrder` for the next-leader rotation
+  alternative.
