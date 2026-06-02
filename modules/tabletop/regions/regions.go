@@ -102,3 +102,30 @@ func (m *Map) buildIndex() {
 		}
 	}
 }
+
+// Influence walks every region's cells, asks the tabletop.State who is
+// sitting in each cell, attributes each unit to its owner via owner,
+// and tallies. The result is per-region, per-player count. Players who
+// hold 0 influence in a region have no entry — callers should treat
+// absence as zero.
+//
+// The outer map always contains an entry for every region in the Map
+// (possibly empty), so callers can iterate Map.Regions or the result
+// interchangeably.
+func (m *Map) Influence(s *tabletop.State, owner OwnerFn) map[RegionID]map[string]int {
+	out := make(map[RegionID]map[string]int, len(m.Regions))
+	for _, r := range m.Regions {
+		inner := map[string]int{}
+		for _, p := range r.Cells {
+			for _, u := range s.EntitiesAt(p) {
+				pid := owner(u)
+				if pid == "" {
+					continue
+				}
+				inner[pid]++
+			}
+		}
+		out[r.ID] = inner
+	}
+	return out
+}

@@ -92,3 +92,58 @@ func TestMapCellsMiss(t *testing.T) {
 		t.Fatalf("Cells(\"nowhere\") = %v, want nil", got)
 	}
 }
+
+func TestInfluenceBasic(t *testing.T) {
+	s := tabletop.NewState()
+	s.Place(1, tabletop.Pos{0, 0}) // unit 1 in north
+	s.Place(2, tabletop.Pos{1, 0}) // unit 2 in north
+	s.Place(3, tabletop.Pos{0, 1}) // unit 3 in south
+	owner := func(u tabletop.UnitID) string {
+		switch u {
+		case 1, 3:
+			return "alice"
+		case 2:
+			return "bob"
+		}
+		return ""
+	}
+	m, _ := NewMap([]Region{
+		{ID: "north", Cells: []tabletop.Pos{{0, 0}, {1, 0}}},
+		{ID: "south", Cells: []tabletop.Pos{{0, 1}, {1, 1}}},
+	})
+	infl := m.Influence(s, owner)
+	if got := infl["north"]["alice"]; got != 1 {
+		t.Errorf("north/alice = %d, want 1", got)
+	}
+	if got := infl["north"]["bob"]; got != 1 {
+		t.Errorf("north/bob = %d, want 1", got)
+	}
+	if got := infl["south"]["alice"]; got != 1 {
+		t.Errorf("south/alice = %d, want 1", got)
+	}
+	if _, present := infl["south"]["bob"]; present {
+		t.Errorf("south/bob present in map (value=%d), want absent", infl["south"]["bob"])
+	}
+}
+
+func TestInfluenceEmptyOwnerSkipped(t *testing.T) {
+	s := tabletop.NewState()
+	s.Place(1, tabletop.Pos{0, 0})
+	owner := func(_ tabletop.UnitID) string { return "" }
+	m, _ := NewMap([]Region{{ID: "n", Cells: []tabletop.Pos{{0, 0}}}})
+	infl := m.Influence(s, owner)
+	if len(infl["n"]) != 0 {
+		t.Errorf("expected no entries for region n, got %v", infl["n"])
+	}
+}
+
+func TestInfluenceUnitOutsideAllRegions(t *testing.T) {
+	s := tabletop.NewState()
+	s.Place(1, tabletop.Pos{9, 9})
+	owner := func(_ tabletop.UnitID) string { return "alice" }
+	m, _ := NewMap([]Region{{ID: "n", Cells: []tabletop.Pos{{0, 0}}}})
+	infl := m.Influence(s, owner)
+	if got := infl["n"]["alice"]; got != 0 {
+		t.Errorf("n/alice = %d, want 0 (unit is in no region)", got)
+	}
+}
