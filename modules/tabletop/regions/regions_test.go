@@ -1,6 +1,7 @@
 package regions
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -168,5 +169,42 @@ func TestByCCGOwner(t *testing.T) {
 	}
 	if got := owner(tabletop.UnitID(99999)); got != "" {
 		t.Errorf("owner of unknown unit = %q, want \"\"", got)
+	}
+}
+
+func TestMapJSONRoundTrip(t *testing.T) {
+	original, err := NewMap([]Region{
+		{ID: "north", Cells: []tabletop.Pos{{0, 0}, {1, 0}}, Label: "Northern Province"},
+		{ID: "south", Cells: []tabletop.Pos{{0, 1}, {1, 1}}},
+	})
+	if err != nil {
+		t.Fatalf("NewMap: %v", err)
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var raw struct {
+		Regions []Region `json:"regions"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	restored, err := NewMap(raw.Regions)
+	if err != nil {
+		t.Fatalf("NewMap(restored): %v", err)
+	}
+
+	// Round-trip preserves region order and content.
+	if len(restored.Regions) != 2 {
+		t.Fatalf("restored regions = %d, want 2", len(restored.Regions))
+	}
+	if restored.Regions[0].ID != "north" || restored.Regions[0].Label != "Northern Province" {
+		t.Errorf("region 0 = %+v, want north/Northern Province", restored.Regions[0])
+	}
+	if got, ok := restored.Of(tabletop.Pos{1, 1}); !ok || got != "south" {
+		t.Errorf("restored Of({1,1}) = (%q, %v), want (south, true)", got, ok)
 	}
 }
