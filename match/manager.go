@@ -679,6 +679,19 @@ func (m *Manager) loadMigrated(matchID string) (*storage.Match, error) {
 		return nil, err
 	}
 	g := m.Game(match.GameName)
+	// Reconstruct the concrete Go type of State.G before any caller
+	// type-asserts it. The in-memory store leaves rawG nil (no JSON
+	// round-trip happened), so this is a no-op for that path and we
+	// keep pointer identity exactly as before (issue #80).
+	if g != nil && g.DecodeG != nil {
+		if raw := match.State.RawG(); len(raw) > 0 {
+			decoded, err := g.DecodeG(raw)
+			if err != nil {
+				return nil, fmt.Errorf("decode G for match %s: %w", matchID, err)
+			}
+			match.State.G = decoded
+		}
+	}
 	if g == nil || g.SchemaVersion <= match.SchemaVersion {
 		return match, nil
 	}
