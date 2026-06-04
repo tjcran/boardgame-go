@@ -1,10 +1,18 @@
 package core
 
+import "encoding/json"
+
 // State is the complete authoritative state of a match. The transport sends
 // (a redacted view of) this object to clients.
 type State struct {
 	// G is the user-defined game state.
 	G G `json:"G"`
+
+	// rawG is the raw JSON bytes that decoded into G on the last
+	// UnmarshalJSON. The match manager passes it to Game.DecodeG to
+	// reconstruct the concrete Go type (issue #80). Not persisted — the
+	// default Marshal path round-trips G itself.
+	rawG json.RawMessage `json:"-"`
 
 	// Ctx is the engine-managed metadata.
 	Ctx Ctx `json:"ctx"`
@@ -143,3 +151,31 @@ func PlayerView(game *Game, state State, playerID string) State {
 	view.StageMaxMoves = nil
 	return view
 }
+
+// UnmarshalJSON captures the raw bytes of the G field into a private buffer
+// so the match manager can later re-decode it through Game.DecodeG into the
+// concrete Go type. The rest of the State decodes through the default codec —
+// G itself is also decoded with the default behavior (yielding map[string]any
+// for the generic G), so games without a DecodeG hook see exactly the same
+// shape as before this change.
+func (s *State) UnmarshalJSON(b []byte) error {
+	type stateAlias State
+	var alias stateAlias
+	if err := json.Unmarshal(b, &alias); err != nil {
+		return err
+	}
+	var rawHolder struct {
+		G json.RawMessage `json:"G"`
+	}
+	if err := json.Unmarshal(b, &rawHolder); err != nil {
+		return err
+	}
+	*s = State(alias)
+	s.rawG = rawHolder.G
+	return nil
+}
+
+// RawG returns the raw JSON bytes captured for the G field during the most
+// recent UnmarshalJSON, or nil if the state was never unmarshaled (e.g. it
+// came from the in-memory store, which preserves the live Go value).
+func (s State) RawG() json.RawMessage { return s.rawG }

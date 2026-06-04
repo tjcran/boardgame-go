@@ -7,6 +7,8 @@
 // across the two frameworks with mechanical changes.
 package core
 
+import "encoding/json"
+
 // G is the user-defined game state. The engine never inspects it; it's an
 // opaque payload that the move functions own.
 type G = any
@@ -150,6 +152,19 @@ type Game struct {
 	// produce the v4 form. Required when SchemaVersion > 0 and matches
 	// from older versions exist.
 	Migrate func(state State, fromVersion int) (State, error)
+
+	// DecodeG, when non-nil, is called by the match manager after a state
+	// is loaded from a serializing store (Postgres, SQLite, FlatFile, …)
+	// and before Migrate runs, to reconstruct the concrete Go type of G
+	// from the raw JSON bytes captured at load time. Without it, JSON
+	// unmarshal leaves G as map[string]any and code-backed games that
+	// type-assert G panic on the first move/PlayerView (issue #80).
+	//
+	// Leave nil for games whose callbacks already operate on the generic
+	// map shape (most module-backed games handle re-typing via their own
+	// adapters and don't need this hook). Stores that never serialize
+	// (the in-memory store) pass an empty RawG and the hook is a no-op.
+	DecodeG func(raw json.RawMessage) (G, error)
 
 	// Plugins are applied in order. See core/plugin.go.
 	Plugins []Plugin

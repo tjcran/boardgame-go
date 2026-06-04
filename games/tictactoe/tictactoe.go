@@ -4,6 +4,7 @@
 package tictactoe
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/tjcran/boardgame-go/core"
@@ -22,6 +23,13 @@ func New() *core.Game {
 		MinPlayers: 2,
 		MaxPlayers: 2,
 		Setup:      func(_ core.Ctx, _ any) core.G { return &State{} },
+		DecodeG: func(raw json.RawMessage) (core.G, error) {
+			var s State
+			if err := json.Unmarshal(raw, &s); err != nil {
+				return nil, err
+			}
+			return &s, nil
+		},
 		Moves: map[string]any{
 			"clickCell": core.MoveFn(clickCell),
 		},
