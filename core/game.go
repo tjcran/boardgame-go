@@ -179,18 +179,28 @@ type Game struct {
 
 // PlayerCount returns the configured player count for a fresh match,
 // defaulting to 2 when neither MinPlayers nor MaxPlayers gives a usable
-// upper bound. requested, when non-zero, overrides the default.
+// upper bound. requested, when non-zero, overrides the default but is
+// clamped into [MinPlayers, MaxPlayers] so callers can't end up with a
+// match state inconsistent with the game's declared bounds.
 func (g *Game) PlayerCount(requested int) int {
-	if requested > 0 {
-		return requested
+	n := requested
+	if n <= 0 {
+		switch {
+		case g.MaxPlayers > 0:
+			n = g.MaxPlayers
+		case g.MinPlayers > 0:
+			n = g.MinPlayers
+		default:
+			n = 2
+		}
 	}
-	if g.MaxPlayers > 0 {
-		return g.MaxPlayers
+	if g.MinPlayers > 0 && n < g.MinPlayers {
+		n = g.MinPlayers
 	}
-	if g.MinPlayers > 0 {
-		return g.MinPlayers
+	if g.MaxPlayers > 0 && n > g.MaxPlayers {
+		n = g.MaxPlayers
 	}
-	return 2
+	return n
 }
 
 // startPhase returns the phase marked Start: true, or "" if no phase is

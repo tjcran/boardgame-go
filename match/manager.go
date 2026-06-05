@@ -30,6 +30,8 @@ var (
 	ErrSeatRequired   = errors.New("game not yet ready (seats unfilled)")
 	ErrBadCredentials = errors.New("invalid credentials")
 	ErrServerOnly     = errors.New("move is marked Move.ServerOnly — credentialed clients cannot dispatch it; use Manager.DispatchServer")
+
+	ErrInvalidPlayerCount = errors.New("requested player count outside game's [MinPlayers, MaxPlayers]")
 )
 
 // GenerateCredentialsFn produces an opaque token for a freshly joined
@@ -556,6 +558,13 @@ func (m *Manager) createLockedFull(gameName string, opts CreateOptions) (string,
 	g := m.Game(gameName)
 	if g == nil {
 		return "", fmt.Errorf("%w: %s", ErrUnknownGame, gameName)
+	}
+	if opts.NumPlayers > 0 {
+		if (g.MinPlayers > 0 && opts.NumPlayers < g.MinPlayers) ||
+			(g.MaxPlayers > 0 && opts.NumPlayers > g.MaxPlayers) {
+			return "", fmt.Errorf("%w: requested %d, game allows [%d, %d]",
+				ErrInvalidPlayerCount, opts.NumPlayers, g.MinPlayers, g.MaxPlayers)
+		}
 	}
 	if g.ValidateSetupData != nil {
 		if msg := g.ValidateSetupData(opts.SetupData, g.PlayerCount(opts.NumPlayers)); msg != "" {

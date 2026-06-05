@@ -66,6 +66,29 @@ func TestCreateRejectsUnknownGame(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsOutOfRangePlayerCount(t *testing.T) {
+	m := NewManager(storage.NewMemory())
+	m.Register(&core.Game{
+		Name:       "rangetest",
+		MinPlayers: 4,
+		MaxPlayers: 4,
+		Setup:      func(_ core.Ctx, _ any) core.G { return struct{}{} },
+	})
+
+	if _, err := m.Create("rangetest", CreateOptions{NumPlayers: 2}); !errors.Is(err, ErrInvalidPlayerCount) {
+		t.Fatalf("NumPlayers=2: expected ErrInvalidPlayerCount, got %v", err)
+	}
+	if _, err := m.Create("rangetest", CreateOptions{NumPlayers: 5}); !errors.Is(err, ErrInvalidPlayerCount) {
+		t.Fatalf("NumPlayers=5: expected ErrInvalidPlayerCount, got %v", err)
+	}
+	if _, err := m.Create("rangetest", CreateOptions{NumPlayers: 4}); err != nil {
+		t.Fatalf("NumPlayers=4 (in range): expected success, got %v", err)
+	}
+	if _, err := m.Create("rangetest", CreateOptions{NumPlayers: 0}); err != nil {
+		t.Fatalf("NumPlayers=0 (default): expected success, got %v", err)
+	}
+}
+
 func TestJoinAssignsSequentialSeats(t *testing.T) {
 	m, id := newTestManager(t)
 	a, err := m.Join(id, "alice", JoinOptions{})
