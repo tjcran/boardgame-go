@@ -86,6 +86,7 @@ func (s *State) RedactForViewer(viewer string) *State {
 				DefID:      e.DefID,
 				Type:       e.Type,
 				Owner:      e.Owner,
+				Controller: e.Controller,
 				Zone:       e.Zone,
 				Visibility: e.Visibility,
 				Attrs:      cloneAttrs(e.Attrs),

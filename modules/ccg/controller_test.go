@@ -89,3 +89,18 @@ func TestModifierZeroValueWireShapeUnchanged(t *testing.T) {
 		t.Fatalf("wire shape changed:\n got %s\nwant %s", raw, want)
 	}
 }
+
+func TestRedactForViewerCarriesController(t *testing.T) {
+	s := NewState()
+	id := s.NewEntity("creature", "0", nil)
+	s.SetController(id, "1")
+
+	view := s.RedactForViewer("2")
+	e, ok := view.Get(id)
+	if !ok {
+		t.Fatal("entity missing from redacted view")
+	}
+	if e.EffectiveController() != "1" {
+		t.Fatalf("redacted view lost Controller: EffectiveController = %q, want %q", e.EffectiveController(), "1")
+	}
+}
