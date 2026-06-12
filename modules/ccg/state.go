@@ -136,6 +136,87 @@ func (s *State) SetAttr(id EntityID, key string, value any) {
 	s.Entities[id] = e
 }
 
+// SetController updates who controls the entity; empty restores
+// owner control. No-op when the entity is unknown. Convenience
+// mirror of SetAttr — Entity is value-typed so mutations must be
+// written back into the map.
+func (s *State) SetController(id EntityID, playerID string) {
+	e, ok := s.Entities[id]
+	if !ok {
+		return
+	}
+	e.Controller = playerID
+	s.Entities[id] = e
+}
+
+// Clone mints a new entity copying the source's template identity:
+// Type, DefID, Visibility, and a deep copy of its current base Attrs
+// with overrides applied on top. What it deliberately does NOT copy:
+// zone placement (the clone starts unplaced — Add it where you want
+// it), modifiers (effective values are not template identity),
+// counters (the reserved CountersAttrKey entry is stripped), and
+// Controller (empty, so the new owner controls it). Returns
+// ErrUnknownEntity when the source is missing.
+func (s *State) Clone(id EntityID, owner string, overrides map[string]any) (EntityID, error) {
+	src, ok := s.Entities[id]
+	if !ok {
+		return 0, ErrUnknownEntity
+	}
+	attrs := deepCloneAttrs(src.Attrs)
+	delete(attrs, CountersAttrKey)
+	for k, v := range overrides {
+		if attrs == nil {
+			attrs = map[string]any{}
+		}
+		attrs[k] = v
+	}
+	s.nextEntityID++
+	nid := EntityID(s.nextEntityID)
+	s.Entities[nid] = Entity{
+		ID:         nid,
+		DefID:      src.DefID,
+		Type:       src.Type,
+		Owner:      owner,
+		Visibility: src.Visibility,
+		Attrs:      attrs,
+	}
+	return nid, nil
+}
+
+// deepCloneAttrs copies an attribute map including nested maps and
+// slices, so a clone's attrs never alias the source's. Scalars are
+// copied by value; unrecognized reference types pass through as-is.
+func deepCloneAttrs(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = deepCloneValue(v)
+	}
+	return out
+}
+
+func deepCloneValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return deepCloneAttrs(t)
+	case map[string]int:
+		out := make(map[string]int, len(t))
+		for k, n := range t {
+			out[k] = n
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = deepCloneValue(e)
+		}
+		return out
+	}
+	return v
+}
+
 // cloneAttrs defensively copies the user-supplied attribute map so
 // later mutations to the caller's map don't leak into the entity.
 func cloneAttrs(in map[string]any) map[string]any {

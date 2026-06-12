@@ -41,6 +41,20 @@ type Modifier struct {
 	// insertion is the order in which the modifier was added.
 	// Persisted so reloads keep stable ordering.
 	Insertion int `json:"insertion"`
+
+	// ExpiresWith ties the modifier's lifetime to an entity — commonly
+	// Source, for aura/attachment shapes, but any entity works. When
+	// that entity no longer exists (or violates WhileIn) the modifier
+	// is dropped lazily on the next read, mirroring how bound
+	// abilities unbind at dispatch time. The zero value means no
+	// lifetime link: exactly today's behavior.
+	ExpiresWith EntityID `json:"expires_with,omitempty"`
+	// WhileIn narrows ExpiresWith further: the linked entity must
+	// currently sit in one of these zones or the modifier expires
+	// ("buff lasts while the aura is on the battlefield"). Ignored
+	// when ExpiresWith is unset. Empty means existence alone keeps
+	// the modifier alive.
+	WhileIn []ZoneName `json:"while_in,omitempty"`
 }
 
 // AddModifier registers a new modifier and returns its ID. The state
@@ -93,13 +107,23 @@ func (s *State) EffectiveAttr(id EntityID, attr string, def any) any {
 }
 
 // modifiersFor returns every modifier targeting (entity, attr) in the
-// right apply order. Internal.
+// right apply order. Expired modifiers (see Modifier.ExpiresWith) are
+// swept as a side effect, so reads never observe a stale aura.
+// Internal.
 func (s *State) modifiersFor(id EntityID, attr string) []Modifier {
 	var out []Modifier
-	for _, m := range s.Modifiers {
+	var dead []ModifierID
+	for mid, m := range s.Modifiers {
+		if !s.modifierAlive(m) {
+			dead = append(dead, mid)
+			continue
+		}
 		if m.Target == id && m.Attribute == attr {
 			out = append(out, m)
 		}
+	}
+	for _, mid := range dead {
+		delete(s.Modifiers, mid)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Layer != out[j].Layer {
@@ -108,6 +132,45 @@ func (s *State) modifiersFor(id EntityID, attr string) []Modifier {
 		return out[i].Insertion < out[j].Insertion
 	})
 	return out
+}
+
+// modifierAlive reports whether m's lifetime link (if any) still
+// holds. Modifiers without ExpiresWith are always alive.
+func (s *State) modifierAlive(m Modifier) bool {
+	if m.ExpiresWith == 0 {
+		return true
+	}
+	e, ok := s.Entities[m.ExpiresWith]
+	if !ok {
+		return false
+	}
+	if len(m.WhileIn) == 0 {
+		return true
+	}
+	for _, z := range m.WhileIn {
+		if e.Zone == z {
+			return true
+		}
+	}
+	return false
+}
+
+// SweepModifiers eagerly drops every expired modifier and returns the
+// removed IDs in ascending order. Reads via EffectiveAttr already
+// sweep lazily; call this when game code inspects s.Modifiers
+// directly, or to log expirations at a known point in the turn.
+func (s *State) SweepModifiers() []ModifierID {
+	var removed []ModifierID
+	for mid, m := range s.Modifiers {
+		if !s.modifierAlive(m) {
+			removed = append(removed, mid)
+		}
+	}
+	for _, mid := range removed {
+		delete(s.Modifiers, mid)
+	}
+	sort.Slice(removed, func(i, j int) bool { return removed[i] < removed[j] })
+	return removed
 }
 
 // applyOp folds one modifier into the running value. Numeric math

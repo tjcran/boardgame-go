@@ -30,13 +30,28 @@ type EntityID uint64
 // games and entities created before this field was added behave
 // identically to before.
 type Entity struct {
-	ID         EntityID       `json:"id"`
-	DefID      DefID          `json:"def_id,omitempty"`
-	Type       string         `json:"type,omitempty"`
-	Owner      string         `json:"owner,omitempty"`
+	ID    EntityID `json:"id"`
+	DefID DefID    `json:"def_id,omitempty"`
+	Type  string   `json:"type,omitempty"`
+	Owner string   `json:"owner,omitempty"`
+	// Controller is the player currently controlling the entity when
+	// that differs from Owner (mind control, borrowed equipment).
+	// Empty means the owner controls it — the zero value preserves
+	// pre-Controller behavior. Read through EffectiveController.
+	Controller string         `json:"controller,omitempty"`
 	Zone       ZoneName       `json:"zone,omitempty"`
 	Visibility Visibility     `json:"visibility,omitempty"`
 	Attrs      map[string]any `json:"attrs,omitempty"`
+}
+
+// EffectiveController resolves who controls the entity: Controller
+// when set, else Owner. Control-change timing ("until end of turn")
+// is game logic — set and clear the field from your own hooks.
+func (e Entity) EffectiveController() string {
+	if e.Controller != "" {
+		return e.Controller
+	}
+	return e.Owner
 }
 
 // AttrInt returns the int-cast attr value or def when missing /
