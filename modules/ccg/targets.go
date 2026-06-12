@@ -23,16 +23,25 @@ func (q *TargetQuery) InZone(name ZoneName) *TargetQuery {
 	return q
 }
 
-// Controlled restricts to entities owned by the given player.
+// Controlled restricts to entities the given player controls —
+// Entity.Controller when set, falling back to Owner (see
+// EffectiveController). For strict ownership use OwnedBy.
 func (q *TargetQuery) Controlled(playerID string) *TargetQuery {
-	q.predicates = append(q.predicates, func(e Entity) bool { return e.Owner == playerID })
+	q.predicates = append(q.predicates, func(e Entity) bool { return e.EffectiveController() == playerID })
 	return q
 }
 
-// NotControlled restricts to entities NOT owned by the given player.
-// Handy for "all opponent's creatures" filters.
+// NotControlled restricts to entities NOT controlled by the given
+// player. Handy for "all opponent's creatures" filters.
 func (q *TargetQuery) NotControlled(playerID string) *TargetQuery {
-	q.predicates = append(q.predicates, func(e Entity) bool { return e.Owner != playerID })
+	q.predicates = append(q.predicates, func(e Entity) bool { return e.EffectiveController() != playerID })
+	return q
+}
+
+// OwnedBy restricts to entities owned by the given player regardless
+// of who controls them ("return to its owner's hand" shapes).
+func (q *TargetQuery) OwnedBy(playerID string) *TargetQuery {
+	q.predicates = append(q.predicates, func(e Entity) bool { return e.Owner == playerID })
 	return q
 }
 
