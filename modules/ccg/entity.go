@@ -38,10 +38,20 @@ type Entity struct {
 	// that differs from Owner (mind control, borrowed equipment).
 	// Empty means the owner controls it — the zero value preserves
 	// pre-Controller behavior. Read through EffectiveController.
-	Controller string         `json:"controller,omitempty"`
-	Zone       ZoneName       `json:"zone,omitempty"`
-	Visibility Visibility     `json:"visibility,omitempty"`
-	Attrs      map[string]any `json:"attrs,omitempty"`
+	Controller string     `json:"controller,omitempty"`
+	Zone       ZoneName   `json:"zone,omitempty"`
+	Visibility Visibility `json:"visibility,omitempty"`
+	// RevealedTo lists extra viewers who see the full entity
+	// regardless of Visibility — peeks, reveal-to-opponent, coaching,
+	// teammates. Manage via RevealTo / ConcealFrom.
+	RevealedTo []string `json:"revealed_to,omitempty"`
+	// Mask is what non-viewers see instead of nothing: attrs copied
+	// verbatim into the redacted stub. A face-down morph that everyone
+	// knows is a 2/2 sets {"frame": "creature", "power_hint": 2}; an
+	// unmarked card back sets nothing. The game decides the content —
+	// the library never reads it.
+	Mask  map[string]any `json:"mask,omitempty"`
+	Attrs map[string]any `json:"attrs,omitempty"`
 }
 
 // EffectiveController resolves who controls the entity: Controller
