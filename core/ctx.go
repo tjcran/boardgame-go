@@ -32,6 +32,16 @@ type Ctx struct {
 	// enforce Turn.MinMoves / Turn.MaxMoves. Not visible in BGIO's docs but
 	// kept in their internal state under the same purpose.
 	NumMoves int `json:"_numMoves,omitempty"`
+
+	// Seed is the per-match secret entropy assigned at creation time
+	// (match.Manager generates it; NewMatchSeeded plumbs it). It
+	// persists with the state so reloads and seeded replays reproduce
+	// the same RNG streams, but PlayerView zeroes it — the seed must
+	// never reach a client, or hidden-information shuffles become
+	// predictable. Zero means a pre-seed match: consumers (e.g. the
+	// Starlark layer) fall back to their legacy derivations so
+	// existing matches replay byte-identically.
+	Seed uint64 `json:"seed,omitempty"`
 }
 
 // MarshalJSON normalises a few wire-format niceties:
@@ -54,6 +64,7 @@ func (c Ctx) MarshalJSON() ([]byte, error) {
 		ActivePlayers map[string]string `json:"activePlayers"`
 		Gameover      any               `json:"gameover,omitempty"`
 		NumMoves      int               `json:"_numMoves,omitempty"`
+		Seed          uint64            `json:"seed,omitempty"`
 	}
 	w := wire{
 		NumPlayers:    c.NumPlayers,
@@ -65,6 +76,7 @@ func (c Ctx) MarshalJSON() ([]byte, error) {
 		ActivePlayers: c.ActivePlayers,
 		Gameover:      c.Gameover,
 		NumMoves:      c.NumMoves,
+		Seed:          c.Seed,
 	}
 	if w.ActivePlayers == nil {
 		w.ActivePlayers = map[string]string{}

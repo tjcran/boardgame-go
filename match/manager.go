@@ -7,6 +7,7 @@ package match
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -94,6 +95,13 @@ type Manager struct {
 	// AuthenticateCredentials checks a supplied token against the stored
 	// one. Replace at construction for custom auth.
 	AuthenticateCredentials AuthenticateCredentialsFn
+
+	// SeedFn produces the per-match secret seed installed in Ctx.Seed
+	// at create/reset time. Nil (the default) draws from crypto/rand.
+	// Replace in tests that need reproducible matches. The seed stays
+	// server-side: core.PlayerView strips it before any state reaches
+	// a client.
+	SeedFn func() uint64
 
 	// Logger receives structured events (match created, joined, moved,
 	// chat sent, errors). Default is a no-op (slog.New on io.Discard) so
@@ -415,7 +423,7 @@ func (m *Manager) Reset(matchID, playerID, credentials string) error {
 	if g == nil {
 		return fmt.Errorf("%w: %s", ErrUnknownGame, match.GameName)
 	}
-	match.State = core.NewMatch(g, match.State.Ctx.NumPlayers, match.SetupData)
+	match.State = core.NewMatchSeeded(g, match.State.Ctx.NumPlayers, match.SetupData, m.seed())
 	// IsConnected flags are per-socket; on reset we reset them too so
 	// clients re-announce themselves on reconnect.
 	for i := range match.Players {
@@ -582,7 +590,7 @@ func (m *Manager) createLockedFull(gameName string, opts CreateOptions) (string,
 	match := &storage.Match{
 		ID:            id,
 		GameName:      gameName,
-		State:         core.NewMatch(g, opts.NumPlayers, opts.SetupData),
+		State:         core.NewMatchSeeded(g, opts.NumPlayers, opts.SetupData, m.seed()),
 		SetupData:     opts.SetupData,
 		Unlisted:      opts.Unlisted,
 		CreatedAt:     m.now().Unix(),
@@ -624,7 +632,7 @@ func (m *Manager) createLocked(gameName string, numPlayers int, setupData any, u
 	match := &storage.Match{
 		ID:            id,
 		GameName:      gameName,
-		State:         core.NewMatch(g, numPlayers, setupData),
+		State:         core.NewMatchSeeded(g, numPlayers, setupData, m.seed()),
 		SetupData:     setupData,
 		Unlisted:      unlisted,
 		CreatedAt:     m.now().Unix(),
@@ -1150,4 +1158,21 @@ func newID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// seed returns the next per-match secret seed: SeedFn when injected,
+// otherwise crypto/rand. Never returns 0 — zero is the "pre-seed
+// match" sentinel that switches consumers to legacy RNG derivations.
+func (m *Manager) seed() uint64 {
+	if m.SeedFn != nil {
+		return m.SeedFn()
+	}
+	for {
+		var b [8]byte
+		_, _ = rand.Read(b[:])
+		s := binary.BigEndian.Uint64(b[:])
+		if s != 0 {
+			return s
+		}
+	}
 }

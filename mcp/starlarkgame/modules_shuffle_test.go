@@ -54,7 +54,7 @@ func TestShuffle_MoveAndReplay(t *testing.T) {
 		t.Fatalf("deck size changed: %d", cs.Size("deck"))
 	}
 
-	replayed, err := core.Replay(g, m.State.Log, 1, nil)
+	replayed, err := core.ReplaySeeded(g, m.State.Log, 1, nil, m.State.Ctx.Seed)
 	if err != nil {
 		t.Fatalf("Replay: %v", err)
 	}

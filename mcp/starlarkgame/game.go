@@ -203,25 +203,34 @@ func buildMovesMap(s *Spec, src map[string]Move) map[string]any {
 }
 
 // ctxSeed returns a per-call seed derived from core.Ctx. Same Ctx fields →
-// same seed, which ensures deterministic replay within a turn.
+// same seed, which ensures deterministic replay.
 //
-// core.Ctx has no dedicated seed field (it would require a core/ change,
-// which is out of scope). Instead we mix Turn and NumPlayers with a small
-// FNV-inspired multiplier. The result is stable for any given (turn,
-// numPlayers) pair, which is the best determinism guarantee achievable
-// from observable Ctx fields without touching core/.
+// Two derivations, gated on Ctx.Seed:
 //
-// TODO: if core.Ctx ever gains a numeric seed field, replace this with:
-//
-//	return ctx.Seed
+//   - Seed != 0 (match created by a seed-aware match.Manager): mix the
+//     per-match secret with Turn and NumMoves. Clients can't predict
+//     the stream without the secret (PlayerView strips it), and every
+//     move within a turn gets its own stream.
+//   - Seed == 0 (matches persisted before per-match seeds existed):
+//     the original Turn+NumPlayers mix, byte-for-byte, so existing
+//     match logs replay identically. Predictable — that weakness is
+//     exactly what the seeded path fixes — but frozen for compat.
 func ctxSeed(ctx core.Ctx) uint64 {
-	// Mix turn and numPlayers into a stable uint64.
-	// Uses the FNV-1a offset and prime to spread values across the range.
+	// FNV-1a offset and prime spread values across the range.
 	const (
 		offset64 uint64 = 14695981039346656037
 		prime64  uint64 = 1099511628211
 	)
 	h := offset64
+	if ctx.Seed != 0 {
+		h ^= ctx.Seed
+		h *= prime64
+		h ^= uint64(ctx.Turn)
+		h *= prime64
+		h ^= uint64(ctx.NumMoves)
+		h *= prime64
+		return h
+	}
 	h ^= uint64(ctx.Turn)
 	h *= prime64
 	h ^= uint64(ctx.NumPlayers)
