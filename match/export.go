@@ -21,6 +21,11 @@ type ExportedMatch struct {
 	SetupData     any             `json:"setupData,omitempty"`
 	Log           []core.LogEntry `json:"log"`
 	SchemaVersion int             `json:"schemaVersion,omitempty"`
+	// Seed is the match's secret seed; replaying an RNG-dependent
+	// match without it diverges. Treat exports of in-progress matches
+	// as sensitive — a player holding the seed can predict future
+	// shuffles. Zero for matches created before per-match seeds.
+	Seed uint64 `json:"seed,omitempty"`
 }
 
 // ExportMatch returns the portable form of an existing match. Bare —
@@ -37,6 +42,7 @@ func (m *Manager) ExportMatch(matchID string) (*ExportedMatch, error) {
 		SetupData:     match.SetupData,
 		Log:           append([]core.LogEntry(nil), match.State.Log...),
 		SchemaVersion: match.SchemaVersion,
+		Seed:          match.State.Ctx.Seed,
 	}, nil
 }
 
@@ -52,7 +58,7 @@ func (m *Manager) ImportMatch(exp *ExportedMatch) (string, error) {
 	if g == nil {
 		return "", fmt.Errorf("%w: %s", ErrUnknownGame, exp.GameName)
 	}
-	state, err := core.Replay(g, exp.Log, exp.NumPlayers, exp.SetupData)
+	state, err := core.ReplaySeeded(g, exp.Log, exp.NumPlayers, exp.SetupData, exp.Seed)
 	if err != nil {
 		return "", fmt.Errorf("replay: %w", err)
 	}

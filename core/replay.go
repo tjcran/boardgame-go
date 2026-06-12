@@ -18,8 +18,20 @@ import "fmt"
 //
 // log should be the full sequence of "move"-kind entries, in order. Custom
 // AddLog entries and engine event entries are skipped.
+//
+// Replay reconstructs with no seed (Ctx.Seed = 0) — correct for matches
+// created before per-match seeds existed. For a seeded match, use
+// ReplaySeeded with the seed persisted in the match state, or
+// RNG-dependent games diverge.
 func Replay(game *Game, log []LogEntry, numPlayers int, setupData any) (State, error) {
 	return ReplayUntil(game, log, -1, numPlayers, setupData)
+}
+
+// ReplaySeeded is Replay for a match created with a secret seed: the
+// reconstruction starts from NewMatchSeeded so setup- and move-time RNG
+// derive the same streams the live match saw.
+func ReplaySeeded(game *Game, log []LogEntry, numPlayers int, setupData any, seed uint64) (State, error) {
+	return ReplayUntilSeeded(game, log, -1, numPlayers, setupData, seed)
 }
 
 // ReplayUntil is the time-travel variant of Replay: re-apply the first
@@ -31,7 +43,13 @@ func Replay(game *Game, log []LogEntry, numPlayers int, setupData any) (State, e
 //
 // Non-move entries (custom AddLog) are skipped but not counted.
 func ReplayUntil(game *Game, log []LogEntry, untilSteps int, numPlayers int, setupData any) (State, error) {
-	state := NewMatch(game, numPlayers, setupData)
+	return ReplayUntilSeeded(game, log, untilSteps, numPlayers, setupData, 0)
+}
+
+// ReplayUntilSeeded is ReplayUntil starting from a seeded match. See
+// ReplaySeeded.
+func ReplayUntilSeeded(game *Game, log []LogEntry, untilSteps int, numPlayers int, setupData any, seed uint64) (State, error) {
+	state := NewMatchSeeded(game, numPlayers, setupData, seed)
 	if untilSteps == 0 {
 		return state, nil
 	}

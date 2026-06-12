@@ -82,8 +82,18 @@ type activeFrame struct {
 }
 
 // NewMatch builds the starting State for a fresh match. setupData is passed
-// through to Game.Setup; pass nil if the game doesn't use one.
+// through to Game.Setup; pass nil if the game doesn't use one. The match
+// gets no secret seed (Ctx.Seed = 0) — use NewMatchSeeded when one is
+// available; match.Manager does so for every match it creates.
 func NewMatch(game *Game, numPlayers int, setupData any) State {
+	return NewMatchSeeded(game, numPlayers, setupData, 0)
+}
+
+// NewMatchSeeded is NewMatch with a per-match secret seed installed in
+// Ctx before Game.Setup runs, so setup-time randomness can already
+// derive from it. Replays of a seeded match must use ReplaySeeded with
+// the same value or RNG-dependent games diverge.
+func NewMatchSeeded(game *Game, numPlayers int, setupData any, seed uint64) State {
 	n := game.PlayerCount(numPlayers)
 	order := defaultPlayOrder(n)
 
@@ -94,6 +104,7 @@ func NewMatch(game *Game, numPlayers int, setupData any) State {
 		PlayOrderPos:  0,
 		Turn:          1,
 		Phase:         game.startPhase(),
+		Seed:          seed,
 	}
 
 	var g G
@@ -149,6 +160,9 @@ func PlayerView(game *Game, state State, playerID string) State {
 	view.MoveCounts = nil
 	view.StageMinMoves = nil
 	view.StageMaxMoves = nil
+	// The per-match secret seed never reaches a client — with it, a
+	// player could predict every future shuffle.
+	view.Ctx.Seed = 0
 	return view
 }
 
