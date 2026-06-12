@@ -110,7 +110,7 @@ func (s *State) Destroy(id EntityID) {
 		}
 	}
 	for mid, m := range s.Modifiers {
-		if m.Target == id || m.Source == id {
+		if m.Target == id || m.Source == id || m.ExpiresWith == id {
 			delete(s.Modifiers, mid)
 		}
 	}

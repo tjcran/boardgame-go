@@ -31,8 +31,16 @@ func TestModifierExpiresOutsideWhileInZones(t *testing.T) {
 	if got := s.EffectiveAttr(creature, "power", 0); got != 2 {
 		t.Fatalf("after aura left battlefield: power = %v, want 2", got)
 	}
+	// Reads filter but never delete — persisted bytes must not depend
+	// on who looked at the state. Deletion is explicit.
+	if n := len(s.Modifiers); n != 1 {
+		t.Fatalf("reads must not delete expired modifiers, have %d", n)
+	}
+	if removed := s.SweepModifiers(); len(removed) != 1 {
+		t.Fatalf("SweepModifiers = %v, want one removal", removed)
+	}
 	if n := len(s.Modifiers); n != 0 {
-		t.Fatalf("expired modifier should be swept on read, %d remain", n)
+		t.Fatalf("expired modifier should be gone after sweep, %d remain", n)
 	}
 }
 
@@ -52,8 +60,10 @@ func TestModifierExpiresWithThirdEntityDestroyed(t *testing.T) {
 	if got := s.EffectiveAttr(creature, "power", 0); got != 1 {
 		t.Fatalf("after ExpiresWith entity destroyed: power = %v, want 1", got)
 	}
+	// Destroy is a mutation point: it removes modifiers lifetime-linked
+	// to the destroyed entity, same as Source/Target-linked ones.
 	if n := len(s.Modifiers); n != 0 {
-		t.Fatalf("expired modifier should be swept, %d remain", n)
+		t.Fatalf("Destroy should remove ExpiresWith-linked modifiers, %d remain", n)
 	}
 }
 
