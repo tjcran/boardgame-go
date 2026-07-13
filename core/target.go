@@ -99,9 +99,15 @@ func containsCandidate(cands []any, want any) bool {
 	return false
 }
 
-// asNumber returns v as a float64 if it's any of the standard numeric
-// kinds, or (0, false) otherwise. Used to bridge the JSON-decoded
-// float64 / Go-native int gap when comparing candidates to selections.
+// asNumber returns v as a float64 if it's any numeric kind, or
+// (0, false) otherwise. Used to bridge the JSON-decoded float64 /
+// Go-native int gap when comparing candidates to selections.
+//
+// The type switch covers the standard kinds cheaply; the reflect
+// fallback covers DEFINED numeric types (`type EntityID uint64` and
+// friends) — games routinely store typed IDs in Candidates while the
+// wire delivers plain float64 selections, and those must compare
+// equal.
 func asNumber(v any) (float64, bool) {
 	switch n := v.(type) {
 	case int:
@@ -128,6 +134,15 @@ func asNumber(v any) (float64, bool) {
 		return float64(n), true
 	case float64:
 		return n, true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return float64(rv.Int()), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return float64(rv.Uint()), true
+	case reflect.Float32, reflect.Float64:
+		return rv.Float(), true
 	}
 	return 0, false
 }
