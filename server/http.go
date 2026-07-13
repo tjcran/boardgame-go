@@ -367,6 +367,9 @@ type moveReq struct {
 	Move        string `json:"move"`
 	Args        []any  `json:"args"`
 	StateID     int    `json:"stateID,omitempty"`
+	// ResumeTag resumes a pending interactive block — see the ws
+	// envelope's field of the same name.
+	ResumeTag string `json:"resumeTag,omitempty"`
 }
 
 func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, _, matchID string) {
@@ -376,9 +379,10 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, _, matchID s
 		return
 	}
 	state, err := s.Manager.MoveReqCtx(r.Context(), matchID, req.PlayerID, req.Credentials, core.MoveRequest{
-		Move:    req.Move,
-		Args:    req.Args,
-		StateID: req.StateID,
+		Move:      req.Move,
+		Args:      req.Args,
+		StateID:   req.StateID,
+		ResumeTag: req.ResumeTag,
 	})
 	if err != nil {
 		metrics.MovesRejected.Add(1)
@@ -408,9 +412,10 @@ func (s *Server) handleDryMove(w http.ResponseWriter, r *http.Request, _, matchI
 		return
 	}
 	state, err := s.Manager.DryMoveReq(matchID, req.PlayerID, req.Credentials, core.MoveRequest{
-		Move:    req.Move,
-		Args:    req.Args,
-		StateID: req.StateID,
+		Move:      req.Move,
+		Args:      req.Args,
+		StateID:   req.StateID,
+		ResumeTag: req.ResumeTag,
 	})
 	if err != nil {
 		writeErr(w, err)

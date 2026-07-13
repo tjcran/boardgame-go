@@ -199,7 +199,13 @@ type inbound struct {
 	Move        string `json:"move"`
 	Args        []any  `json:"args"`
 	StateID     int    `json:"stateID,omitempty"`
-	Payload     any    `json:"payload"`
+	// ResumeTag resumes a pending interactive block (core.State.Blocks).
+	// Without it a match with pending blocks rejects every move with
+	// ErrBlocked — interactive prompts would be unresolvable over the
+	// wire. Clients set it to the pending block's tag (conventionally
+	// the resuming move's name).
+	ResumeTag string `json:"resumeTag,omitempty"`
+	Payload   any    `json:"payload"`
 }
 
 // handleWS upgrades the connection, sends the current state immediately,
@@ -319,9 +325,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 			// msg.PlayerID, so move-time auth doesn't rely on
 			// the connection-level binding.
 			_, err := s.Manager.MoveReqCtx(ctx, matchID, msg.PlayerID, msg.Credentials, core.MoveRequest{
-				Move:    msg.Move,
-				Args:    msg.Args,
-				StateID: msg.StateID,
+				Move:      msg.Move,
+				Args:      msg.Args,
+				StateID:   msg.StateID,
+				ResumeTag: msg.ResumeTag,
 			})
 			if err != nil {
 				metrics.MovesRejected.Add(1)
