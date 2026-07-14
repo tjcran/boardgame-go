@@ -734,6 +734,14 @@ func (m *Manager) loadMigrated(matchID string) (*storage.Match, error) {
 			match.State.Plugins[p.Name()] = data
 		}
 	}
+	// Consume-once: the raw bytes describe the state AS LOADED. Cached
+	// stores hand back the same live State on every subsequent load —
+	// re-running the decode hooks against the stale bytes would
+	// overwrite the live G / plugin data with the original snapshot on
+	// EVERY move (G rolls back, Ctx advances — the game soft-locks).
+	if g != nil {
+		match.State.ClearRaw()
+	}
 	if g == nil || g.SchemaVersion <= match.SchemaVersion {
 		return match, nil
 	}
