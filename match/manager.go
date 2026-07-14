@@ -709,6 +709,31 @@ func (m *Manager) loadMigrated(matchID string) (*storage.Match, error) {
 			match.State.G = decoded
 		}
 	}
+	// Rehydrate typed plugin data the same way (the plugin analogue of
+	// DecodeG): storage decodes State.Plugins values to map[string]any,
+	// and plugins whose API hooks type-assert a concrete type would
+	// panic on the first move after a reload (e.g. the random plugin's
+	// *state). Only plugins implementing core.PluginDecode participate.
+	if g != nil {
+		for _, p := range g.Plugins {
+			dec, ok := p.(core.PluginDecode)
+			if !ok {
+				continue
+			}
+			raw := match.State.RawPlugin(p.Name())
+			if len(raw) == 0 {
+				continue
+			}
+			data, err := dec.Decode(raw)
+			if err != nil {
+				return nil, fmt.Errorf("decode plugin %q for match %s: %w", p.Name(), matchID, err)
+			}
+			if match.State.Plugins == nil {
+				match.State.Plugins = map[string]any{}
+			}
+			match.State.Plugins[p.Name()] = data
+		}
+	}
 	if g == nil || g.SchemaVersion <= match.SchemaVersion {
 		return match, nil
 	}
