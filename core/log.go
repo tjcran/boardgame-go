@@ -22,6 +22,10 @@ type LogEntry struct {
 	// retains the original args.
 	Args []any `json:"args,omitempty"`
 
+	// NowMs is the wall-clock timestamp (Unix ms) the request carried.
+	// Replay feeds it back so time-reading games stay deterministic.
+	NowMs int64 `json:"nowMs,omitempty"`
+
 	// Turn at the time this entry was written.
 	Turn int `json:"turn"`
 
