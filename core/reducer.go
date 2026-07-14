@@ -272,6 +272,25 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		next.Log = append(next.Log, mc.extra.entries...)
 	}
 
+	// Apply DropBlocksFor requests BEFORE merging new blocks: a
+	// timeout/forfeit move abandons the named players' stranded
+	// prompts (their pending effects die with them).
+	if len(mc.dropBlocksFor) > 0 {
+		drop := map[string]bool{}
+		for _, pid := range mc.dropBlocksFor {
+			drop[pid] = true
+		}
+		// Fresh slice — next.Blocks aliases the pre-move state's array,
+		// and later error paths return that state for rollback.
+		kept := make([]BlockSpec, 0, len(next.Blocks))
+		for _, b := range next.Blocks {
+			if !drop[b.PlayerID] {
+				kept = append(kept, b)
+			}
+		}
+		next.Blocks = kept
+	}
+
 	// Harvest the move's Queue.Push / Queue.Block calls.
 	pending, newBlocks := queue.drain()
 	next.Queue = append(next.Queue, pending...)

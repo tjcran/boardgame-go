@@ -47,6 +47,10 @@ type MoveContext struct {
 	// process the player's chosen targets in the resume handler.
 	ResumingBlock *BlockSpec
 
+	// dropBlocksFor collects player IDs whose PERSISTED pending blocks
+	// (State.Blocks) this move wants removed — see DropBlocksFor.
+	dropBlocksFor []string
+
 	// extra holds AddLog entries appended during this MoveContext's
 	// lifetime. Engine-only; not visible to plugins.
 	extra *extraLog
@@ -54,6 +58,17 @@ type MoveContext struct {
 	// chainedMoves counts Events.RunMove invocations within this
 	// MoveContext, capped by maxChainedMoves in the reducer.
 	chainedMoves int
+}
+
+// DropBlocksFor asks the reducer to remove every persisted pending
+// block (State.Blocks) belonging to playerID once this move applies.
+// The escape hatch for timeout/forfeit-class moves (typically paired
+// with Move.IgnoreBlocks): a player who walked away mid-prompt would
+// otherwise hold the match hostage — their unanswered block gates
+// every move, including the one trying to end their turn. Dropping a
+// block abandons its pending effect, mirroring "the prompt expired".
+func (mc *MoveContext) DropBlocksFor(playerID string) {
+	mc.dropBlocksFor = append(mc.dropBlocksFor, playerID)
 }
 
 // Plugin returns the API object exposed by the named plugin, or nil if no
