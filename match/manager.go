@@ -852,6 +852,13 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 	unlock := m.lockMatch(matchID)
 	defer unlock()
 
+	// Stamp the wall clock when the caller didn't. Moves and hooks read
+	// it via ctx.NowMs; the reducer records it in the log so replays
+	// reproduce the same value.
+	if req.NowMs == 0 {
+		req.NowMs = m.now().UnixMilli()
+	}
+
 	if m.RequireStateID && req.StateID == 0 {
 		return core.State{}, fmt.Errorf("%w: server requires StateID on every move", core.ErrStaleState)
 	}
@@ -1067,6 +1074,7 @@ func (m *Manager) DispatchServer(
 		Move:     moveName,
 		Args:     args,
 		StateID:  match.State.StateID, // server always at current state — no staleness
+		NowMs:    m.now().UnixMilli(),
 	}
 	return m.dispatchLocked(ctx, matchID, playerID, g, match, req)
 }

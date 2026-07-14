@@ -21,6 +21,10 @@ type MoveRequest struct {
 	Args      []any  `json:"args"`
 	StateID   int    `json:"stateID,omitempty"`
 	ResumeTag string `json:"resumeTag,omitempty"`
+	// NowMs is the request's wall-clock timestamp (Unix ms). The match
+	// manager stamps it when zero; Replay passes the value recorded in
+	// the move log so time-reading games replay deterministically.
+	NowMs int64 `json:"nowMs,omitempty"`
 }
 
 // Public sentinel errors. They're surfaced through the transport with
@@ -79,6 +83,9 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	if state.Ctx.Gameover != nil {
 		return state, ErrGameOver
 	}
+
+	// Expose the request's wall clock to moves and hooks for this apply.
+	state.Ctx.NowMs = req.NowMs
 
 	// Resume-tag handling: remove a matching block before the move runs.
 	// If no match, refuse — the tag implies the caller thinks they're
@@ -189,6 +196,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		Undoable:  undoable,
 		Parent:    -1,
 		ResumeTag: req.ResumeTag,
+		NowMs:     req.NowMs,
 	})
 	// Any successful move invalidates the redo stack.
 	next.Undone = nil

@@ -33,6 +33,14 @@ type Ctx struct {
 	// kept in their internal state under the same purpose.
 	NumMoves int `json:"_numMoves,omitempty"`
 
+	// NowMs is the wall-clock timestamp (Unix ms) of the request being
+	// applied, stamped by the match manager at dispatch time and by
+	// Replay from the recorded log entry. Transient — set at Apply
+	// entry, never persisted (json:"-") — so hooks and moves get a
+	// deterministic-on-replay time source (turn timers, timestamps)
+	// without calling time.Now themselves.
+	NowMs int64 `json:"-"`
+
 	// Seed is the per-match secret entropy assigned at creation time
 	// (match.Manager generates it; NewMatchSeeded plumbs it). It
 	// persists with the state so reloads and seeded replays reproduce

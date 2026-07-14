@@ -63,6 +63,7 @@ func ReplayUntilSeeded(game *Game, log []LogEntry, untilSteps int, numPlayers in
 			Move:      e.Move,
 			Args:      e.Args,
 			ResumeTag: e.ResumeTag,
+			NowMs:     e.NowMs,
 		})
 		if err != nil {
 			return state, fmt.Errorf("replay step %d (%s by %s): %w", i, e.Move, e.PlayerID, err)
