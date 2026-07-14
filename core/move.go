@@ -152,6 +152,15 @@ type Move struct {
 	// reducer applies when State.Blocks is non-empty. Use sparingly —
 	// concede / forfeit / emergency-exit moves are the obvious case.
 	IgnoreBlocks bool
+
+	// AnyPlayer exempts this move from the current-player / active-stage
+	// authorization check: any seated player may dispatch it regardless
+	// of whose turn it is. Same class as IgnoreBlocks — concede,
+	// forfeit, and forcing an AFK opponent's turn timeout. Credentials
+	// are still validated by the match manager; the move body remains
+	// responsible for its own semantics (mc.PlayerID tells it who
+	// called).
+	AnyPlayer bool
 }
 
 // IsUndoable resolves the Undoable field for a given context. The default

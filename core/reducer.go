@@ -113,10 +113,17 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		}
 	}
 
-	// Player must be allowed to move in this scope.
-	stage, err := authorizedStage(state.Ctx, req.PlayerID)
-	if err != nil {
-		return rollback, err
+	// Player must be allowed to move in this scope. AnyPlayer moves
+	// (concede / forfeit / opponent-forced timeout) skip the ownership
+	// check — resolve them from the default scope instead of the
+	// caller's (nonexistent) stage.
+	stage, authErr := authorizedStage(state.Ctx, req.PlayerID)
+	if authErr != nil {
+		if move, err := resolveMove(game, state.Ctx, "", req.Move); err == nil && move.AnyPlayer {
+			stage = ""
+		} else {
+			return rollback, authErr
+		}
 	}
 
 	// Resolve the move from the active move table, honouring stage
