@@ -1,5 +1,7 @@
 package core
 
+import "encoding/json"
+
 // Plugin is the extension point for adding cross-cutting behavior to the
 // engine. Implementations can store private state, expose APIs to moves,
 // hide state from clients, and reject invalid actions.
@@ -20,6 +22,16 @@ type Plugin interface {
 type PluginSetup interface {
 	Plugin
 	Setup(g G, ctx Ctx, game *Game) any
+}
+
+// PluginDecode rehydrates a plugin's private data after a persistence
+// round-trip. Storage decodes State.Plugins values as generic JSON
+// (map[string]any); plugins whose API hooks type-assert a concrete Go
+// type implement Decode so the match manager can restore it (see
+// Manager.loadMigrated — the plugin analogue of Game.DecodeG).
+type PluginDecode interface {
+	Plugin
+	Decode(raw json.RawMessage) (any, error)
 }
 
 // PluginAPI exposes an API into MoveContext.Plugins at the start of each

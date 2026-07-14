@@ -11,6 +11,7 @@ package random
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"hash/fnv"
 	"math"
 
@@ -57,12 +58,44 @@ func (p *Plugin) Setup(_ core.G, _ core.Ctx, game *core.Game) any {
 	return &state{S: s}
 }
 
+// Decode implements core.PluginDecode: after a persistence round-trip
+// the manager hands back the raw JSON so the PRNG state rehydrates into
+// its typed form with exact uint64 precision (a float64 round-trip via
+// map[string]any would corrupt states above 2^53).
+func (p *Plugin) Decode(raw json.RawMessage) (any, error) {
+	var s state
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
 // API hands the move a *core.Random whose internal state pointer aims at
 // the plugin's private data. Mutations from D6/Shuffle/etc. write straight
 // through to the persisted state.
+//
+// data is *state on the happy path. A match reloaded WITHOUT the
+// manager's PluginDecode pass (older callers, hand-rolled loaders)
+// arrives as generic JSON — rather than panicking mid-serve and
+// bricking the match, degrade to a best-effort rebuild.
 func (p *Plugin) API(data any, _ core.G, _ core.Ctx, _ string, _ *core.Game) any {
-	d := data.(*state)
-	return core.NewRandomFromState(&d.S)
+	switch d := data.(type) {
+	case *state:
+		return core.NewRandomFromState(&d.S)
+	case map[string]any:
+		if f, ok := d["s"].(float64); ok {
+			s := &state{S: uint64(f)}
+			return core.NewRandomFromState(&s.S)
+		}
+	}
+	// Unknown shape — fresh state from the plugin seed keeps the match
+	// serviceable (future draws remain random, just not the original
+	// sequence).
+	s := &state{S: p.seed}
+	if s.S == 0 {
+		s.S = 0xDEADBEEFCAFEBABE
+	}
+	return core.NewRandomFromState(&s.S)
 }
 
 // Flush is a no-op because the API and data share a state pointer; any

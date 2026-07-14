@@ -14,6 +14,10 @@ type State struct {
 	// default Marshal path round-trips G itself.
 	rawG json.RawMessage `json:"-"`
 
+	// rawPlugins mirrors rawG for each plugin's private data blob —
+	// consumed by the manager's PluginDecode rehydration pass.
+	rawPlugins map[string]json.RawMessage `json:"-"`
+
 	// Ctx is the engine-managed metadata.
 	Ctx Ctx `json:"ctx"`
 
@@ -179,13 +183,15 @@ func (s *State) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	var rawHolder struct {
-		G json.RawMessage `json:"G"`
+		G       json.RawMessage            `json:"G"`
+		Plugins map[string]json.RawMessage `json:"plugins"`
 	}
 	if err := json.Unmarshal(b, &rawHolder); err != nil {
 		return err
 	}
 	*s = State(alias)
 	s.rawG = rawHolder.G
+	s.rawPlugins = rawHolder.Plugins
 	return nil
 }
 
@@ -193,3 +199,13 @@ func (s *State) UnmarshalJSON(b []byte) error {
 // recent UnmarshalJSON, or nil if the state was never unmarshaled (e.g. it
 // came from the in-memory store, which preserves the live Go value).
 func (s State) RawG() json.RawMessage { return s.rawG }
+
+// RawPlugin returns the raw JSON bytes captured for one plugin's private
+// data during the most recent UnmarshalJSON, or nil. The match manager
+// passes it to PluginDecode implementations so typed plugin state (e.g.
+// the random plugin's PRNG state) survives a persistence round-trip —
+// without it, a reloaded match hands plugins map[string]any and typed
+// assertions in their API hooks fail.
+func (s State) RawPlugin(name string) json.RawMessage {
+	return s.rawPlugins[name]
+}
