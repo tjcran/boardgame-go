@@ -200,6 +200,18 @@ func (s *State) UnmarshalJSON(b []byte) error {
 // came from the in-memory store, which preserves the live Go value).
 func (s State) RawG() json.RawMessage { return s.rawG }
 
+// ClearRaw drops the captured raw G / plugin bytes. The match manager
+// calls it after consuming them in its rehydration pass — the raw
+// bytes describe the state AS LOADED, and a match served from a live
+// cache keeps its State value (and therefore these fields) across
+// moves. Without consume-once semantics every subsequent load
+// re-decodes the ORIGINAL snapshot over the live G, silently rolling
+// the game back to its as-loaded state while Ctx marches on.
+func (s *State) ClearRaw() {
+	s.rawG = nil
+	s.rawPlugins = nil
+}
+
 // RawPlugin returns the raw JSON bytes captured for one plugin's private
 // data during the most recent UnmarshalJSON, or nil. The match manager
 // passes it to PluginDecode implementations so typed plugin state (e.g.
