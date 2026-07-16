@@ -133,10 +133,10 @@ func (e Entity) IsVisibleTo(viewer string) bool {
 // when serialising for spectators).
 func (s *State) RedactForViewer(viewer string) *State {
 	out := NewState()
-	out.nextEntityID = s.nextEntityID
-	out.nextModID = s.nextModID
-	out.nextInsertion = s.nextInsertion
-	out.nextSubID = s.nextSubID
+	out.IDs.NextEntityID = s.IDs.NextEntityID
+	out.IDs.NextModID = s.IDs.NextModID
+	out.IDs.NextInsertion = s.IDs.NextInsertion
+	out.IDs.NextSubID = s.IDs.NextSubID
 
 	redacted := map[EntityID]bool{}
 	for id, e := range s.Entities {

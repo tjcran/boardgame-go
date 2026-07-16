@@ -24,21 +24,39 @@ type State struct {
 	Events         []Event                 `json:"events,omitempty"`
 	PendingEffects []Effect                `json:"pending_effects,omitempty"`
 
-	// nextEntityID / nextModID / nextSubID / nextAbilityID /
-	// nextEffectID are monotonic counters for stable IDs. Replay-safe:
-	// equal Setup + equal moves → equal IDs.
-	nextEntityID  uint64
-	nextModID     uint64
-	nextInsertion int
-	nextSubID     uint64
-	nextAbilityID uint64
-	nextEffectID  uint64
+	// StagedTriggers is the holding buffer for effects staged by event
+	// handlers between trigger checkpoints — see StageTrigger /
+	// FlushTriggers in trigger.go. Serialised (a match can persist
+	// mid-checkpoint); IDs are zero until flush.
+	StagedTriggers []Effect `json:"staged_triggers,omitempty"`
+
+	// IDs holds the monotonic counters behind every stable ID the
+	// library mints. Replay-safe: equal Setup + equal moves → equal
+	// IDs. Exported (rather than unexported fields with a custom
+	// codec) so State needs NO MarshalJSON/UnmarshalJSON methods —
+	// a custom method would be promoted onto any game struct that
+	// embeds *State and silently drop the game's own fields from its
+	// encoding. Treat as read-only; the library increments it.
+	IDs IDCounters `json:"__counters__"`
 
 	// subs / abilities are in-memory tables (not serialised). The
 	// engine re-registers them at process start the same way it
 	// re-registers subs.
 	subs      []subscription
 	abilities []ability
+}
+
+// IDCounters is the persisted set of monotonic ID counters. The JSON
+// field names (and State's "__counters__" key) match the wire shape
+// of the custom codec this replaced, so already-persisted matches
+// decode unchanged.
+type IDCounters struct {
+	NextEntityID  uint64 `json:"nextEntityID"`
+	NextModID     uint64 `json:"nextModID"`
+	NextInsertion int    `json:"nextInsertion"`
+	NextSubID     uint64 `json:"nextSubID"`
+	NextAbilityID uint64 `json:"nextAbilityID"`
+	NextEffectID  uint64 `json:"nextEffectID"`
 }
 
 // NewState builds an empty State.
@@ -50,12 +68,24 @@ func NewState() *State {
 	}
 }
 
+// ensureEntities re-initialises the Entities map when nil. omitempty
+// elides empty maps from the JSON encoding, so a State decoded from a
+// match persisted before any entities existed comes back with nil
+// maps; every writer re-arms its map on the way in (AddModifier and
+// NewZone already do the same for theirs).
+func (s *State) ensureEntities() {
+	if s.Entities == nil {
+		s.Entities = map[EntityID]Entity{}
+	}
+}
+
 // NewEntity registers a fresh entity with a stable ID. Owner can be
 // empty for neutral entities; Type and Attrs are entirely
 // game-defined. Returns the assigned EntityID.
 func (s *State) NewEntity(typeName, owner string, attrs map[string]any) EntityID {
-	s.nextEntityID++
-	id := EntityID(s.nextEntityID)
+	s.IDs.NextEntityID++
+	id := EntityID(s.IDs.NextEntityID)
+	s.ensureEntities()
 	s.Entities[id] = Entity{
 		ID: id, Type: typeName, Owner: owner, Attrs: cloneAttrs(attrs),
 	}
@@ -79,8 +109,9 @@ func (s *State) Instantiate(c *Catalog, def DefID, owner string) (EntityID, erro
 	if !ok {
 		return 0, ErrUnknownDef
 	}
-	s.nextEntityID++
-	id := EntityID(s.nextEntityID)
+	s.IDs.NextEntityID++
+	id := EntityID(s.IDs.NextEntityID)
+	s.ensureEntities()
 	s.Entities[id] = Entity{
 		ID:    id,
 		DefID: d.ID,
@@ -170,8 +201,9 @@ func (s *State) Clone(id EntityID, owner string, overrides map[string]any) (Enti
 		}
 		attrs[k] = v
 	}
-	s.nextEntityID++
-	nid := EntityID(s.nextEntityID)
+	s.IDs.NextEntityID++
+	nid := EntityID(s.IDs.NextEntityID)
+	s.ensureEntities()
 	s.Entities[nid] = Entity{
 		ID:         nid,
 		DefID:      src.DefID,
