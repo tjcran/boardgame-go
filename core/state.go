@@ -158,6 +158,12 @@ func PlayerView(game *Game, state State, playerID string) State {
 	// be a no-op on the wire.
 	view.Log = redactedLog(state.Log, playerID)
 	view.Undone = redactedLog(state.Undone, playerID)
+	// Strip the private payload of any pending block not addressed to this
+	// seat. A block's Data/Target hold the manual-target prompt contents
+	// (candidate lists, source IDs, generated names) — hidden information
+	// that must never reach opposing seats or spectators. The ownership
+	// shell (Tag / PlayerID) is kept so clients still know a block exists.
+	view.Blocks = redactedBlocks(state.Blocks, playerID)
 	// Engine-private bookkeeping that should never leave the server.
 	view.ActiveStack = nil
 	view.PendingNext = nil

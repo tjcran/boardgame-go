@@ -29,6 +29,29 @@ type BlockSpec struct {
 	Target   *TargetRequest `json:"target,omitempty"`
 }
 
+// redactedBlocks returns the block set filtered for a specific seat.
+// A pending block's Data and Target carry exactly the private material a
+// manual-target / selection prompt is built from — candidate lists,
+// generated names, source entity IDs — so they must only reach the seat
+// the block is addressed to. For every other viewer (opposing seats and
+// spectators, whose playerID is "") the payload is stripped, leaving the
+// ownership shell (Tag / PlayerID / Order) intact so clients still know a
+// block exists and who owns it. Mirrors redactedLog's per-seat contract.
+func redactedBlocks(blocks []BlockSpec, playerID string) []BlockSpec {
+	if len(blocks) == 0 {
+		return blocks
+	}
+	out := make([]BlockSpec, len(blocks))
+	for i, b := range blocks {
+		out[i] = b
+		if b.PlayerID != playerID {
+			out[i].Data = nil
+			out[i].Target = nil
+		}
+	}
+	return out
+}
+
 // Queue is the API exposed to moves via MoveContext.Queue. Like
 // Events, it queues operations for the reducer to drain after the
 // move returns — but unlike Events these are full moves, with their

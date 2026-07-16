@@ -95,3 +95,61 @@ func TestPlayerViewRedactsLogArgs(t *testing.T) {
 		t.Fatalf("PlayerView mutated source log args: %v", state.Log[0].Args)
 	}
 }
+
+// TestPlayerViewRedactsBlockPayload guards against the hidden-information
+// leak where a pending block's Data/Target — the manual-target prompt
+// contents (candidate lists, source IDs, generated names) — rode along to
+// opposing seats and spectators through PlayerView. The payload must be
+// visible only to the seat the block is addressed to; every other viewer
+// sees the ownership shell (Tag / PlayerID) but no payload.
+func TestPlayerViewRedactsBlockPayload(t *testing.T) {
+	game := &Game{Name: "block-redact-test"}
+	state := State{
+		Blocks: []BlockSpec{
+			{
+				Tag:      "pickTarget",
+				PlayerID: "0",
+				Data:     map[string]any{"sourceCard": "ace-of-spades"},
+				Target: &TargetRequest{
+					Kind:       "pickTarget",
+					Candidates: []any{"card-7", "card-9"},
+					Source:     "ace-of-spades",
+					Data:       map[string]any{"hint": "opponent's face-down"},
+				},
+			},
+		},
+	}
+
+	// The owning seat sees the full prompt.
+	viewSelf := PlayerView(game, state, "0")
+	if viewSelf.Blocks[0].Data == nil || viewSelf.Blocks[0].Target == nil {
+		t.Fatalf("owning seat should see its own block payload; got %+v", viewSelf.Blocks[0])
+	}
+	if len(viewSelf.Blocks[0].Target.Candidates) != 2 {
+		t.Fatalf("owning seat should see candidates; got %+v", viewSelf.Blocks[0].Target)
+	}
+
+	// The opposing seat sees the shell but no payload.
+	viewOther := PlayerView(game, state, "1")
+	if got := viewOther.Blocks[0]; got.Tag != "pickTarget" || got.PlayerID != "0" {
+		t.Fatalf("ownership shell should survive redaction; got %+v", got)
+	}
+	if viewOther.Blocks[0].Data != nil {
+		t.Fatalf("block Data leaked to opposing seat: %v", viewOther.Blocks[0].Data)
+	}
+	if viewOther.Blocks[0].Target != nil {
+		t.Fatalf("block Target leaked to opposing seat: %+v", viewOther.Blocks[0].Target)
+	}
+
+	// Spectators (playerID "") match no seat, so they see no payload.
+	viewSpec := PlayerView(game, state, "")
+	if viewSpec.Blocks[0].Data != nil || viewSpec.Blocks[0].Target != nil {
+		t.Fatalf("block payload leaked to spectator: %+v", viewSpec.Blocks[0])
+	}
+
+	// Redaction must not mutate the source blocks — the authoritative
+	// state must still carry the payload for the reducer / resume move.
+	if state.Blocks[0].Data == nil || state.Blocks[0].Target == nil {
+		t.Fatalf("PlayerView mutated source block payload: %+v", state.Blocks[0])
+	}
+}
