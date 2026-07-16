@@ -63,8 +63,8 @@ const (
 // queue-order resolution. For LIFO / stack-top semantics use
 // PushEffectFront.
 func (s *State) PushEffect(eff Effect) EffectID {
-	s.nextEffectID++
-	eff.ID = EffectID(s.nextEffectID)
+	s.IDs.NextEffectID++
+	eff.ID = EffectID(s.IDs.NextEffectID)
 	s.PendingEffects = append(s.PendingEffects, eff)
 	s.publishEffectEvent(EventEffectPushed, eff)
 	return eff.ID
@@ -76,8 +76,8 @@ func (s *State) PushEffect(eff Effect) EffectID {
 // "Front" means LIFO push / stack top — pair with PickFront for
 // stack-style "last in, first out" resolution.
 func (s *State) PushEffectFront(eff Effect) EffectID {
-	s.nextEffectID++
-	eff.ID = EffectID(s.nextEffectID)
+	s.IDs.NextEffectID++
+	eff.ID = EffectID(s.IDs.NextEffectID)
 	s.PendingEffects = append([]Effect{eff}, s.PendingEffects...)
 	s.publishEffectEvent(EventEffectPushed, eff)
 	return eff.ID
@@ -96,8 +96,8 @@ func (s *State) InsertEffectAt(idx int, eff Effect) EffectID {
 	if idx > len(s.PendingEffects) {
 		idx = len(s.PendingEffects)
 	}
-	s.nextEffectID++
-	eff.ID = EffectID(s.nextEffectID)
+	s.IDs.NextEffectID++
+	eff.ID = EffectID(s.IDs.NextEffectID)
 	s.PendingEffects = append(s.PendingEffects, Effect{})
 	copy(s.PendingEffects[idx+1:], s.PendingEffects[idx:])
 	s.PendingEffects[idx] = eff
