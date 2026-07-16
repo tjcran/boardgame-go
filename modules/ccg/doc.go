@@ -36,6 +36,18 @@
 //   - Decide win conditions, costs, or any rule that depends on the
 //     specific game.
 //
+// Positional boards (rows, ranks, lanes): zones already cover them —
+// declare one ordered zone per row per player by naming convention
+// ("row:front:0", "row:back:0", …). Ordered Members gives slot order
+// and adjacency (Members[i±1]); InsertAt/Top/Bottom place within a
+// row; MoveTo advances a card between rows. Two cautions: s.Zones is
+// a map, so keep the row names in an ordered slice on your G and
+// never range the map for anything order-dependent (the determinism
+// analyzer cannot catch that); and per-player naming is convention,
+// so centralize the name builders ("row:"+tier+":"+seat) in one place.
+// Games needing true 2D coordinates should look at modules/tabletop
+// instead.
+//
 // The library is optional. Importing ccg costs you nothing if your
 // game isn't card-shaped; the engine never imports it. Card-shaped
 // games drop a *ccg.State into their G, decorate it with their own
