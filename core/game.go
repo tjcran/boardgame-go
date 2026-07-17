@@ -36,6 +36,17 @@ type PlayerViewFn func(g G, ctx Ctx, playerID string) G
 // State.Blocks — typically the block unchanged when block.PlayerID ==
 // viewerID, and a redacted copy otherwise. See HideBlockPayload for a
 // ready-made implementation of that common case.
+//
+// BlockSpec is passed and returned by value, but Data (any) and Target
+// (*TargetRequest) are reference types — the copy still points at the
+// same map/struct the authoritative State.Blocks entry does, and that
+// entry is reused across every viewer's call for one broadcast. Redact
+// by replacing Data/Target wholesale (as HideBlockPayload does), never
+// by mutating through them (e.g. deleting keys from the Data map or
+// writing into *Target's fields) — that would corrupt the authoritative
+// block for every other viewer and for the resume move itself. If a
+// hook needs to keep part of a nested payload, copy it out first, the
+// way games with a struct-shaped PlayerView clone G before editing it.
 type BlockViewFn func(block BlockSpec, viewerID string) BlockSpec
 
 // EndIfFn is checked after every move. Returning a non-nil value ends the

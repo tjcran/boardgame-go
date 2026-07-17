@@ -105,10 +105,16 @@ func (q *Queue) PendingBlocks() []BlockSpec {
 
 // redactedBlocks returns the block set filtered through game.BlockView for
 // a specific viewer. A nil hook (the default) returns blocks unmodified —
-// see Game.BlockView for why that's the safe default. Never mutates the
-// input slice or its elements; PlayerView is called once per subscriber
-// per broadcast, and the authoritative State.Blocks backing every one of
-// those calls must stay intact for the reducer's own resume-tag matching.
+// see Game.BlockView for why that's the safe default.
+//
+// redactedBlocks itself never mutates the input slice or its elements: it
+// always builds a fresh output slice, and each element starts as a plain
+// struct copy from the source. That copy still shares Data/Target with the
+// authoritative State.Blocks entry, though — see BlockViewFn's doc for why
+// the hook itself must not mutate through them. PlayerView is called once
+// per subscriber per broadcast, and the authoritative State.Blocks backing
+// every one of those calls must stay intact for the reducer's own
+// resume-tag matching.
 func redactedBlocks(game *Game, blocks []BlockSpec, playerID string) []BlockSpec {
 	if game.BlockView == nil || len(blocks) == 0 {
 		return blocks
