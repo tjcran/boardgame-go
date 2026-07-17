@@ -103,6 +103,23 @@ func (q *Queue) PendingBlocks() []BlockSpec {
 	return append([]BlockSpec(nil), q.blocks...)
 }
 
+// redactedBlocks returns the block set filtered through game.BlockView for
+// a specific viewer. A nil hook (the default) returns blocks unmodified —
+// see Game.BlockView for why that's the safe default. Never mutates the
+// input slice or its elements; PlayerView is called once per subscriber
+// per broadcast, and the authoritative State.Blocks backing every one of
+// those calls must stay intact for the reducer's own resume-tag matching.
+func redactedBlocks(game *Game, blocks []BlockSpec, playerID string) []BlockSpec {
+	if game.BlockView == nil || len(blocks) == 0 {
+		return blocks
+	}
+	out := make([]BlockSpec, len(blocks))
+	for i, b := range blocks {
+		out[i] = game.BlockView(b, playerID)
+	}
+	return out
+}
+
 // drain pops the pending actions and blocks added during a move.
 // Used internally by the reducer.
 func (q *Queue) drain() ([]QueuedAction, []BlockSpec) {
