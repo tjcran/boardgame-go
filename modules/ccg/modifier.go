@@ -64,10 +64,10 @@ type Modifier struct {
 // tracks insertion order so recalculation is reproducible after a
 // JSON round trip.
 func (s *State) AddModifier(m Modifier) ModifierID {
-	s.nextModID++
-	m.ID = ModifierID(s.nextModID)
-	m.Insertion = s.nextInsertion
-	s.nextInsertion++
+	s.IDs.NextModID++
+	m.ID = ModifierID(s.IDs.NextModID)
+	m.Insertion = s.IDs.NextInsertion
+	s.IDs.NextInsertion++
 	if s.Modifiers == nil {
 		s.Modifiers = map[ModifierID]Modifier{}
 	}

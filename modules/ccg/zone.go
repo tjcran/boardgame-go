@@ -44,6 +44,9 @@ func (s *State) NewZone(name ZoneName, ordered bool) *Zone {
 		return z
 	}
 	z := &Zone{Name: name, Ordered: ordered}
+	if s.Zones == nil {
+		s.Zones = map[ZoneName]*Zone{}
+	}
 	s.Zones[name] = z
 	return z
 }

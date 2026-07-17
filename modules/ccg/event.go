@@ -46,8 +46,8 @@ type subscription struct {
 // enter the relevant zone). The persisted state (Modifiers, Events
 // history, etc.) survives; the routing table is rebuilt fresh.
 func (s *State) Subscribe(predicate EventPredicate, handler EventHandler) SubscriptionID {
-	s.nextSubID++
-	id := SubscriptionID(s.nextSubID)
+	s.IDs.NextSubID++
+	id := SubscriptionID(s.IDs.NextSubID)
 	s.subs = append(s.subs, subscription{
 		id: id, predicate: predicate, handler: handler,
 	})

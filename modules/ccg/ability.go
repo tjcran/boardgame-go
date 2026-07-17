@@ -38,8 +38,8 @@ type ability struct {
 func (s *State) BindAbility(entity EntityID, zones []ZoneName,
 	predicate EventPredicate, handler EventHandler) AbilityID {
 
-	s.nextAbilityID++
-	aid := AbilityID(s.nextAbilityID)
+	s.IDs.NextAbilityID++
+	aid := AbilityID(s.IDs.NextAbilityID)
 
 	// Defensive copy so callers can't mutate the bound zone list by
 	// reusing their slice.
