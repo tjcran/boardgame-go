@@ -24,6 +24,12 @@ type State struct {
 	Events         []Event                 `json:"events,omitempty"`
 	PendingEffects []Effect                `json:"pending_effects,omitempty"`
 
+	// StagedTriggers is the holding buffer for effects staged by event
+	// handlers between trigger checkpoints — see StageTrigger /
+	// FlushTriggers in trigger.go. Serialised (a match can persist
+	// mid-checkpoint); IDs are zero until flush.
+	StagedTriggers []Effect `json:"staged_triggers,omitempty"`
+
 	// IDs holds the monotonic counters behind every stable ID the
 	// library mints. Replay-safe: equal Setup + equal moves → equal
 	// IDs. Exported (rather than unexported fields with a custom

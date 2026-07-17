@@ -11,6 +11,10 @@
 //     PendingEffects queue + optional ResolveNext dispatch) for
 //     pending game actions, plus lifecycle events that subscribers
 //     hook for counterspells, redirection, and replacement
+//   - Trigger staging: event handlers StageTrigger effects into a
+//     buffer that the owning move drains via FlushTriggers at its
+//     checkpoints — IDs mint at flush, so replay never depends on
+//     handler registration order (see trigger.go)
 //
 // Effect vs core.Queue: the engine's core.MoveContext.Queue schedules
 // engine moves across a cascade (FIFO, with Block / resume for
