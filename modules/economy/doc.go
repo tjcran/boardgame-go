@@ -10,6 +10,9 @@
 //     "clamps at 0" silent floor would be a bug
 //   - Scaled, a helper for the common "base + per-turn growth capped"
 //     income rule
+//   - Basket, atomic multi-kind payment: validate a whole Cost against
+//     every pool before spending anything, so a multi-currency price
+//     (colored mana, gold+actions) never half-applies
 //
 // Pool doesn't allocate state — pass a *ccg.State pointer to its
 // methods, same shape as ccg.DeckPile. The library is opt-in: the
