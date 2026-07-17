@@ -158,6 +158,12 @@ func PlayerView(game *Game, state State, playerID string) State {
 	// be a no-op on the wire.
 	view.Log = redactedLog(state.Log, playerID)
 	view.Undone = redactedLog(state.Undone, playerID)
+	// Run the opt-in per-block redaction hook (nil leaves Blocks as-is —
+	// see Game.BlockView). Pending blocks are the one piece of state that
+	// PlayerView didn't already cover: a manual-target / selection prompt
+	// queued by Queue.Block or Queue.RequestTarget can carry hidden
+	// information in its Data/Target payload.
+	view.Blocks = redactedBlocks(game, state.Blocks, playerID)
 	// Engine-private bookkeeping that should never leave the server.
 	view.ActiveStack = nil
 	view.PendingNext = nil
