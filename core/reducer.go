@@ -104,9 +104,14 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		state.Blocks = append(state.Blocks[:idx], state.Blocks[idx+1:]...)
 	}
 
-	// Block gate: if blocks remain (after resume), refuse non-IgnoreBlocks
-	// moves so non-resume external work can't sneak past a pause.
-	if len(state.Blocks) > 0 {
+	// Block gate: pending blocks refuse non-IgnoreBlocks moves that are
+	// not resuming one of them, so unrelated external work can't sneak
+	// past a pause. A move that consumed a valid ResumeTag proceeds even
+	// when other blocks remain — a cascade can raise several prompts at
+	// once, and they must be answerable one at a time (gating resumes on
+	// "all blocks gone" would soft-lock the match; the remaining blocks
+	// keep gating every non-resume move).
+	if resumingBlock == nil && len(state.Blocks) > 0 {
 		move, err := resolveMove(game, state.Ctx, "", req.Move)
 		if err == nil && !move.IgnoreBlocks {
 			return rollback, ErrBlocked
