@@ -122,10 +122,14 @@ func NewMatchSeeded(game *Game, numPlayers int, setupData any, seed uint64) Stat
 	// reach into mc.Plugins via the API path.
 	st = runPluginSetup(game, st)
 
+	// Setup-time hooks are game code and get the same plugin surface a move
+	// would — a game that randomises its opening (first player, opening
+	// hands) does it from here.
+	env := newHookEnv(game, st, &Events{})
+
 	// Apply the active scope's TurnOrder.PlayOrder override and starting
 	// position. Same code path is used to enter a phase mid-game.
-	mc := &MoveContext{G: st.G, Ctx: st.Ctx}
-	st = applyTurnOrderFirst(game, st, mc)
+	st = applyTurnOrderFirst(game, st, env.mcNoEvents(st))
 
 	// Apply Turn.ActivePlayers, if configured for the start scope.
 	st = applyActivePlayersFromTurn(game, st)
@@ -134,12 +138,15 @@ func NewMatchSeeded(game *Game, numPlayers int, setupData any, seed uint64) Stat
 	// Events queued by these hooks go into a fresh queue and are drained
 	// here — without this, events.EndTurn() in phase.OnBegin would be
 	// silently dropped (BGIO bug #1237).
-	events := &Events{}
-	st = runPhaseOnBegin(game, st, events)
-	st = runTurnOnBegin(game, st, events)
-	drainMC := &MoveContext{G: st.G, Ctx: st.Ctx, Events: events}
-	st, _ = drainEvents(game, st, drainMC, events)
-	return st
+	st = runPhaseOnBegin(game, st, env)
+	st = runTurnOnBegin(game, st, env)
+	drainMC := env.mc(st, "")
+	st, _ = drainEvents(game, st, drainMC, env)
+
+	// Persist whatever the setup hooks did to plugin data, exactly as Apply
+	// does after a move. Without this a plugin whose API isn't a pointer
+	// into its private state would lose every setup-time mutation.
+	return flushPlugins(game, st, drainMC)
 }
 
 // PlayerView returns a copy of the state with G and plugin private data

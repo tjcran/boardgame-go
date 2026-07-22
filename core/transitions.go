@@ -13,6 +13,47 @@ package core
 // misbehaving game from infinite-looping the engine.
 const maxChainedMoves = 32
 
+// hookEnv is the ambient environment engine-invoked game code runs in: the
+// event queue shared with the surrounding drain loop, plus the plugin API
+// table resolved for this Apply.
+//
+// The two travel together through every transition helper because a hook
+// missing either one is silently, not loudly, broken: no queue means its
+// events are dropped (BGIO #1237), and no plugin table means mc.Random is
+// nil and its randomness quietly isn't random.
+//
+// The API objects are the *same* ones the surrounding move got, which is
+// what makes hook mutations persist: plugin APIs share a state pointer
+// with the persisted plugin data, and Apply flushes that data once through
+// the move's MoveContext. Rebuilding the table per hook would strand
+// mutations from any plugin that doesn't share a pointer.
+type hookEnv struct {
+	events  *Events
+	plugins map[string]any
+}
+
+// newHookEnv resolves a fresh plugin API table for state. Only for entry
+// points that run hooks outside a move (match setup, forced turn end);
+// Apply and applyStep construct hookEnv from the table they already hold.
+func newHookEnv(game *Game, state State, events *Events) *hookEnv {
+	return &hookEnv{events: events, plugins: buildPluginAPIs(game, state, "")}
+}
+
+// mc builds the MoveContext for a hook that is allowed to queue events.
+func (e *hookEnv) mc(state State, playerID string) *MoveContext {
+	return (&MoveContext{
+		G: state.G, Ctx: state.Ctx, PlayerID: playerID, Events: e.events,
+	}).attachPlugins(e.plugins)
+}
+
+// mcNoEvents is mc for the TurnOrder callbacks (Next) and Phase.Next, which
+// BGIO does not let queue transitions — they answer "who/what is next?",
+// they don't drive the rotation. They still get the plugin table: choosing
+// a random next player is a legitimate thing for a turn order to do.
+func (e *hookEnv) mcNoEvents(state State) *MoveContext {
+	return (&MoveContext{G: state.G, Ctx: state.Ctx}).attachPlugins(e.plugins)
+}
+
 // runChainedMove resolves and applies a move queued via Events.RunMove.
 // It re-uses the surrounding events queue so further events from the
 // chained move land in the same drain loop. Errors (unknown move,
@@ -31,14 +72,13 @@ func runChainedMove(game *Game, state State, parent *MoveContext, name string, a
 	if err != nil {
 		return state
 	}
-	mc := &MoveContext{
+	mc := (&MoveContext{
 		G:        state.G,
 		Ctx:      state.Ctx,
 		PlayerID: parent.PlayerID,
 		Events:   parent.Events,
-		Plugins:  parent.Plugins,
 		Context:  parent.Context,
-	}
+	}).attachPlugins(parent.Plugins)
 	mc.chainedMoves = parent.chainedMoves // share counter
 	nextG, err := move.Move(mc, args...)
 	if err != nil {
@@ -62,9 +102,9 @@ func runChainedMove(game *Game, state State, parent *MoveContext, name string, a
 // drainEvents flushes the events queue in order, applying each transition.
 // Some events can in turn enqueue more events (e.g. an OnEnd hook calling
 // SetPhase), so this drains until the queue is empty.
-func drainEvents(game *Game, state State, mc *MoveContext, events *Events) (State, error) {
+func drainEvents(game *Game, state State, mc *MoveContext, env *hookEnv) (State, error) {
 	for {
-		batch := events.drain()
+		batch := env.events.drain()
 		if len(batch) == 0 {
 			return state, nil
 		}
@@ -79,28 +119,28 @@ func drainEvents(game *Game, state State, mc *MoveContext, events *Events) (Stat
 					turn.MinMoves > 0 && state.Ctx.NumMoves < turn.MinMoves {
 					continue
 				}
-				state = endTurn(game, state, ev.turnNext, events)
+				state = endTurn(game, state, ev.turnNext, env)
 			case evEndPhase:
-				state = endPhase(game, state, "", events)
+				state = endPhase(game, state, "", env)
 			case evSetPhase:
-				state = endPhase(game, state, ev.phase, events)
+				state = endPhase(game, state, ev.phase, env)
 			case evEndStage:
-				state = endStage(game, state, mc.PlayerID, events)
+				state = endStage(game, state, mc.PlayerID, env)
 			case evSetStage:
 				if ev.stageOpts != nil {
-					state = setStageLong(game, state, mc.PlayerID, ev.stageOpts, events)
+					state = setStageLong(game, state, mc.PlayerID, ev.stageOpts, env)
 				} else {
-					state = setStage(game, state, mc.PlayerID, ev.stage, events)
+					state = setStage(game, state, mc.PlayerID, ev.stage, env)
 				}
 			case evEndGame:
 				state.Ctx.Gameover = ev.gameover
-				state = runGameOnEnd(game, state, events)
+				state = runGameOnEnd(game, state, env)
 			case evSetActivePlayers:
 				if ev.activeCfg != nil {
 					state = applySetActivePlayers(state, *ev.activeCfg)
 				}
 			case evRemovePlayer:
-				state = removePlayer(game, state, ev.playerID, events)
+				state = removePlayer(game, state, ev.playerID, env)
 			case evRunMove:
 				// Recursion bound: cap chained moves per drain so a
 				// poorly-written game doesn't infinite-loop.
@@ -122,14 +162,14 @@ func drainEvents(game *Game, state State, mc *MoveContext, events *Events) (Stat
 // nextPlayer, if non-empty, forces that player to be the new CurrentPlayer
 // instead of using the turn order (parity with BGIO's endTurn({next})).
 //
-// events is the shared queue: hooks called here queue into it and the
+// env carries the shared queue: hooks called here queue into it and the
 // outer drain loop picks them up.
-func endTurn(game *Game, state State, nextPlayer string, events *Events) State {
+func endTurn(game *Game, state State, nextPlayer string, env *hookEnv) State {
 	turn := game.scopeTurn(state.Ctx.Phase)
 
 	// Turn.OnEnd before rotating.
 	if turn != nil && turn.OnEnd != nil {
-		mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
+		mc := env.mc(state, "")
 		state.G = applyFnWrapHook(game, turn.OnEnd, GameMethodTurnOnEnd)(mc)
 		state = flushExtraLog(state, mc)
 	}
@@ -156,7 +196,7 @@ func endTurn(game *Game, state State, nextPlayer string, events *Events) State {
 			}
 		}
 	} else {
-		state = advancePlayOrderPos(game, state, turn, events)
+		state = advancePlayOrderPos(game, state, turn, env)
 		if state.Ctx.Gameover != nil {
 			return state
 		}
@@ -165,14 +205,14 @@ func endTurn(game *Game, state State, nextPlayer string, events *Events) State {
 	state.Ctx.Turn++
 
 	state = applyActivePlayersFromTurn(game, state)
-	state = runTurnOnBegin(game, state, events)
+	state = runTurnOnBegin(game, state, env)
 	return state
 }
 
 // advancePlayOrderPos consults the TurnOrder for the current phase to pick
 // the next PlayOrderPos. If Next returns nil, the phase ends (some orders
 // signal "we're done after this round").
-func advancePlayOrderPos(game *Game, state State, turn *TurnConfig, events *Events) State {
+func advancePlayOrderPos(game *Game, state State, turn *TurnConfig, env *hookEnv) State {
 	if len(state.Ctx.PlayOrder) == 0 {
 		// Everyone has been eliminated. Nothing to advance to.
 		return state
@@ -181,13 +221,13 @@ func advancePlayOrderPos(game *Game, state State, turn *TurnConfig, events *Even
 	if turn != nil && !turn.Order.IsDefault() {
 		order = turn.Order
 	}
-	mc := &MoveContext{G: state.G, Ctx: state.Ctx}
+	mc := env.mcNoEvents(state)
 	if order.Next == nil {
 		state.Ctx.PlayOrderPos = (state.Ctx.PlayOrderPos + 1) % len(state.Ctx.PlayOrder)
 	} else {
 		n := order.Next(mc)
 		if n == nil {
-			return endPhase(game, state, "", events)
+			return endPhase(game, state, "", env)
 		}
 		state.Ctx.PlayOrderPos = *n
 		if state.Ctx.PlayOrderPos >= len(state.Ctx.PlayOrder) {
@@ -223,11 +263,11 @@ func applyTurnOrderFirst(game *Game, state State, mc *MoveContext) State {
 
 // endPhase ends the current phase, runs OnEnd, transitions to nextPhase (or
 // the phase's static Next), runs OnBegin.
-func endPhase(game *Game, state State, nextPhase string, events *Events) State {
+func endPhase(game *Game, state State, nextPhase string, env *hookEnv) State {
 	if state.Ctx.Phase == "" {
 		if nextPhase != "" {
 			state.Ctx.Phase = nextPhase
-			state = runPhaseEnter(game, state, events)
+			state = runPhaseEnter(game, state, env)
 		}
 		return state
 	}
@@ -238,7 +278,7 @@ func endPhase(game *Game, state State, nextPhase string, events *Events) State {
 
 	// Whenever a phase ends, the current player's turn is first ended.
 	if turn := game.scopeTurn(state.Ctx.Phase); turn != nil && turn.OnEnd != nil {
-		mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
+		mc := env.mc(state, "")
 		state.G = applyFnWrapHook(game, turn.OnEnd, GameMethodTurnOnEnd)(mc)
 		state = flushExtraLog(state, mc)
 	}
@@ -246,13 +286,13 @@ func endPhase(game *Game, state State, nextPhase string, events *Events) State {
 	// Resolve next phase.
 	target := nextPhase
 	if target == "" {
-		mc := &MoveContext{G: state.G, Ctx: state.Ctx}
+		mc := env.mcNoEvents(state)
 		target = current.resolveNextPhase(mc)
 	}
 
 	// OnEnd of the phase we're leaving.
 	if current.OnEnd != nil {
-		mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
+		mc := env.mc(state, "")
 		state.G = applyFnWrapHook(game, current.OnEnd, GameMethodPhaseOnEnd)(mc)
 		state = flushExtraLog(state, mc)
 	}
@@ -270,29 +310,29 @@ func endPhase(game *Game, state State, nextPhase string, events *Events) State {
 	state.Ctx.Turn++
 
 	if target == "" {
-		state = advancePlayOrderPos(game, state, game.Turn, events)
+		state = advancePlayOrderPos(game, state, game.Turn, env)
 		state = applyActivePlayersFromTurn(game, state)
-		state = runTurnOnBegin(game, state, events)
+		state = runTurnOnBegin(game, state, env)
 		return state
 	}
-	state = runPhaseEnter(game, state, events)
+	state = runPhaseEnter(game, state, env)
 	return state
 }
 
 // runPhaseEnter runs the entry sequence for the phase named in state.Ctx.Phase.
 // Used both for the starting phase (from NewMatch) and for transitions.
-func runPhaseEnter(game *Game, state State, events *Events) State {
-	mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
+func runPhaseEnter(game *Game, state State, env *hookEnv) State {
+	mc := env.mc(state, "")
 	state = applyTurnOrderFirst(game, state, mc)
 	state = applyActivePlayersFromTurn(game, state)
-	state = runPhaseOnBegin(game, state, events)
-	state = runTurnOnBegin(game, state, events)
+	state = runPhaseOnBegin(game, state, env)
+	state = runTurnOnBegin(game, state, env)
 	return state
 }
 
 // runPhaseOnBegin runs the active phase's OnBegin hook, if any. Events queued
-// by the hook land in `events` for the surrounding drain to pick up.
-func runPhaseOnBegin(game *Game, state State, events *Events) State {
+// by the hook land in env.events for the surrounding drain to pick up.
+func runPhaseOnBegin(game *Game, state State, env *hookEnv) State {
 	if state.Ctx.Phase == "" {
 		return state
 	}
@@ -300,19 +340,19 @@ func runPhaseOnBegin(game *Game, state State, events *Events) State {
 	if !ok || p.OnBegin == nil {
 		return state
 	}
-	mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
+	mc := env.mc(state, "")
 	state.G = applyFnWrapHook(game, p.OnBegin, GameMethodPhaseOnBegin)(mc)
 	state = flushExtraLog(state, mc)
 	return state
 }
 
 // runTurnOnBegin runs the active scope's Turn.OnBegin hook, if any.
-func runTurnOnBegin(game *Game, state State, events *Events) State {
+func runTurnOnBegin(game *Game, state State, env *hookEnv) State {
 	turn := game.scopeTurn(state.Ctx.Phase)
 	if turn == nil || turn.OnBegin == nil {
 		return state
 	}
-	mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
+	mc := env.mc(state, "")
 	state.G = applyFnWrapHook(game, turn.OnBegin, GameMethodTurnOnBegin)(mc)
 	state = flushExtraLog(state, mc)
 	return state
@@ -333,18 +373,18 @@ func flushExtraLog(state State, mc *MoveContext) State {
 // from this hook; we pass the queue anyway and rely on the absence of
 // further calls. (No hook is fired after OnEnd, so queueing here is a
 // no-op in practice.)
-func runGameOnEnd(game *Game, state State, events *Events) State {
+func runGameOnEnd(game *Game, state State, env *hookEnv) State {
 	if game.OnEnd == nil {
 		return state
 	}
-	mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
+	mc := env.mc(state, "")
 	state.G = applyFnWrapHook(game, game.OnEnd, GameMethodGameOnEnd)(mc)
 	state = flushExtraLog(state, mc)
 	return state
 }
 
 // setStage moves a player into a named stage. Fires stage.OnBegin if set.
-func setStage(game *Game, state State, playerID, stageName string, events *Events) State {
+func setStage(game *Game, state State, playerID, stageName string, env *hookEnv) State {
 	if state.Ctx.ActivePlayers == nil {
 		state.Ctx.ActivePlayers = map[string]string{}
 	}
@@ -354,7 +394,7 @@ func setStage(game *Game, state State, playerID, stageName string, events *Event
 	}
 	// Fire stage.OnBegin if the new stage defines one.
 	if stage := lookupStage(game, state.Ctx.Phase, stageName); stage != nil && stage.OnBegin != nil {
-		mc := &MoveContext{G: state.G, Ctx: state.Ctx, PlayerID: playerID, Events: events}
+		mc := env.mc(state, playerID)
 		state.G = applyFnWrapHook(game, stage.OnBegin, GameMethodStageOnBegin)(mc)
 		state = flushExtraLog(state, mc)
 	}
@@ -362,8 +402,8 @@ func setStage(game *Game, state State, playerID, stageName string, events *Event
 }
 
 // setStageLong is the long-form variant carrying per-call min/max.
-func setStageLong(game *Game, state State, playerID string, opts *setStageOpts, events *Events) State {
-	state = setStage(game, state, playerID, opts.stage, events)
+func setStageLong(game *Game, state State, playerID string, opts *setStageOpts, env *hookEnv) State {
+	state = setStage(game, state, playerID, opts.stage, env)
 	if opts.hasMin {
 		if state.StageMinMoves == nil {
 			state.StageMinMoves = map[string]int{}
@@ -381,7 +421,7 @@ func setStageLong(game *Game, state State, playerID string, opts *setStageOpts, 
 
 // endStage removes the player from the active set (or rotates them to the
 // stage's configured Next). Fires the leaving stage's OnEnd hook.
-func endStage(game *Game, state State, playerID string, events *Events) State {
+func endStage(game *Game, state State, playerID string, env *hookEnv) State {
 	if state.Ctx.ActivePlayers == nil {
 		return state
 	}
@@ -389,7 +429,7 @@ func endStage(game *Game, state State, playerID string, events *Events) State {
 
 	// Fire OnEnd before mutating state.
 	if stage := lookupStage(game, state.Ctx.Phase, currentStage); stage != nil && stage.OnEnd != nil {
-		mc := &MoveContext{G: state.G, Ctx: state.Ctx, PlayerID: playerID, Events: events}
+		mc := env.mc(state, playerID)
 		state.G = applyFnWrapHook(game, stage.OnEnd, GameMethodStageOnEnd)(mc)
 		state = flushExtraLog(state, mc)
 	}
@@ -411,7 +451,7 @@ func endStage(game *Game, state State, playerID string, events *Events) State {
 
 	if nextStage != "" {
 		// Move to the next stage (which fires that stage's OnBegin).
-		state = setStage(game, state, playerID, nextStage, events)
+		state = setStage(game, state, playerID, nextStage, env)
 		return state
 	}
 
@@ -453,7 +493,7 @@ func lookupStage(game *Game, phase, stage string) *StageConfig {
 // PlayOrder, adjusts PlayOrderPos so the next call to advancePlayOrderPos
 // lands on the right seat, and ends the turn if the eliminated player was
 // the current player.
-func removePlayer(game *Game, state State, playerID string, events *Events) State {
+func removePlayer(game *Game, state State, playerID string, env *hookEnv) State {
 	idx := -1
 	for i, p := range state.Ctx.PlayOrder {
 		if p == playerID {
@@ -490,7 +530,7 @@ func removePlayer(game *Game, state State, playerID string, events *Events) Stat
 
 	if wasCurrent {
 		// End the turn so the next player gets a fresh turn-begin.
-		state = endTurn(game, state, "", events)
+		state = endTurn(game, state, "", env)
 	}
 
 	// Also remove from any stage / active map.

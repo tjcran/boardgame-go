@@ -135,6 +135,24 @@ func runPluginSetup(game *Game, state State) State {
 	return state
 }
 
+// attachPlugins wires a resolved plugin API table onto mc, including the
+// mc.Random ergonomic shortcut, and returns mc for chaining.
+//
+// Single authority: every MoveContext the engine hands to game code —
+// external moves, chained moves and turn/phase/stage hooks alike — is
+// built through here. Game code cannot tell which path invoked it, so the
+// plugin surface must not differ between them; a hook that saw a nil
+// mc.Random would fall back to whatever the game does on nil, and a
+// "randomised" hook that silently isn't random is indistinguishable from
+// a working one.
+func (mc *MoveContext) attachPlugins(plugins map[string]any) *MoveContext {
+	mc.Plugins = plugins
+	if r, ok := plugins[RandomPluginName].(*Random); ok {
+		mc.Random = r
+	}
+	return mc
+}
+
 // buildPluginAPIs constructs the API objects exposed to a move. Returns the
 // map and a per-plugin reference to the plugin data so Flush can persist
 // updates.
