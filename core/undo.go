@@ -49,6 +49,10 @@ func Undo(game *Game, state State) (State, error) {
 	// OnUndo intercept: lets the game scrub transient fields that
 	// shouldn't replay on undo (animations, sounds, hint highlights).
 	if game.OnUndo != nil {
+		// Deliberately no plugin table (so no mc.Random): OnUndo runs on a
+		// rollback path with nothing to flush into, and letting an undo
+		// consume PRNG state would advance a stream the redo can no longer
+		// reproduce. Scrubbing transient fields needs no entropy.
 		mc := &MoveContext{G: last.G, Ctx: last.Ctx, Events: &Events{}}
 		last.G = game.OnUndo(mc)
 	}

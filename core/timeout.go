@@ -16,9 +16,12 @@ func ForceEndTurn(game *Game, state State) State {
 	if state.Ctx.Gameover != nil {
 		return state
 	}
-	events := &Events{}
-	mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
-	state = endTurn(game, state, "", events)
-	state, _ = drainEvents(game, state, mc, events)
-	return state
+	// Turn.OnEnd fires from here just as it does from events.EndTurn, so it
+	// gets the same plugin surface — and the same post-hook flush.
+	env := newHookEnv(game, state, &Events{})
+	mc := env.mc(state, "")
+	state = endTurn(game, state, "", env)
+	state, _ = drainEvents(game, state, mc, env)
+	mc.G, mc.Ctx = state.G, state.Ctx
+	return flushPlugins(game, state, mc)
 }

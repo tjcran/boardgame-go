@@ -147,22 +147,18 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		moveCtx, cancel = context.WithTimeout(ctx, move.Timeout)
 		defer cancel()
 	}
-	mc := &MoveContext{
+	mc := (&MoveContext{
 		G:             state.G,
 		Ctx:           state.Ctx,
 		PlayerID:      req.PlayerID,
 		Events:        events,
-		Plugins:       plugins,
 		Context:       moveCtx,
 		Queue:         queue,
 		ResumingBlock: resumingBlock,
-	}
-	// Ergonomic shortcut: if the Random plugin is registered, expose its
-	// API as mc.Random so moves can write `mc.Random.D6()` instead of
-	// `mc.Plugins["random"].(*core.Random).D6()`.
-	if r, ok := plugins[RandomPluginName].(*Random); ok {
-		mc.Random = r
-	}
+	}).attachPlugins(plugins)
+	// Hooks fired during this move share the move's plugin APIs, so their
+	// mutations land in the same objects flushPlugins persists below.
+	env := &hookEnv{events: events, plugins: plugins}
 
 	// Stale-state guard. Opt-in: req.StateID=0 means "don't check"
 	// (server-internal callers pass 0 because they always have the latest
@@ -238,7 +234,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 
 	// Drain events queued from the move + onMove first. These are explicit
 	// transitions the move asked for (events.EndTurn, events.SetStage, …).
-	next, err = drainEvents(game, next, mc, events)
+	next, err = drainEvents(game, next, mc, env)
 	if err != nil {
 		return state, err
 	}
@@ -247,15 +243,15 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// (so ctx.CurrentPlayer in EndIf is the player who just moved). Then
 	// phase.EndIf, then per-stage maxMoves cleanup, then turn.EndIf/maxMoves.
 	if next.Ctx.Gameover == nil && game.EndIf != nil {
-		mc2 := &MoveContext{G: next.G, Ctx: next.Ctx, PlayerID: req.PlayerID, Events: events}
+		mc2 := env.mc(next, req.PlayerID)
 		if res := game.EndIf(mc2); res != nil {
 			next.Ctx.Gameover = res
-			next = runGameOnEnd(game, next, events)
+			next = runGameOnEnd(game, next, env)
 		}
 	}
 
 	if next.Ctx.Gameover == nil {
-		next = checkPhaseEndIf(game, next, events)
+		next = checkPhaseEndIf(game, next, env)
 	}
 
 	if next.Ctx.Gameover == nil {
@@ -263,11 +259,11 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	}
 
 	if next.Ctx.Gameover == nil {
-		next = checkTurnAutoEnd(game, next, move, events)
+		next = checkTurnAutoEnd(game, next, move, env)
 	}
 
 	// Drain anything queued by the EndIf / auto-end paths above.
-	next, err = drainEvents(game, next, mc, events)
+	next, err = drainEvents(game, next, mc, env)
 	if err != nil {
 		return state, err
 	}
@@ -359,18 +355,15 @@ func applyStep(ctx context.Context, game *Game, state State, action QueuedAction
 	events := &Events{}
 	queue := &Queue{}
 	plugins := buildPluginAPIs(game, state, action.PlayerID)
-	mc := &MoveContext{
+	mc := (&MoveContext{
 		G:        state.G,
 		Ctx:      state.Ctx,
 		PlayerID: action.PlayerID,
 		Events:   events,
-		Plugins:  plugins,
 		Context:  ctx,
 		Queue:    queue,
-	}
-	if r, ok := plugins[RandomPluginName].(*Random); ok {
-		mc.Random = r
-	}
+	}).attachPlugins(plugins)
+	env := &hookEnv{events: events, plugins: plugins}
 
 	moveFn := applyFnWrapMove(game, move.Move)
 	nextG, err := moveFn(mc, action.Args...)
@@ -395,7 +388,7 @@ func applyStep(ctx context.Context, game *Game, state State, action QueuedAction
 	if err := validatePlugins(game, next); err != nil {
 		return state, err
 	}
-	next, err = drainEvents(game, next, mc, events)
+	next, err = drainEvents(game, next, mc, env)
 	if err != nil {
 		return state, err
 	}
@@ -474,27 +467,27 @@ func resolveMove(game *Game, ctx Ctx, stage, name string) (Move, error) {
 }
 
 // checkTurnAutoEnd evaluates turn.EndIf and turn.MaxMoves and ends the turn
-// if either fires. events is the shared queue from the outer drain loop.
-func checkTurnAutoEnd(game *Game, state State, move Move, events *Events) State {
+// if either fires. env carries the shared queue from the outer drain loop.
+func checkTurnAutoEnd(game *Game, state State, move Move, env *hookEnv) State {
 	turn := game.scopeTurn(state.Ctx.Phase)
 	if turn == nil {
 		return state
 	}
 	if turn.EndIf != nil {
-		mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
+		mc := env.mc(state, "")
 		if end, next := turn.EndIf(mc); end {
-			return endTurn(game, state, next, events)
+			return endTurn(game, state, next, env)
 		}
 	}
 	if turn.MaxMoves > 0 && state.Ctx.NumMoves >= turn.MaxMoves && !move.NoLimit {
-		return endTurn(game, state, "", events)
+		return endTurn(game, state, "", env)
 	}
 	return state
 }
 
 // checkPhaseEndIf evaluates phase.EndIf for the current phase and rotates
 // phases if it fires.
-func checkPhaseEndIf(game *Game, state State, events *Events) State {
+func checkPhaseEndIf(game *Game, state State, env *hookEnv) State {
 	if state.Ctx.Phase == "" {
 		return state
 	}
@@ -502,12 +495,12 @@ func checkPhaseEndIf(game *Game, state State, events *Events) State {
 	if !ok || p.EndIf == nil {
 		return state
 	}
-	mc := &MoveContext{G: state.G, Ctx: state.Ctx, Events: events}
+	mc := env.mc(state, "")
 	end, next := p.EndIf(mc)
 	if !end {
 		return state
 	}
-	return endPhase(game, state, next, events)
+	return endPhase(game, state, next, env)
 }
 
 // bumpStageMoveCount records a move against the per-active-player counter

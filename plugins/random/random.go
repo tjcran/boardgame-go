@@ -13,7 +13,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"hash/fnv"
+	"log/slog"
 	"math"
+	"sync"
 
 	"github.com/tjcran/boardgame-go/core"
 )
@@ -22,13 +24,23 @@ import (
 // MoveContext.Plugins and State.Plugins. Equals core.RandomPluginName.
 const PluginName = core.RandomPluginName
 
+// unseededFallback is the PRNG state used when no seed source supplied
+// entropy. It is a constant, so every match that reaches it shares one
+// stream — see resolveSeed, which warns when that happens.
+const unseededFallback = 0xDEADBEEFCAFEBABE
+
 // Plugin is the plugin instance. Construct with New(seed).
 type Plugin struct {
 	seed uint64
+
+	// warnedUnseeded keeps the "no entropy anywhere" warning to one line
+	// per registered plugin instead of one per match created.
+	warnedUnseeded sync.Once
 }
 
 // New returns a Random plugin. seed can be string, int, int64, uint64, or
-// nil (use Game.Seed instead). String seeds are FNV-hashed.
+// nil ("no explicit seed" — the match seed is used instead; see
+// resolveSeed for the full precedence). String seeds are FNV-hashed.
 func New(seed any) *Plugin {
 	return &Plugin{seed: seedToUint64(seed)}
 }
@@ -42,20 +54,44 @@ type state struct {
 // Name implements core.Plugin.
 func (p *Plugin) Name() string { return PluginName }
 
-// Setup initialises the PRNG with this plugin's seed, falling back to
-// Game.Seed if the plugin wasn't given one explicitly.
-func (p *Plugin) Setup(_ core.G, _ core.Ctx, game *core.Game) any {
-	s := p.seed
-	if s == 0 && game.Seed != nil {
-		s = seedToUint64(game.Seed)
+// Setup initialises the PRNG for a new match. See resolveSeed for where
+// the starting state comes from.
+func (p *Plugin) Setup(_ core.G, ctx core.Ctx, game *core.Game) any {
+	return &state{S: p.resolveSeed(ctx, game)}
+}
+
+// resolveSeed picks the PRNG's starting state, most-specific source first:
+//
+//  1. random.New(seed) — the caller pinned a stream on purpose (tests,
+//     replay harnesses, reproducible benchmarks).
+//  2. Game.Seed — the game definition pinned one; Game.Seed documents
+//     itself as the override for the engine's per-match seed.
+//  3. Ctx.Seed — the per-match secret entropy assigned at creation time
+//     (match.Manager generates it, NewMatchSeeded plumbs it). This is the
+//     production path, and the reason ReplaySeeded reproduces a match: it
+//     rebuilds from NewMatchSeeded with the same value, so the stream that
+//     derives from it is the same stream.
+//  4. A constant, last resort. Only reachable when nothing above supplied
+//     entropy — an unseeded core.NewMatch plus random.New(nil) — which
+//     means every match on the process really does replay one identical
+//     stream. Warn rather than be silently deterministic.
+func (p *Plugin) resolveSeed(ctx core.Ctx, game *core.Game) uint64 {
+	if p.seed != 0 {
+		return p.seed
 	}
-	if s == 0 {
-		// No seed → still deterministic, just from a constant. A real-world
-		// caller without a seed should pass `time.Now().UnixNano()` or
-		// similar from outside the engine.
-		s = 0xDEADBEEFCAFEBABE
+	if game != nil && game.Seed != nil {
+		if s := seedToUint64(game.Seed); s != 0 {
+			return s
+		}
 	}
-	return &state{S: s}
+	if ctx.Seed != 0 {
+		return ctx.Seed
+	}
+	p.warnedUnseeded.Do(func() {
+		slog.Warn("random plugin has no seed source: plugin seed, Game.Seed and Ctx.Seed are all zero, so every match will replay one identical PRNG stream. Create matches via match.Manager or core.NewMatchSeeded, or pass random.New(seed) for deliberate determinism.",
+			"plugin", PluginName)
+	})
+	return unseededFallback
 }
 
 // Decode implements core.PluginDecode: after a persistence round-trip
@@ -78,7 +114,7 @@ func (p *Plugin) Decode(raw json.RawMessage) (any, error) {
 // manager's PluginDecode pass (older callers, hand-rolled loaders)
 // arrives as generic JSON — rather than panicking mid-serve and
 // bricking the match, degrade to a best-effort rebuild.
-func (p *Plugin) API(data any, _ core.G, _ core.Ctx, _ string, _ *core.Game) any {
+func (p *Plugin) API(data any, _ core.G, ctx core.Ctx, _ string, game *core.Game) any {
 	switch d := data.(type) {
 	case *state:
 		return core.NewRandomFromState(&d.S)
@@ -88,13 +124,10 @@ func (p *Plugin) API(data any, _ core.G, _ core.Ctx, _ string, _ *core.Game) any
 			return core.NewRandomFromState(&s.S)
 		}
 	}
-	// Unknown shape — fresh state from the plugin seed keeps the match
-	// serviceable (future draws remain random, just not the original
-	// sequence).
-	s := &state{S: p.seed}
-	if s.S == 0 {
-		s.S = 0xDEADBEEFCAFEBABE
-	}
+	// Unknown shape — a fresh state from the same sources Setup uses keeps
+	// the match serviceable (future draws remain random, just not the
+	// original sequence).
+	s := &state{S: p.resolveSeed(ctx, game)}
 	return core.NewRandomFromState(&s.S)
 }
 
