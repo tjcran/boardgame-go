@@ -21,6 +21,16 @@ type Pool struct {
 	// Cap is the maximum value Gain and Set will clamp to. 0 means
 	// uncapped — values may grow arbitrarily.
 	Cap int
+	// AllowNegative permits Set to leave the pool below 0 instead of
+	// flooring at 0. Off by default — most pools model a non-negative
+	// resource (mana, gold, a counter). Set this for a pool whose
+	// semantics require preserving an exact negative value (e.g. a
+	// life/damage pool that must track overkill precisely rather than
+	// clamp it away). Cap still applies as a ceiling either way; Gain
+	// and Spend are unaffected (Gain only ever adds a non-negative
+	// amount, Spend already refuses to go below 0 via ErrInsufficient
+	// rather than a silent floor).
+	AllowNegative bool
 }
 
 // Current returns the pool's current value. Wraps s.Counters; returns
@@ -77,12 +87,13 @@ func (p Pool) Spend(s *ccg.State, n int) error {
 	return nil
 }
 
-// Set overwrites the pool to exactly n, clamped to [0, Cap]. Returns
-// the final value (post-clamp). The transition fires the ccg
-// counter_changed event with the applied delta — handlers see the same
-// signal as if Gain or Spend had produced this outcome.
+// Set overwrites the pool to exactly n, clamped to [0, Cap] — or to
+// (-∞, Cap] when AllowNegative is set, in which case n may be
+// negative. Returns the final value (post-clamp). The transition fires
+// the ccg counter_changed event with the applied delta — handlers see
+// the same signal as if Gain or Spend had produced this outcome.
 func (p Pool) Set(s *ccg.State, n int) int {
-	if n < 0 {
+	if !p.AllowNegative && n < 0 {
 		n = 0
 	}
 	if p.Cap > 0 && n > p.Cap {
@@ -90,7 +101,11 @@ func (p Pool) Set(s *ccg.State, n int) int {
 	}
 	delta := n - p.Current(s)
 	if delta != 0 {
-		s.AddCounter(p.Owner, p.Kind, delta)
+		if p.AllowNegative {
+			s.AddCounterSigned(p.Owner, p.Kind, delta)
+		} else {
+			s.AddCounter(p.Owner, p.Kind, delta)
+		}
 	}
 	return n
 }

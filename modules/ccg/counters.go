@@ -37,7 +37,18 @@ var ErrInsufficientCounters = errors.New("ccg: insufficient counters")
 // total. A counter whose new total is 0 is removed from the entity's
 // counter map; reading it returns 0 either way.
 func (s *State) AddCounter(id EntityID, kind string, n int) {
-	s.changeCounter(id, kind, n)
+	s.changeCounter(id, kind, n, false)
+}
+
+// AddCounterSigned behaves exactly like AddCounter, except the
+// resulting total is NOT floored at 0 — it may go negative. Use this
+// for a counter whose semantics require preserving an exact signed
+// value (a resource pool that must track overkill/underflow exactly,
+// rather than a non-negative count). Publishes EventCounterChanged the
+// same as AddCounter; a total that lands on exactly 0 is still removed
+// from the entity's counter map (reading it returns 0 either way).
+func (s *State) AddCounterSigned(id EntityID, kind string, n int) {
+	s.changeCounter(id, kind, n, true)
 }
 
 // RemoveCounter is sugar for AddCounter(id, kind, -n). n is the
@@ -46,7 +57,7 @@ func (s *State) RemoveCounter(id EntityID, kind string, n int) {
 	if n < 0 {
 		return
 	}
-	s.changeCounter(id, kind, -n)
+	s.changeCounter(id, kind, -n, false)
 }
 
 // Counters returns the current count of `kind` on `id`. Returns 0 for
@@ -103,8 +114,8 @@ func (s *State) TransferCounters(from, to EntityID, kind string, n int) error {
 	if readCountersFromAttrs(fe.Attrs)[kind] < n {
 		return ErrInsufficientCounters
 	}
-	s.changeCounter(from, kind, -n)
-	s.changeCounter(to, kind, n)
+	s.changeCounter(from, kind, -n, false)
+	s.changeCounter(to, kind, n, false)
 	return nil
 }
 
@@ -112,8 +123,9 @@ func (s *State) TransferCounters(from, to EntityID, kind string, n int) error {
 // Reads-modifies-writes the entity's counter sub-map under
 // CountersAttrKey, canonicalising it to map[string]int (the JSON
 // unmarshal form is map[string]any; this re-stamps on first write
-// after a state reload).
-func (s *State) changeCounter(id EntityID, kind string, signedDelta int) {
+// after a state reload). allowNegative skips the floor-at-0 clamp —
+// see AddCounterSigned.
+func (s *State) changeCounter(id EntityID, kind string, signedDelta int, allowNegative bool) {
 	e, ok := s.Entities[id]
 	if !ok {
 		return
@@ -124,7 +136,7 @@ func (s *State) changeCounter(id EntityID, kind string, signedDelta int) {
 	}
 	before := current[kind]
 	after := before + signedDelta
-	if after < 0 {
+	if after < 0 && !allowNegative {
 		after = 0
 	}
 	applied := after - before

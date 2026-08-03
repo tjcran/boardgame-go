@@ -1036,6 +1036,65 @@ func TestAddCounterClampsAtZero(t *testing.T) {
 	}
 }
 
+func TestAddCounterSignedAllowsNegative(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", nil)
+	s.AddCounter(id, "x", 3)
+
+	var events []ccg.Event
+	s.Subscribe(ccg.MatchType(ccg.EventCounterChanged), func(_ *ccg.State, e ccg.Event) {
+		events = append(events, e)
+	})
+
+	// Same shape as TestAddCounterClampsAtZero (remove 10 from a total
+	// of 3), but via the signed variant — the full delta applies and
+	// the total goes negative instead of clamping.
+	s.AddCounterSigned(id, "x", -10)
+	if got := s.Counters(id, "x"); got != -7 {
+		t.Fatalf("signed counter should go negative: got %d, want -7", got)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Data["delta"] != -10 {
+		t.Fatalf("applied delta: want -10 (unclamped), got %v", events[0].Data["delta"])
+	}
+	if events[0].Data["total_after"] != -7 {
+		t.Fatalf("total_after: want -7, got %v", events[0].Data["total_after"])
+	}
+}
+
+func TestAddCounterSignedRoundTripsThroughJSON(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", nil)
+	s.AddCounterSigned(id, "x", -4)
+
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s2 := ccg.NewState()
+	if err := json.Unmarshal(raw, s2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := s2.Counters(id, "x"); got != -4 {
+		t.Fatalf("negative counter after JSON round-trip: got %d, want -4", got)
+	}
+}
+
+func TestAddCounterSignedRemovedWhenTotalReachesZero(t *testing.T) {
+	s := ccg.NewState()
+	id := s.NewEntity("creature", "0", nil)
+	s.AddCounterSigned(id, "x", -5)
+	s.AddCounterSigned(id, "x", 5)
+	if got := s.Counters(id, "x"); got != 0 {
+		t.Fatalf("Counters after returning to 0: got %d, want 0", got)
+	}
+	if all := s.AllCounters(id); len(all) != 0 {
+		t.Fatalf("AllCounters should be empty once the total is exactly 0, got %v", all)
+	}
+}
+
 func TestAddCounterNoOpDoesNotPublish(t *testing.T) {
 	s := ccg.NewState()
 	id := s.NewEntity("creature", "0", nil)
