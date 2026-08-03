@@ -118,15 +118,34 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		}
 	}
 
-	// Player must be allowed to move in this scope. AnyPlayer moves
-	// (concede / forfeit / opponent-forced timeout) skip the ownership
-	// check — resolve them from the default scope instead of the
-	// caller's (nonexistent) stage.
+	// Player must be allowed to move in this scope. Two exemptions:
+	//
+	//   - Answering a block addressed to you. A BlockSpec names the one
+	//     player who may resolve it and findBlock matches on PlayerID, so
+	//     consuming a ResumeTag above already proved this caller is that
+	//     player — the engine asked them a question and must accept the
+	//     answer whether or not they hold the turn. Without this, an
+	//     out-of-turn prompt is a deadlock rather than a pause: its owner
+	//     is refused with ErrWrongPlayer while every other seat is refused
+	//     with ErrBlocked on that same unanswered block, and only a move
+	//     that is both AnyPlayer and IgnoreBlocks can break it. Games can
+	//     work around it by pairing each such block with SetActivePlayers,
+	//     but that makes every opener predict how many moves the answer
+	//     takes — which no opener can do once one answer raises the next
+	//     prompt. Their stage (empty when ActivePlayers doesn't list them,
+	//     including when it is nil) still scopes the move lookup, so a
+	//     stage-scoped resume move keeps resolving from its stage table.
+	//   - AnyPlayer moves (concede / forfeit / opponent-forced timeout)
+	//     skip the ownership check — resolve them from the default scope
+	//     instead of the caller's (nonexistent) stage.
 	stage, authErr := authorizedStage(state.Ctx, req.PlayerID)
 	if authErr != nil {
-		if move, err := resolveMove(game, state.Ctx, "", req.Move); err == nil && move.AnyPlayer {
+		switch move, err := resolveMove(game, state.Ctx, "", req.Move); {
+		case resumingBlock != nil:
+			stage = state.Ctx.ActivePlayers[req.PlayerID]
+		case err == nil && move.AnyPlayer:
 			stage = ""
-		} else {
+		default:
 			return rollback, authErr
 		}
 	}
