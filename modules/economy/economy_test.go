@@ -166,6 +166,39 @@ func TestPoolSetNegativeClampsToZero(t *testing.T) {
 	}
 }
 
+func TestPoolSetAllowNegativePreservesNegativeValue(t *testing.T) {
+	s, id := newPlayerState()
+	hp := economy.Pool{Owner: id, Kind: "hp", Cap: 30, AllowNegative: true}
+	hp.Set(s, 6)
+	final := hp.Set(s, -6)
+	if final != -6 {
+		t.Errorf("Set(-6) with AllowNegative should return -6, got %d", final)
+	}
+	if got := hp.Current(s); got != -6 {
+		t.Errorf("Current after Set(-6) = %d, want -6", got)
+	}
+}
+
+func TestPoolSetAllowNegativeStillClampsToCap(t *testing.T) {
+	s, id := newPlayerState()
+	hp := economy.Pool{Owner: id, Kind: "hp", Cap: 30, AllowNegative: true}
+	final := hp.Set(s, 99)
+	if final != 30 {
+		t.Errorf("Set(99) on Cap=30 AllowNegative pool should still clamp to 30, got %d", final)
+	}
+}
+
+func TestPoolSetDefaultStillClampsAtZero(t *testing.T) {
+	// AllowNegative's zero value is false — an existing Pool literal
+	// with no AllowNegative field set keeps today's floor-at-0 Set
+	// behavior unchanged.
+	s, id := newPlayerState()
+	gold := economy.Pool{Owner: id, Kind: "gold"}
+	if final := gold.Set(s, -1); final != 0 {
+		t.Errorf("zero-value AllowNegative should still floor at 0, got %d", final)
+	}
+}
+
 func TestScaledLinear(t *testing.T) {
 	cases := []struct {
 		turn, base, per, max, want int
