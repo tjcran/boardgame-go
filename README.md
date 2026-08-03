@@ -236,7 +236,10 @@ for the full boardgame.io feature checklist.
 - Events from inside moves: `EndTurn`/`Pass`/`EndPhase`/`SetPhase`/
   `EndStage`/`SetStage`/`EndGame`/`SetActivePlayers`/`RemovePlayer`
 - Action queue / cascade primitive with pause/resume blocks (BlockSpec
-  + ResumeTag matching). MTG-style trigger stacks for free.
+  + ResumeTag matching). MTG-style trigger stacks for free. A block names
+  the player who must answer it, and that player may answer out of turn —
+  so reaction windows and "your opponent chooses" prompts need no
+  active-player bookkeeping of their own.
 - Undo / Redo with per-turn snapshots, `Game.DisableUndo`,
   per-move `Undoable`, log redaction via per-move `Redact`
 - Pure replay: `core.Replay` / `core.ReplayUntil(n)` reproduces a
