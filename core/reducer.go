@@ -30,16 +30,17 @@ type MoveRequest struct {
 // Public sentinel errors. They're surfaced through the transport with
 // matching HTTP statuses.
 var (
-	ErrInvalidMove    = errors.New("invalid move")
-	ErrWrongPlayer    = errors.New("not your turn")
-	ErrUnknownMove    = errors.New("unknown move")
-	ErrGameOver       = errors.New("game is over")
-	ErrMinMoves       = errors.New("minimum moves not reached")
-	ErrInactivePlayer = errors.New("player is not active")
-	ErrStaleState     = errors.New("client state is stale")
-	ErrBlocked        = errors.New("match has pending blocks; supply MoveRequest.ResumeTag")
+	ErrInvalidMove      = errors.New("invalid move")
+	ErrWrongPlayer      = errors.New("not your turn")
+	ErrUnknownMove      = errors.New("unknown move")
+	ErrGameOver         = errors.New("game is over")
+	ErrMinMoves         = errors.New("minimum moves not reached")
+	ErrInactivePlayer   = errors.New("player is not active")
+	ErrStaleState       = errors.New("client state is stale")
+	ErrBlocked          = errors.New("match has pending blocks; supply MoveRequest.ResumeTag")
 	ErrUnknownResumeTag = errors.New("ResumeTag does not match any pending block")
-	ErrDrainOverflow  = errors.New("cascade drain exceeded MaxDrainDepth")
+	ErrMoveNotInStage   = errors.New("move is not allowed in the player's current stage")
+	ErrDrainOverflow    = errors.New("cascade drain exceeded MaxDrainDepth")
 )
 
 // MaxDrainDepth caps how many drain steps the reducer will run for a
@@ -65,15 +66,17 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 //  2. Resolve ResumeTag against State.Blocks (removes one matching).
 //  3. If blocks remain and the move doesn't IgnoreBlocks, ErrBlocked.
 //  4. Check the player is allowed to move in the current scope.
-//  5. Resolve the move from the active phase or global table.
+//  5. Resolve the move from the player's stage table, then the active
+//     phase or global table. An Exclusive stage refuses a move that is
+//     not in its own table (ErrMoveNotInStage).
 //  6. Run the move function -> new G.
 //  7. Run turn.OnMove and count the move (unless NoLimit).
 //  8. Drain queued events (endTurn, setStage, ...).
 //  9. Check Game.EndIf, phase.EndIf, turn.EndIf / MaxMoves.
 //  10. Bump State.StateID once.
 //  11. Drain State.Queue (cascade). Each drain step runs through
-//      applyOne with a Parent log index; the outer state-ID stays put.
-//      Pauses on the first non-empty Blocks set.
+//     applyOne with a Parent log index; the outer state-ID stays put.
+//     Pauses on the first non-empty Blocks set.
 //
 // On any error after the external move starts, the returned state
 // equals the pre-Apply state (cascades are atomic).
@@ -155,6 +158,20 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	move, err := resolveMove(game, state.Ctx, stage, req.Move)
 	if err != nil {
 		return rollback, err
+	}
+
+	// An Exclusive stage confines its players to its own move table,
+	// so a name that resolved from the phase/global fallback is refused.
+	// The same two moves the ownership check exempts stay legal here, for
+	// the same reasons: AnyPlayer moves (concede / forfeit / timeout) and
+	// the answer to a block addressed to this caller.
+	if stage != "" && resumingBlock == nil && !move.AnyPlayer {
+		if sc := lookupStage(game, state.Ctx.Phase, stage); sc != nil && sc.Exclusive {
+			if _, ok := sc.Moves[req.Move]; !ok {
+				return rollback, fmt.Errorf("%w: move=%q stage=%q",
+					ErrMoveNotInStage, req.Move, stage)
+			}
+		}
 	}
 
 	events := &Events{}

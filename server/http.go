@@ -170,12 +170,12 @@ func (s *Server) handleListGames(w http.ResponseWriter, _ *http.Request) {
 // ---- list matches ---------------------------------------------------------
 
 type matchSummary struct {
-	MatchID   string           `json:"matchID"`
-	Players   []playerSummary  `json:"players"`
-	SetupData any              `json:"setupData,omitempty"`
-	GameName  string           `json:"gameName"`
-	CreatedAt int64            `json:"createdAt"`
-	Ctx       core.Ctx         `json:"ctx,omitempty"`
+	MatchID   string          `json:"matchID"`
+	Players   []playerSummary `json:"players"`
+	SetupData any             `json:"setupData,omitempty"`
+	GameName  string          `json:"gameName"`
+	CreatedAt int64           `json:"createdAt"`
+	Ctx       core.Ctx        `json:"ctx,omitempty"`
 }
 
 type playerSummary struct {
@@ -476,6 +476,7 @@ func writeErr(w http.ResponseWriter, err error) {
 		errors.Is(err, match.ErrUnknownSeat),
 		errors.Is(err, core.ErrWrongPlayer),
 		errors.Is(err, core.ErrUnknownMove),
+		errors.Is(err, core.ErrMoveNotInStage),
 		errors.Is(err, core.ErrInvalidMove),
 		errors.Is(err, core.ErrInactivePlayer),
 		errors.Is(err, core.ErrGameOver):

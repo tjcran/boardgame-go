@@ -20,9 +20,34 @@ func Stage(name string) *string {
 // Mirrors BGIO's `turn.stages.{name}` — plus OnBegin/OnEnd hooks the BGIO
 // docs say should exist but never landed (issue #608).
 type StageConfig struct {
-	// Moves overrides the active move table for players in this stage. If
-	// nil, players in this stage can use the surrounding phase/global moves.
+	// Moves is the move table for players in this stage. It takes
+	// precedence over the surrounding phase/global table: a name defined
+	// here resolves to this stage's move. By default it does not replace
+	// that table — a name missing here (or every name, when Moves is nil)
+	// still resolves from the phase/global moves. Set Exclusive to make
+	// this table the complete set of moves a player in the stage may make.
 	Moves map[string]any
+
+	// Exclusive, when true, restricts a player in this stage to the moves
+	// listed in Moves; any other move is rejected with ErrMoveNotInStage
+	// instead of falling through to the phase/global table. This matches
+	// boardgame.io, where a stage that defines moves is exclusive.
+	//
+	// Two kinds of move stay legal regardless, because refusing them
+	// would strand the match:
+	//
+	//   - Moves flagged AnyPlayer (concede / forfeit / timeout).
+	//   - A move that consumes a valid ResumeTag for a block addressed to
+	//     the caller. The engine asked that player a question; their
+	//     answer must be accepted wherever its move is registered.
+	//
+	// An Exclusive stage with nil Moves therefore permits only those
+	// exempt moves.
+	//
+	// Opt-in because the default fall-through is load-bearing for
+	// existing games (for example a resume or concede move registered
+	// only at phase scope).
+	Exclusive bool
 
 	// Next, when set, is the stage name a player is transferred to when
 	// events.EndStage() is called from this stage. Empty string means the

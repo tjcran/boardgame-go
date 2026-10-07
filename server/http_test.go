@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	"github.com/tjcran/boardgame-go/core"
 	"github.com/tjcran/boardgame-go/games/tictactoe"
 	"github.com/tjcran/boardgame-go/match"
 	"github.com/tjcran/boardgame-go/storage"
@@ -316,7 +318,7 @@ func TestCORSRejectsLocalhostLookalike(t *testing.T) {
 		"http://localhost.attacker.com",
 		"https://localhost.attacker.com:8080",
 		"http://127.0.0.1.attacker.com",
-		"http://[::1].attacker.com",   // syntactically malformed but worth fuzzing
+		"http://[::1].attacker.com",        // syntactically malformed but worth fuzzing
 		"http://evil.com#http://localhost", // fragment trick — Hostname() strips fragments
 	} {
 		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/games", nil)
@@ -350,5 +352,15 @@ func TestCORSRejectsUnlistedOrigin(t *testing.T) {
 	defer resp.Body.Close()
 	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
 		t.Fatalf("expected no CORS allow header for unlisted origin, got %q", got)
+	}
+}
+
+// TestWriteErrStageRejectionIsConflict: a move refused by an Exclusive
+// stage is a rule rejection like ErrUnknownMove, so it maps to 409.
+func TestWriteErrStageRejectionIsConflict(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeErr(rec, fmt.Errorf("%w: move=%q stage=%q", core.ErrMoveNotInStage, "cast", "respond"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusConflict)
 	}
 }

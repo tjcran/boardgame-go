@@ -103,7 +103,9 @@ anything) client can drive a `boardgame-go` server.
 - [x] `ActivePlayersAll` / `AllOnce` / `Others` / `OthersOnce` presets
 - [x] `Revert` and `Next` follow-up `ActivePlayersConfig`
 - [x] Per-player Min/MaxMoves overrides
-- [x] Stage-level Moves override
+- [x] Stage-level Moves (take precedence over phase/global moves;
+      `StageConfig.Exclusive` makes the stage table exclusive as in BGIO,
+      where a stage that defines moves allows only those)
 - [x] `Stage.OnBegin` / `Stage.OnEnd` hooks (BGIO #608)
 
 ## 8 — Random plugin

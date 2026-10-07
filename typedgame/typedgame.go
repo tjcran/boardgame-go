@@ -103,10 +103,12 @@ type Move[S any] struct {
 // — both forms are normalised at Build() time.
 type Moves[S any] map[string]any
 
-// StageConfig is the typed stage.
+// StageConfig is the typed stage. Exclusive mirrors
+// core.StageConfig.Exclusive.
 type StageConfig[S any] struct {
-	Moves Moves[S]
-	Next  string
+	Moves     Moves[S]
+	Next      string
+	Exclusive bool
 }
 
 // TurnConfig is the typed turn config. Order and ActivePlayers reuse
@@ -324,8 +326,9 @@ func convertTurn[S any](t *TurnConfig[S]) *core.TurnConfig {
 		out.Stages = map[string]*core.StageConfig{}
 		for name, st := range t.Stages {
 			out.Stages[name] = &core.StageConfig{
-				Moves: convertMoves[S](st.Moves),
-				Next:  st.Next,
+				Moves:     convertMoves[S](st.Moves),
+				Next:      st.Next,
+				Exclusive: st.Exclusive,
 			}
 		}
 	}

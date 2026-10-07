@@ -213,3 +213,28 @@ func TestTypedValidateSetupDataReceivesTypedValue(t *testing.T) {
 		t.Errorf("invalid setup should fail validation, got %q", msg)
 	}
 }
+
+// TestTypedStageExclusiveCarriesThrough: the typed stage's Exclusive
+// flag reaches the built core stage, so a typed game can confine a
+// stage to its own move table.
+func TestTypedStageExclusiveCarriesThrough(t *testing.T) {
+	g := typedgame.Game[*counterState, any]{
+		Name:       "counter",
+		MinPlayers: 1,
+		MaxPlayers: 1,
+		Setup:      func(_ core.Ctx, _ any) *counterState { return &counterState{} },
+		Turn: &typedgame.TurnConfig[*counterState]{
+			Stages: map[string]*typedgame.StageConfig[*counterState]{
+				"respond": {Exclusive: true},
+				"open":    {},
+			},
+		},
+	}.Build()
+
+	if !g.Turn.Stages["respond"].Exclusive {
+		t.Error(`Stages["respond"].Exclusive = false, want true`)
+	}
+	if g.Turn.Stages["open"].Exclusive {
+		t.Error(`Stages["open"].Exclusive = true, want false`)
+	}
+}
