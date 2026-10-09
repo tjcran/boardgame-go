@@ -57,6 +57,11 @@ type LogEntry struct {
 	// ResumeTag, on a move entry, is the value of MoveRequest.ResumeTag
 	// that resolved a pending block. Empty for non-resume moves.
 	ResumeTag string `json:"resumeTag,omitempty"`
+
+	// ServerDispatch, on a move entry, records MoveRequest.ServerDispatch:
+	// the server dispatched the move on its own authority. Replay and
+	// Redo pass it back so the move is authorized the same way.
+	ServerDispatch bool `json:"serverDispatch,omitempty"`
 }
 
 // redactedLog returns the log filtered for a specific seat: entries marked

@@ -22,11 +22,39 @@ type QueuedAction struct {
 // typed Target field plus Queue.RequestTarget — clients and replays
 // see a structured shape they can render and validate.
 type BlockSpec struct {
-	Tag      string         `json:"tag"`
-	PlayerID string         `json:"playerID"`
-	Order    int            `json:"order,omitempty"` // reserved; ignored by v1 reducer
-	Data     any            `json:"data,omitempty"`
-	Target   *TargetRequest `json:"target,omitempty"`
+	Tag      string `json:"tag"`
+	PlayerID string `json:"playerID"`
+	// Move, when set, names the move that answers this block (see
+	// AnsweredBy). Only a MoveRequest for that move can consume the
+	// block with its ResumeTag, and only a named answer is exempt from
+	// an Exclusive stage's move table. Empty means any move carrying
+	// the tag may consume the block, as before Move existed.
+	Move   string         `json:"move,omitempty"`
+	Order  int            `json:"order,omitempty"` // reserved; ignored by v1 reducer
+	Data   any            `json:"data,omitempty"`
+	Target *TargetRequest `json:"target,omitempty"`
+}
+
+// BlockOption configures a block raised with Queue.Block or
+// Queue.RequestTarget.
+type BlockOption func(*BlockSpec)
+
+// AnsweredBy names the move that answers a block. The reducer then
+// matches a ResumeTag only on a request for that move, so the prompt
+// cannot be consumed by some other move that merely carries its tag,
+// and the answer stays legal for a player confined to an Exclusive
+// stage even when the move is registered outside the stage's table.
+// Clients see the name in State.Blocks, so a UI can tell which move
+// resolves the prompt.
+func AnsweredBy(move string) BlockOption {
+	return func(b *BlockSpec) { b.Move = move }
+}
+
+func newBlock(b BlockSpec, opts []BlockOption) BlockSpec {
+	for _, opt := range opts {
+		opt(&b)
+	}
+	return b
 }
 
 // Queue is the API exposed to moves via MoveContext.Queue. Like
@@ -52,12 +80,13 @@ func (q *Queue) Push(playerID, move string, args ...any) {
 // Block pauses the cascade. The reducer keeps draining queued actions
 // up to but not past the point where any block is added; once even one
 // block is present the drain halts and persists. The next external
-// move whose ResumeTag + PlayerID match the block clears it; if all
-// blocks are gone the drain continues.
-func (q *Queue) Block(tag, playerID string, data any) {
-	q.blocks = append(q.blocks, BlockSpec{
+// move whose ResumeTag + PlayerID match the block clears it (and whose
+// Move matches, when the block names its answer via AnsweredBy); if
+// all blocks are gone the drain continues.
+func (q *Queue) Block(tag, playerID string, data any, opts ...BlockOption) {
+	q.blocks = append(q.blocks, newBlock(BlockSpec{
 		Tag: tag, PlayerID: playerID, Data: data,
-	})
+	}, opts))
 }
 
 // RequestTarget is the typed sibling of Block: it pauses the cascade
@@ -70,14 +99,15 @@ func (q *Queue) Block(tag, playerID string, data any) {
 // or including a discriminator in req.Data.
 //
 // The resume move reads the typed request via mc.ResumingBlock.Target
-// and validates the player's selection with ValidateSelection.
-func (q *Queue) RequestTarget(playerID string, req TargetRequest) {
+// and validates the player's selection with ValidateSelection. Pass
+// AnsweredBy to name that move.
+func (q *Queue) RequestTarget(playerID string, req TargetRequest, opts ...BlockOption) {
 	r := req
-	q.blocks = append(q.blocks, BlockSpec{
+	q.blocks = append(q.blocks, newBlock(BlockSpec{
 		Tag:      req.Kind,
 		PlayerID: playerID,
 		Target:   &r,
-	})
+	}, opts))
 }
 
 // Unblock removes the first matching block from the queue. Most apps

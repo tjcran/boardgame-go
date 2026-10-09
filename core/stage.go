@@ -33,20 +33,30 @@ type StageConfig struct {
 	// instead of falling through to the phase/global table. This matches
 	// boardgame.io, where a stage that defines moves is exclusive.
 	//
-	// Two kinds of move stay legal regardless, because refusing them
-	// would strand the match:
+	// Some moves stay legal regardless, because refusing them would
+	// strand the match or override the server:
 	//
-	//   - Moves flagged AnyPlayer (concede / forfeit / timeout).
-	//   - A move that consumes a valid ResumeTag for a block addressed to
-	//     the caller. The engine asked that player a question; their
-	//     answer must be accepted wherever its move is registered.
+	//   - Moves flagged AnyPlayer or IgnoreBlocks (concede / forfeit /
+	//     timeout / emergency exit).
+	//   - The answer to a block addressed to the caller, when the block
+	//     names its answer move (AnsweredBy) and the request is that
+	//     move. The engine asked that player a question; their answer
+	//     must be accepted wherever its move is registered. A block that
+	//     names no answer move gets no exemption, since any move could
+	//     carry its tag: register its answer in this table instead.
+	//   - Moves the server dispatches on its own authority
+	//     (MoveRequest.ServerDispatch, set by match.Manager.DispatchServer).
+	//     Drain steps and Events.RunMove are not stage-scoped either.
 	//
 	// An Exclusive stage with nil Moves therefore permits only those
 	// exempt moves.
 	//
 	// Opt-in because the default fall-through is load-bearing for
 	// existing games (for example a resume or concede move registered
-	// only at phase scope).
+	// only at phase scope). Turning it on for a game that already has
+	// persisted matches can make Replay of their logs fail: a recorded
+	// move that fell through to the phase/global table when it was
+	// played is now rejected with ErrMoveNotInStage.
 	Exclusive bool
 
 	// Next, when set, is the stage name a player is transferred to when

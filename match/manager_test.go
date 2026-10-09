@@ -396,6 +396,79 @@ func TestDispatchServerHappyPath(t *testing.T) {
 	}
 }
 
+// TestDispatchServerIgnoresExclusiveStage: a seat inside an Exclusive
+// stage cannot send a top-level move itself, even by setting
+// ServerDispatch on its own request, but the server can dispatch that
+// move for it. The log records the server dispatch so the persisted
+// match replays.
+func TestDispatchServerIgnoresExclusiveStage(t *testing.T) {
+	type myG struct{ Moves []string }
+	record := func(name string) core.MoveFn {
+		return func(mc *core.MoveContext, _ ...any) (core.G, error) {
+			prev := mc.G.(*myG)
+			return &myG{Moves: append(append([]string(nil), prev.Moves...), name)}, nil
+		}
+	}
+	game := &core.Game{
+		Name: "ds-exclusive", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ any) core.G { return &myG{} },
+		Moves: map[string]any{
+			"enter": core.MoveFn(func(mc *core.MoveContext, args ...any) (core.G, error) {
+				mc.Events.SetActivePlayers(core.ActivePlayersConfig{CurrentPlayer: core.Stage("respond")})
+				return record("enter")(mc, args...)
+			}),
+			"phaseMove": record("phaseMove"),
+		},
+		Turn: &core.TurnConfig{
+			Stages: map[string]*core.StageConfig{
+				"respond": {Exclusive: true, Moves: map[string]any{"respond": record("respond")}},
+			},
+		},
+	}
+	store := storage.NewMemory()
+	m := NewManager(store)
+	m.MustRegister(game)
+
+	id, _ := m.Create("ds-exclusive", CreateOptions{})
+	alice, _ := m.Join(id, "alice", JoinOptions{})
+	_, _ = m.Join(id, "bob", JoinOptions{})
+	if _, err := m.Move(id, alice.PlayerID, alice.PlayerCredentials, "enter", nil); err != nil {
+		t.Fatalf("enter: %v", err)
+	}
+
+	if _, err := m.Move(id, alice.PlayerID, alice.PlayerCredentials, "phaseMove", nil); !errors.Is(err, core.ErrMoveNotInStage) {
+		t.Fatalf("client phaseMove in an exclusive stage: err = %v, want ErrMoveNotInStage", err)
+	}
+	if _, err := m.MoveReq(id, alice.PlayerID, alice.PlayerCredentials, core.MoveRequest{
+		Move: "phaseMove", ServerDispatch: true,
+	}); !errors.Is(err, core.ErrMoveNotInStage) {
+		t.Fatalf("client request claiming ServerDispatch: err = %v, want ErrMoveNotInStage", err)
+	}
+
+	st, err := m.DispatchServer(context.Background(), id, "0", "phaseMove")
+	if err != nil {
+		t.Fatalf("DispatchServer phaseMove in an exclusive stage: %v", err)
+	}
+	if got := st.G.(*myG).Moves; len(got) != 2 || got[1] != "phaseMove" {
+		t.Fatalf("moves = %v, want [enter phaseMove]", got)
+	}
+
+	stored, err := store.Get(id)
+	if err != nil {
+		t.Fatalf("store.Get: %v", err)
+	}
+	if last := stored.State.Log[len(stored.State.Log)-1]; last.Move != "phaseMove" || !last.ServerDispatch {
+		t.Fatalf("last log entry = %+v, want phaseMove with ServerDispatch", last)
+	}
+	replayed, err := core.ReplaySeeded(game, stored.State.Log, 2, nil, stored.State.Ctx.Seed)
+	if err != nil {
+		t.Fatalf("replay of the persisted log: %v", err)
+	}
+	if got := replayed.G.(*myG).Moves; len(got) != 2 || got[1] != "phaseMove" {
+		t.Errorf("replayed moves = %v, want [enter phaseMove]", got)
+	}
+}
+
 func TestDispatchServerCanCallServerOnlyMove(t *testing.T) {
 	// A ServerOnly "concede" move: credentialed clients refused via
 	// MoveReqCtx, but DispatchServer succeeds.

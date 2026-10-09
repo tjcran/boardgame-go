@@ -74,9 +74,10 @@ func Redo(game *Game, state State) (State, error) {
 	entry := state.Undone[len(state.Undone)-1]
 	state.Undone = state.Undone[:len(state.Undone)-1]
 	return Apply(game, state, MoveRequest{
-		PlayerID: entry.PlayerID,
-		Move:     entry.Move,
-		Args:     entry.Args,
+		PlayerID:       entry.PlayerID,
+		Move:           entry.Move,
+		Args:           entry.Args,
+		ServerDispatch: entry.ServerDispatch,
 	})
 }
 

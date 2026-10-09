@@ -33,8 +33,10 @@ import (
 // complete set of legal responses: without Exclusive, the holder can
 // still dispatch any phase/global move (the stage table only takes
 // precedence over it), and the game must reject those itself. An
-// Exclusive window still accepts AnyPlayer moves (concede / timeout)
-// and the holder's answer to a prompt addressed to them.
+// Exclusive window still accepts AnyPlayer and IgnoreBlocks moves
+// (concede / timeout), moves the server dispatches, and the holder's
+// answer to a prompt addressed to them that names its answer move
+// (core.AnsweredBy).
 //
 // Pass "" as the stage to run the protocol without engine gating (the
 // game enforces its own move legality) — note "" here means NO
