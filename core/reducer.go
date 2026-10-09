@@ -12,9 +12,9 @@ import (
 // move opted in via IgnoreStaleStateID). StateID=0 disables the check.
 //
 // ResumeTag, when set, matches against State.Blocks at Apply entry —
-// the first BlockSpec with matching Tag + PlayerID is removed before
-// the move runs. Used to resolve pause points opened by an earlier
-// cascade's Queue.Block call.
+// the first BlockSpec with matching Tag + PlayerID (and Move, when the
+// block names its answer) is removed before the move runs. Used to
+// resolve pause points opened by an earlier cascade's Queue.Block call.
 type MoveRequest struct {
 	PlayerID  string `json:"playerID"`
 	Move      string `json:"move"`
@@ -25,21 +25,31 @@ type MoveRequest struct {
 	// manager stamps it when zero; Replay passes the value recorded in
 	// the move log so time-reading games replay deterministically.
 	NowMs int64 `json:"nowMs,omitempty"`
+	// ServerDispatch marks a move the server dispatched on its own
+	// authority (match.Manager.DispatchServer) rather than one a client
+	// sent. Such a move is not confined by an Exclusive stage's move
+	// table, the same as drain steps and Events.RunMove: the server's
+	// authority covers the game's whole move set. The seat named by
+	// PlayerID must still be allowed to move. Never decoded from the
+	// wire; the reducer records it on the move's log entry so Replay
+	// and Redo re-apply the move the same way.
+	ServerDispatch bool `json:"-"`
 }
 
 // Public sentinel errors. They're surfaced through the transport with
 // matching HTTP statuses.
 var (
-	ErrInvalidMove    = errors.New("invalid move")
-	ErrWrongPlayer    = errors.New("not your turn")
-	ErrUnknownMove    = errors.New("unknown move")
-	ErrGameOver       = errors.New("game is over")
-	ErrMinMoves       = errors.New("minimum moves not reached")
-	ErrInactivePlayer = errors.New("player is not active")
-	ErrStaleState     = errors.New("client state is stale")
-	ErrBlocked        = errors.New("match has pending blocks; supply MoveRequest.ResumeTag")
+	ErrInvalidMove      = errors.New("invalid move")
+	ErrWrongPlayer      = errors.New("not your turn")
+	ErrUnknownMove      = errors.New("unknown move")
+	ErrGameOver         = errors.New("game is over")
+	ErrMinMoves         = errors.New("minimum moves not reached")
+	ErrInactivePlayer   = errors.New("player is not active")
+	ErrStaleState       = errors.New("client state is stale")
+	ErrBlocked          = errors.New("match has pending blocks; supply MoveRequest.ResumeTag")
 	ErrUnknownResumeTag = errors.New("ResumeTag does not match any pending block")
-	ErrDrainOverflow  = errors.New("cascade drain exceeded MaxDrainDepth")
+	ErrMoveNotInStage   = errors.New("move is not allowed in the player's current stage")
+	ErrDrainOverflow    = errors.New("cascade drain exceeded MaxDrainDepth")
 )
 
 // MaxDrainDepth caps how many drain steps the reducer will run for a
@@ -65,15 +75,22 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 //  2. Resolve ResumeTag against State.Blocks (removes one matching).
 //  3. If blocks remain and the move doesn't IgnoreBlocks, ErrBlocked.
 //  4. Check the player is allowed to move in the current scope.
-//  5. Resolve the move from the active phase or global table.
-//  6. Run the move function -> new G.
-//  7. Run turn.OnMove and count the move (unless NoLimit).
-//  8. Drain queued events (endTurn, setStage, ...).
-//  9. Check Game.EndIf, phase.EndIf, turn.EndIf / MaxMoves.
-//  10. Bump State.StateID once.
-//  11. Drain State.Queue (cascade). Each drain step runs through
-//      applyOne with a Parent log index; the outer state-ID stays put.
-//      Pauses on the first non-empty Blocks set.
+//  5. Resolve the move from the player's stage table, then the active
+//     phase or global table.
+//  6. Reject a stale StateID (ErrStaleState).
+//  7. An Exclusive stage refuses a move that is not in its own table
+//     (ErrMoveNotInStage).
+//  8. Run the move function -> new G.
+//  9. Run turn.OnMove and count the move (unless NoLimit).
+//  10. Drain queued events (endTurn, setStage, ...).
+//  11. Check Game.EndIf, phase.EndIf, turn.EndIf / MaxMoves.
+//  12. Bump State.StateID once.
+//  13. Drain State.Queue (cascade). Each drain step runs through
+//     applyOne with a Parent log index; the outer state-ID stays put.
+//     Pauses on the first non-empty Blocks set.
+//
+// Which requests skip steps 4 and 7 is decided in one place,
+// exemptionsFor.
 //
 // On any error after the external move starts, the returned state
 // equals the pre-Apply state (cascades are atomic).
@@ -94,14 +111,19 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// resuming (e.g. ResumingBlock.Target for typed target requests).
 	var resumingBlock *BlockSpec
 	if req.ResumeTag != "" {
-		idx := findBlock(state.Blocks, req.ResumeTag, req.PlayerID)
+		idx := findBlock(state.Blocks, req.ResumeTag, req.PlayerID, req.Move)
 		if idx < 0 {
-			return state, fmt.Errorf("%w: tag=%s player=%s",
-				ErrUnknownResumeTag, req.ResumeTag, req.PlayerID)
+			return state, fmt.Errorf("%w: tag=%s player=%s move=%s",
+				ErrUnknownResumeTag, req.ResumeTag, req.PlayerID, req.Move)
 		}
 		b := state.Blocks[idx]
 		resumingBlock = &b
-		state.Blocks = append(state.Blocks[:idx], state.Blocks[idx+1:]...)
+		// Fresh slice: removing in place would shift the shared backing
+		// array under rollback.Blocks, and every rejection below returns
+		// rollback as the unchanged pre-move state.
+		kept := make([]BlockSpec, 0, len(state.Blocks)-1)
+		kept = append(kept, state.Blocks[:idx]...)
+		state.Blocks = append(kept, state.Blocks[idx+1:]...)
 	}
 
 	// Block gate: pending blocks refuse non-IgnoreBlocks moves that are
@@ -118,43 +140,42 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		}
 	}
 
-	// Player must be allowed to move in this scope. Two exemptions:
-	//
-	//   - Answering a block addressed to you. A BlockSpec names the one
-	//     player who may resolve it and findBlock matches on PlayerID, so
-	//     consuming a ResumeTag above already proved this caller is that
-	//     player — the engine asked them a question and must accept the
-	//     answer whether or not they hold the turn. Without this, an
-	//     out-of-turn prompt is a deadlock rather than a pause: its owner
-	//     is refused with ErrWrongPlayer while every other seat is refused
-	//     with ErrBlocked on that same unanswered block, and only a move
-	//     that is both AnyPlayer and IgnoreBlocks can break it. Games can
-	//     work around it by pairing each such block with SetActivePlayers,
-	//     but that makes every opener predict how many moves the answer
-	//     takes — which no opener can do once one answer raises the next
-	//     prompt. Their stage (empty when ActivePlayers doesn't list them,
-	//     including when it is nil) still scopes the move lookup, so a
-	//     stage-scoped resume move keeps resolving from its stage table.
-	//   - AnyPlayer moves (concede / forfeit / opponent-forced timeout)
-	//     skip the ownership check — resolve them from the default scope
-	//     instead of the caller's (nonexistent) stage.
+	// Player must be allowed to move in this scope, then the move is
+	// resolved from the active move table: stage overrides first, then
+	// phase overrides, then global. A player authorizedStage refuses is
+	// not listed in ActivePlayers, so their stage is "" and an exempt
+	// move resolves from the phase/global table. exemptionsFor says
+	// which refusals a request is excused from.
 	stage, authErr := authorizedStage(state.Ctx, req.PlayerID)
-	if authErr != nil {
-		switch move, err := resolveMove(game, state.Ctx, "", req.Move); {
-		case resumingBlock != nil:
-			stage = state.Ctx.ActivePlayers[req.PlayerID]
-		case err == nil && move.AnyPlayer:
-			stage = ""
-		default:
-			return rollback, authErr
-		}
-	}
-
-	// Resolve the move from the active move table, honouring stage
-	// overrides first, then phase overrides, then global.
 	move, err := resolveMove(game, state.Ctx, stage, req.Move)
+	exempt := exemptionsFor(move, resumingBlock, req)
+	if authErr != nil && (err != nil || !exempt.turn) {
+		return rollback, authErr
+	}
 	if err != nil {
 		return rollback, err
+	}
+
+	// Stale-state guard. Opt-in: req.StateID=0 means "don't check"
+	// (server-internal callers pass 0 because they always have the latest
+	// state). Real clients send the StateID they last received; if it
+	// doesn't match the authoritative one, the move is rejected unless
+	// the move sets IgnoreStaleStateID. Checked before stage scoping so a
+	// client acting on an old view is told to refresh rather than that
+	// its move is illegal in a stage it may no longer be in.
+	if req.StateID > 0 && req.StateID != state.StateID && !move.IgnoreStaleStateID {
+		return rollback, ErrStaleState
+	}
+
+	// An Exclusive stage confines its players to its own move table,
+	// so a name that resolved from the phase/global fallback is refused.
+	if stage != "" && !exempt.stageScope {
+		if sc := lookupStage(game, state.Ctx.Phase, stage); sc != nil && sc.Exclusive {
+			if _, ok := sc.Moves[req.Move]; !ok {
+				return rollback, fmt.Errorf("%w: move=%q stage=%q",
+					ErrMoveNotInStage, req.Move, stage)
+			}
+		}
 	}
 
 	events := &Events{}
@@ -178,15 +199,6 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// Hooks fired during this move share the move's plugin APIs, so their
 	// mutations land in the same objects flushPlugins persists below.
 	env := &hookEnv{events: events, plugins: plugins}
-
-	// Stale-state guard. Opt-in: req.StateID=0 means "don't check"
-	// (server-internal callers pass 0 because they always have the latest
-	// state). Real clients send the StateID they last received; if it
-	// doesn't match the authoritative one, the move is rejected unless
-	// the move sets IgnoreStaleStateID.
-	if req.StateID > 0 && req.StateID != state.StateID && !move.IgnoreStaleStateID {
-		return state, ErrStaleState
-	}
 
 	// Snapshot pre-move state for undo. Only meaningful when the game
 	// hasn't disabled undo and the specific move is undoable. We resolve
@@ -212,18 +224,19 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// Append to the log. Args are kept; PlayerView redacts to other seats.
 	parentIdx := len(next.Log)
 	next.Log = append(next.Log, LogEntry{
-		Kind:      "move",
-		Move:      req.Move,
-		PlayerID:  req.PlayerID,
-		Args:      append([]any(nil), req.Args...),
-		Turn:      state.Ctx.Turn,
-		Phase:     state.Ctx.Phase,
-		Stage:     state.Ctx.ActivePlayers[req.PlayerID],
-		Redact:    redact,
-		Undoable:  undoable,
-		Parent:    -1,
-		ResumeTag: req.ResumeTag,
-		NowMs:     req.NowMs,
+		Kind:           "move",
+		Move:           req.Move,
+		PlayerID:       req.PlayerID,
+		Args:           append([]any(nil), req.Args...),
+		Turn:           state.Ctx.Turn,
+		Phase:          state.Ctx.Phase,
+		Stage:          state.Ctx.ActivePlayers[req.PlayerID],
+		Redact:         redact,
+		Undoable:       undoable,
+		Parent:         -1,
+		ResumeTag:      req.ResumeTag,
+		NowMs:          req.NowMs,
+		ServerDispatch: req.ServerDispatch,
 	})
 	// Any successful move invalidates the redo stack.
 	next.Undone = nil
@@ -341,14 +354,65 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 }
 
 // findBlock returns the index of the first BlockSpec matching tag +
-// playerID, or -1 when no match exists.
-func findBlock(blocks []BlockSpec, tag, playerID string) int {
+// playerID that move may answer, or -1 when no match exists. A block
+// that names its answer (BlockSpec.Move) matches only that move.
+func findBlock(blocks []BlockSpec, tag, playerID, move string) int {
 	for i, b := range blocks {
-		if b.Tag == tag && b.PlayerID == playerID {
+		if b.Tag == tag && b.PlayerID == playerID && (b.Move == "" || b.Move == move) {
 			return i
 		}
 	}
 	return -1
+}
+
+// exemptions records which per-player checks in ApplyContext a request
+// is excused from.
+type exemptions struct {
+	// turn: the caller may move although authorizedStage refuses them
+	// (not their turn, or not listed in ActivePlayers).
+	turn bool
+	// stageScope: a caller in an Exclusive stage may make a move that is
+	// not in the stage's own table.
+	stageScope bool
+}
+
+// exemptionsFor is the single statement of who may bypass the turn
+// check and an Exclusive stage's move table. move is the resolved move,
+// resuming the block this request consumed (nil when none).
+//
+// Both checks excuse AnyPlayer moves (concede / forfeit / forcing an
+// opponent's timeout): any seat may make them at any time, so neither
+// the turn nor a stage may refuse them. The other exemptions differ,
+// because the two checks ask different questions — whether this seat
+// may act now, and which moves a seat that may act can make:
+//
+//   - A consumed block excuses the turn check. A block names the one
+//     player who may answer it and findBlock matches on PlayerID, so the
+//     caller is the player the engine asked; refusing them out of turn
+//     would deadlock the match, since every other seat is held off by
+//     ErrBlocked on the same block. A block that does not name its
+//     answer move can be consumed by any move carrying its tag, so this
+//     is as wide as it was before blocks could name their answer.
+//   - Stage scoping excuses only a block that names its answer move
+//     (AnsweredBy); findBlock has already checked that this request is
+//     that move. An unnamed block proves nothing about the move — any
+//     move could carry its tag — so its answer must be in the stage's
+//     table like any other move.
+//   - IgnoreBlocks moves (concede / forfeit / emergency exit) excuse
+//     stage scoping: a seat that may act must not be stranded in a
+//     stage without its escape hatch. They do not excuse the turn
+//     check; an escape hatch that must work out of turn is AnyPlayer.
+//   - Server-dispatched moves excuse stage scoping: the server's
+//     authority covers the whole move set, as it does for drain steps
+//     and Events.RunMove. They do not excuse the turn check, because
+//     DispatchServer acts as a seat and validates like that seat's own
+//     move.
+func exemptionsFor(move Move, resuming *BlockSpec, req MoveRequest) exemptions {
+	namedAnswer := resuming != nil && resuming.Move != ""
+	return exemptions{
+		turn:       move.AnyPlayer || resuming != nil,
+		stageScope: move.AnyPlayer || move.IgnoreBlocks || namedAnswer || req.ServerDispatch,
+	}
 }
 
 // applyStep runs a server-driven move from State.Queue. Same pipeline

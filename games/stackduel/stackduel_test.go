@@ -143,9 +143,8 @@ func TestLethalEndsGame(t *testing.T) {
 	}
 }
 
-// TestSorceryTimingEnforced pins the two speed rules: non-instants are
-// not legal responses, and the turn can't end with a window open or a
-// stack pending.
+// TestSorceryTimingEnforced pins the game's own speed rule: a
+// non-instant is not a legal response, even through the respond move.
 func TestSorceryTimingEnforced(t *testing.T) {
 	game := New()
 	s := core.NewMatch(game, 2, nil)
@@ -156,12 +155,37 @@ func TestSorceryTimingEnforced(t *testing.T) {
 	}); !errors.Is(err, errNotInstant) {
 		t.Fatalf("responding with a creature err = %v, want errNotInstant", err)
 	}
-	if _, err := core.Apply(game, s, core.MoveRequest{PlayerID: "0", Move: "cast",
-		Args: []any{any(handCard(t, s, "0", "glowmoth"))}}); !errors.Is(err, errWindowOpen) {
-		t.Fatalf("sorcery cast during window err = %v, want errWindowOpen", err)
+}
+
+// TestWindowStageIsExclusive pins the Exclusive respond stage: while a
+// window is open, the holder may only respond or pass. The top-level
+// sorcery-speed cast and endTurn are refused by the engine before any
+// game code runs, so a window can neither be bypassed nor abandoned.
+func TestWindowStageIsExclusive(t *testing.T) {
+	game := New()
+	s := core.NewMatch(game, 2, nil)
+	s = applyOK(t, game, s, "0", "cast", handCard(t, s, "0", "duskwisp"))
+	if s.Ctx.ActivePlayers["0"] != respondStage {
+		t.Fatalf("holder should be in the %q stage, ActivePlayers = %v", respondStage, s.Ctx.ActivePlayers)
 	}
-	if _, err := core.Apply(game, s, core.MoveRequest{PlayerID: "0", Move: "endTurn"}); !errors.Is(err, errWindowOpen) {
-		t.Fatalf("endTurn during window err = %v, want errWindowOpen", err)
+
+	for _, req := range []core.MoveRequest{
+		{PlayerID: "0", Move: "cast", Args: []any{any(handCard(t, s, "0", "glowmoth"))}},
+		{PlayerID: "0", Move: "endTurn"},
+	} {
+		next, err := core.Apply(game, s, req)
+		if !errors.Is(err, core.ErrMoveNotInStage) {
+			t.Fatalf("%s during window err = %v, want core.ErrMoveNotInStage", req.Move, err)
+		}
+		if next.StateID != s.StateID {
+			t.Fatalf("%s during window changed StateID %d -> %d", req.Move, s.StateID, next.StateID)
+		}
+	}
+
+	// The window still works normally afterwards.
+	s = passRound(t, game, s, "0", "1")
+	if z := s.G.(*State).Zones[fieldZone("0")]; len(z.Members) != 1 {
+		t.Fatalf("duskwisp should resolve after the refused moves, battlefield = %v", z.Members)
 	}
 }
 

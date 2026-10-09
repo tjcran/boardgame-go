@@ -843,6 +843,7 @@ func (m *Manager) DryMoveReq(matchID, playerID, credentials string, req core.Mov
 		return core.State{}, ErrUnknownSeat
 	}
 	req.PlayerID = seat
+	req.ServerDispatch = false // a client request; see MoveReqCtx
 	return core.Apply(g, match.State, req)
 }
 
@@ -893,6 +894,9 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 	}
 
 	req.PlayerID = seat
+	// A credentialed request is a client's move, never the server's own,
+	// whatever the caller put in the struct. Only DispatchServer sets it.
+	req.ServerDispatch = false
 
 	// Look up the move definition to check ServerOnly. Credentialed
 	// clients cannot dispatch server-only moves — they must go via
@@ -1050,6 +1054,11 @@ func (m *Manager) dispatchLocked(
 // The match's current state ID is used for the staleness check, so
 // DispatchServer never returns a "stale state" error — the server
 // always operates on the current state.
+//
+// The move is marked core.MoveRequest.ServerDispatch, so an Exclusive
+// stage the seat is in does not confine it to the stage's move table.
+// The seat must still be allowed to move (its turn, or listed in
+// ActivePlayers), unless the move is AnyPlayer.
 func (m *Manager) DispatchServer(
 	ctx context.Context,
 	matchID string,
@@ -1070,11 +1079,12 @@ func (m *Manager) DispatchServer(
 	}
 
 	req := core.MoveRequest{
-		PlayerID: playerID,
-		Move:     moveName,
-		Args:     args,
-		StateID:  match.State.StateID, // server always at current state — no staleness
-		NowMs:    m.now().UnixMilli(),
+		PlayerID:       playerID,
+		Move:           moveName,
+		Args:           args,
+		StateID:        match.State.StateID, // server always at current state — no staleness
+		NowMs:          m.now().UnixMilli(),
+		ServerDispatch: true,
 	}
 	return m.dispatchLocked(ctx, matchID, playerID, g, match, req)
 }

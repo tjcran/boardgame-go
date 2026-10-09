@@ -239,7 +239,8 @@ for the full boardgame.io feature checklist.
   + ResumeTag matching). MTG-style trigger stacks for free. A block names
   the player who must answer it, and that player may answer out of turn —
   so reaction windows and "your opponent chooses" prompts need no
-  active-player bookkeeping of their own.
+  active-player bookkeeping of their own. `core.AnsweredBy` names the
+  move that answers a block, so no other move can consume it.
 - Undo / Redo with per-turn snapshots, `Game.DisableUndo`,
   per-move `Undoable`, log redaction via per-move `Redact`
 - Pure replay: `core.Replay` / `core.ReplayUntil(n)` reproduces a

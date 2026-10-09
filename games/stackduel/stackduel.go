@@ -9,8 +9,10 @@
 //
 //   - ccg.PriorityState runs the pass-loop protocol. Each rotation gates
 //     the holder into the "respond" stage via SetActivePlayers, so the
-//     engine itself rejects out-of-window moves and the stage move table
-//     scopes what a response may be.
+//     engine itself rejects out-of-window moves. The stage is Exclusive,
+//     so its move table is the complete set of legal responses: the
+//     engine also refuses the holder's sorcery-speed cast or endTurn
+//     mid-window with core.ErrMoveNotInStage.
 //   - The stack is ccg.State.PendingEffects ordered by ccg.PickBack
 //     (tail = top), halted by ccg.HaltWhileOpen while a window is open.
 //   - A counterspell is itself a stack object: its resolver runs first
@@ -129,6 +131,9 @@ func New() *core.Game {
 			OnBegin: turnBegin,
 			Stages: map[string]*core.StageConfig{
 				respondStage: {
+					// Responses are exactly respond/pass; the top-level
+					// cast and endTurn must not leak into a window.
+					Exclusive: true,
 					Moves: map[string]any{
 						"respond": core.MoveFn(respond),
 						"pass":    core.MoveFn(pass),

@@ -28,12 +28,20 @@ import (
 // Engine wiring is via events.SetActivePlayers: each protocol call
 // queues a single-player Value config gating the game to the current
 // holder in the window's stage, so out-of-window moves are rejected
-// by the engine's normal authorization and the stage's move table
-// scopes what responses are legal. Pass "" as the stage to run the
-// protocol without engine gating (the game enforces its own move
-// legality) — note "" here means NO SetActivePlayers calls, not
-// core.StageNull; games that want StageNull gating call
-// SetActivePlayers themselves.
+// by the engine's normal authorization. Register the window stage
+// with core.StageConfig{Exclusive: true} so its move table is the
+// complete set of legal responses: without Exclusive, the holder can
+// still dispatch any phase/global move (the stage table only takes
+// precedence over it), and the game must reject those itself. An
+// Exclusive window still accepts AnyPlayer and IgnoreBlocks moves
+// (concede / timeout), moves the server dispatches, and the holder's
+// answer to a prompt addressed to them that names its answer move
+// (core.AnsweredBy).
+//
+// Pass "" as the stage to run the protocol without engine gating (the
+// game enforces its own move legality) — note "" here means NO
+// SetActivePlayers calls, not core.StageNull; games that want
+// StageNull gating call SetActivePlayers themselves.
 //
 // The canonical loop, in the game's response/pass moves:
 //
