@@ -63,7 +63,8 @@ func serverOnlyTablesGame(withPhase bool) *core.Game {
 // run a ServerOnly move wherever it is registered — game, phase or stage
 // table — and the guard judges the move the reducer would actually run,
 // so a stage move that shadows a ServerOnly name stays playable. DryMove
-// is refused the same way, and DispatchServer still runs the move.
+// is refused the same way, the refusal is reported like any rejected
+// move, and DispatchServer still runs the move.
 func TestServerOnlyGuardCoversEveryMoveTable(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -84,6 +85,10 @@ func TestServerOnlyGuardCoversEveryMoveTable(t *testing.T) {
 			game := serverOnlyTablesGame(tc.withPhase)
 			m := NewManager(storage.NewMemory())
 			m.MustRegister(game)
+			var rejected []error
+			m.OnLifecycleKind(LifecycleMatchMoveRejected, func(ev LifecycleEvent) {
+				rejected = append(rejected, ev.Err)
+			})
 			id, _ := m.Create(game.Name, CreateOptions{})
 			alice, _ := m.Join(id, "alice", JoinOptions{})
 			_, _ = m.Join(id, "bob", JoinOptions{})
@@ -106,6 +111,9 @@ func TestServerOnlyGuardCoversEveryMoveTable(t *testing.T) {
 			}
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("Move %s: err = %v, want %v", tc.move, err, tc.wantErr)
+			}
+			if len(rejected) != 1 || !errors.Is(rejected[0], tc.wantErr) {
+				t.Errorf("rejected-move lifecycle events = %v, want one %v", rejected, tc.wantErr)
 			}
 			if _, err := m.DispatchServer(context.Background(), id, "0", tc.move); err != nil {
 				t.Fatalf("DispatchServer %s: %v", tc.move, err)

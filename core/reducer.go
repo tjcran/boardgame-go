@@ -34,6 +34,16 @@ type MoveRequest struct {
 	// wire; the reducer records it on the move's log entry so Replay
 	// and Redo re-apply the move the same way.
 	ServerDispatch bool `json:"-"`
+	// FromClient marks a request a client sent through the match
+	// manager's credentialed ingress (Manager.MoveReqCtx and
+	// Manager.DryMoveReq set it). Such a request may not make a move
+	// flagged Move.ServerOnly, wherever that move is registered: the
+	// reducer judges the move it resolved for the request and refuses
+	// with ErrServerOnly. In-process callers (tests, bots, Replay) leave
+	// it off and keep the server's authority. Never decoded from the
+	// wire and not logged, because the refusal is an ingress check that
+	// a recorded move has already passed.
+	FromClient bool `json:"-"`
 }
 
 // Public sentinel errors. They're surfaced through the transport with
@@ -49,6 +59,7 @@ var (
 	ErrBlocked          = errors.New("match has pending blocks; supply MoveRequest.ResumeTag")
 	ErrUnknownResumeTag = errors.New("ResumeTag does not match any pending block")
 	ErrMoveNotInStage   = errors.New("move is not allowed in the player's current stage")
+	ErrServerOnly       = errors.New("move is marked Move.ServerOnly — credentialed clients cannot dispatch it; use Manager.DispatchServer")
 	ErrDrainOverflow    = errors.New("cascade drain exceeded MaxDrainDepth")
 )
 
@@ -74,30 +85,38 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 //  1. Reject if the game is already over.
 //  2. Resolve ResumeTag against State.Blocks (removes one matching).
 //  3. Resolve the move from the player's stage table, then the active
-//     phase or global table. Steps 4 to 7 all judge this one move.
-//  4. If blocks remain, no ResumeTag was consumed and the move doesn't
+//     phase or global table. Steps 4 to 8 all judge this one move.
+//  4. A client's request (FromClient) may not make a ServerOnly move
+//     (ErrServerOnly).
+//  5. If blocks remain, no ResumeTag was consumed and the move doesn't
 //     IgnoreBlocks, ErrBlocked.
-//  5. Check the player is allowed to move in the current scope.
-//  6. Reject a stale StateID (ErrStaleState).
-//  7. An Exclusive stage refuses a move that did not resolve from its
+//  6. Check the player is allowed to move in the current scope.
+//  7. Reject a stale StateID (ErrStaleState).
+//  8. An Exclusive stage refuses a move that did not resolve from its
 //     own table (ErrMoveNotInStage).
-//  8. Run the move function -> new G.
-//  9. Run turn.OnMove and count the move (unless NoLimit).
-//  10. Drain queued events (endTurn, setStage, ...).
-//  11. Check Game.EndIf, phase.EndIf, turn.EndIf / MaxMoves.
-//  12. Bump State.StateID once.
-//  13. Drain State.Queue (cascade). Each drain step runs through
+//  9. Run the move function -> new G.
+//  10. Run turn.OnMove and count the move (unless NoLimit).
+//  11. Drain queued events (endTurn, setStage, ...).
+//  12. Check Game.EndIf, phase.EndIf, turn.EndIf / MaxMoves.
+//  13. Bump State.StateID once.
+//  14. Drain State.Queue (cascade). Each drain step runs through
 //     applyOne with a Parent log index; the outer state-ID stays put.
 //     Pauses on the first non-empty Blocks set.
 //
-// Which requests skip steps 5 and 7 is decided in one place,
+// Which requests skip steps 6 and 8 is decided in one place,
 // exemptionsFor.
 //
 // On any error, whichever step raised it, ApplyContext returns the state
-// it was given (cascades are atomic). It never changes that state: the
-// move works on private copies of the containers the reducer writes
-// into in place (see ownContainers), so neither a failed nor a
-// successful move writes through to the caller's State.
+// it was given (cascades are atomic). The reducer never writes into that
+// state: before the move runs it takes private copies of the containers
+// it changes in place (see ownContainers). Two things stay shared. G and
+// plugin data: a move or plugin that mutates them in place, rather than
+// returning new values, writes through to the caller's state even when
+// the move fails. And the spare capacity of the slices the reducer
+// appends to (Log, Queue, Blocks, TurnSnapshots): results of two Apply
+// calls on one input can share a backing array, so a caller that keeps
+// both should first cut those slices to their length
+// (s.Log = s.Log[:len(s.Log):len(s.Log)], and so on).
 func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest) (State, error) {
 	next, err := applyExternal(ctx, game, ownContainers(state), req)
 	if err != nil {
@@ -147,6 +166,11 @@ func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest
 	// table.
 	stage, authErr := authorizedStage(state.Ctx, req.PlayerID)
 	move, inStage, err := resolveMove(game, state.Ctx, stage, req.Move)
+
+	// A client may not make a ServerOnly move, wherever it is registered.
+	if req.FromClient && err == nil && move.ServerOnly {
+		return State{}, ErrServerOnly
+	}
 
 	// Block gate: pending blocks refuse non-IgnoreBlocks moves that are
 	// not resuming one of them, so unrelated external work can't sneak
@@ -530,22 +554,6 @@ func authorizedStage(ctx Ctx, playerID string) (string, error) {
 			ErrWrongPlayer, ctx.CurrentPlayer, playerID)
 	}
 	return "", nil
-}
-
-// ResolveMove returns the Move that a request from playerID naming the
-// move name would run against ctx: the player's stage table first, then
-// the active phase's table, then the game's. It is the lookup Apply
-// uses, so a caller that gates requests on a move's flags (the match
-// manager refusing ServerOnly moves to clients) judges the move the
-// reducer would actually run, wherever it is registered.
-//
-// It does not decide whether the request would be accepted: Apply still
-// checks the turn, pending blocks, stale state and Exclusive stages.
-func (g *Game) ResolveMove(ctx Ctx, playerID, name string) (Move, error) {
-	// A player the turn check refuses has no stage, exactly as in Apply.
-	stage, _ := authorizedStage(ctx, playerID)
-	move, _, err := resolveMove(g, ctx, stage, name)
-	return move, err
 }
 
 // resolveMove finds the Move for the named move in the current scope.
