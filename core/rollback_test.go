@@ -16,8 +16,12 @@ type stateView struct {
 	Blocks        []BlockSpec
 	ActivePlayers map[string]string
 	MoveCounts    map[string]int
+	StageMin      map[string]int
+	StageMax      map[string]int
 	PlayOrder     []string
 	ActiveStack   []activeFrame
+	Log           []LogEntry
+	Queue         []QueuedAction
 }
 
 func viewOf(s State) stateView {
@@ -28,7 +32,11 @@ func viewOf(s State) stateView {
 		Blocks:        append([]BlockSpec(nil), s.Blocks...),
 		ActivePlayers: copyStrMap(s.Ctx.ActivePlayers),
 		MoveCounts:    copyIntMap(s.MoveCounts),
+		StageMin:      copyIntMap(s.StageMinMoves),
+		StageMax:      copyIntMap(s.StageMaxMoves),
 		PlayOrder:     append([]string(nil), s.Ctx.PlayOrder...),
+		Log:           append([]LogEntry(nil), s.Log...),
+		Queue:         append([]QueuedAction(nil), s.Queue...),
 	}
 	for _, f := range s.ActiveStack {
 		v.ActiveStack = append(v.ActiveStack, activeFrame{
@@ -69,7 +77,9 @@ func rollbackGame() *Game {
 		Setup:      func(_ Ctx, _ any) G { return &targetState{} },
 		Moves: map[string]any{
 			"enter": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
-				mc.Events.SetActivePlayers(ActivePlayersConfig{CurrentPlayer: Stage("work")})
+				// MaxMoves only populates the stage move limits; no
+				// test makes that many moves.
+				mc.Events.SetActivePlayers(ActivePlayersConfig{CurrentPlayer: Stage("work"), MaxMoves: 10})
 				mc.Queue.Block("confirm", mc.PlayerID, nil)
 				return cloneT(mc.G.(*targetState), "enter"), nil
 			}),

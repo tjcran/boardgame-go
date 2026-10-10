@@ -118,17 +118,18 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 // both should first cut those slices to their length
 // (s.Log = s.Log[:len(s.Log):len(s.Log)], and so on).
 func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest) (State, error) {
-	next, err := applyExternal(ctx, game, ownContainers(state), req)
+	next, err := applyExternal(ctx, game, state, req)
 	if err != nil {
 		return state, err
 	}
 	return next, nil
 }
 
-// applyExternal is ApplyContext's pipeline. state is the caller's state
-// with containers of its own, so it may be changed freely; on error the
-// returned State is meaningless, because ApplyContext discards it and
-// hands back the caller's state.
+// applyExternal is ApplyContext's pipeline. state is a value copy of the
+// caller's state: the checks only reassign its fields, and it takes its
+// own containers before the move runs. On error the returned State is
+// meaningless, because ApplyContext discards it and hands back the
+// caller's state.
 func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest) (State, error) {
 	if state.Ctx.Gameover != nil {
 		return State{}, ErrGameOver
@@ -214,6 +215,11 @@ func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest
 				ErrMoveNotInStage, req.Move, stage)
 		}
 	}
+
+	// The checks above only reassign fields of this value copy. From here
+	// on the pipeline writes into containers in place, so take private
+	// copies now: a request refused above costs no copying.
+	state = ownContainers(state)
 
 	events := &Events{}
 	queue := &Queue{}
