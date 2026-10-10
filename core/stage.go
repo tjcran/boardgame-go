@@ -33,6 +33,11 @@ type StageConfig struct {
 	// instead of falling through to the phase/global table. This matches
 	// boardgame.io, where a stage that defines moves is exclusive.
 	//
+	// When the active phase's Turn.Stages and the game-level Turn.Stages
+	// both define the stage, the two Moves tables layer into one (the
+	// phase's entry wins a name both define), and the phase's entry
+	// decides Exclusive, as it decides which OnBegin/OnEnd hooks run.
+	//
 	// Some moves stay legal regardless, because refusing them would
 	// strand the match or override the server:
 	//

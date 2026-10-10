@@ -73,13 +73,14 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 //
 //  1. Reject if the game is already over.
 //  2. Resolve ResumeTag against State.Blocks (removes one matching).
-//  3. If blocks remain and the move doesn't IgnoreBlocks, ErrBlocked.
-//  4. Check the player is allowed to move in the current scope.
-//  5. Resolve the move from the player's stage table, then the active
-//     phase or global table.
+//  3. Resolve the move from the player's stage table, then the active
+//     phase or global table. Steps 4 to 7 all judge this one move.
+//  4. If blocks remain, no ResumeTag was consumed and the move doesn't
+//     IgnoreBlocks, ErrBlocked.
+//  5. Check the player is allowed to move in the current scope.
 //  6. Reject a stale StateID (ErrStaleState).
-//  7. An Exclusive stage refuses a move that is not in its own table
-//     (ErrMoveNotInStage).
+//  7. An Exclusive stage refuses a move that did not resolve from its
+//     own table (ErrMoveNotInStage).
 //  8. Run the move function -> new G.
 //  9. Run turn.OnMove and count the move (unless NoLimit).
 //  10. Drain queued events (endTurn, setStage, ...).
@@ -89,7 +90,7 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 //     applyOne with a Parent log index; the outer state-ID stays put.
 //     Pauses on the first non-empty Blocks set.
 //
-// Which requests skip steps 4 and 7 is decided in one place,
+// Which requests skip steps 5 and 7 is decided in one place,
 // exemptionsFor.
 //
 // On any error after the external move starts, the returned state
@@ -126,6 +127,15 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		state.Blocks = append(kept, state.Blocks[idx+1:]...)
 	}
 
+	// Resolve the move once, from the caller's stage table first, then
+	// the phase's table, then the game's. Every check below judges this
+	// move, so none of them can disagree about which move would run. A
+	// player authorizedStage refuses is not listed in ActivePlayers, so
+	// their stage is "" and an exempt move resolves from the phase/global
+	// table.
+	stage, authErr := authorizedStage(state.Ctx, req.PlayerID)
+	move, inStage, err := resolveMove(game, state.Ctx, stage, req.Move)
+
 	// Block gate: pending blocks refuse non-IgnoreBlocks moves that are
 	// not resuming one of them, so unrelated external work can't sneak
 	// past a pause. A move that consumed a valid ResumeTag proceeds even
@@ -133,21 +143,12 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// once, and they must be answerable one at a time (gating resumes on
 	// "all blocks gone" would soft-lock the match; the remaining blocks
 	// keep gating every non-resume move).
-	if resumingBlock == nil && len(state.Blocks) > 0 {
-		move, err := resolveMove(game, state.Ctx, "", req.Move)
-		if err == nil && !move.IgnoreBlocks {
-			return rollback, ErrBlocked
-		}
+	if resumingBlock == nil && len(state.Blocks) > 0 && err == nil && !move.IgnoreBlocks {
+		return rollback, ErrBlocked
 	}
 
-	// Player must be allowed to move in this scope, then the move is
-	// resolved from the active move table: stage overrides first, then
-	// phase overrides, then global. A player authorizedStage refuses is
-	// not listed in ActivePlayers, so their stage is "" and an exempt
-	// move resolves from the phase/global table. exemptionsFor says
+	// Player must be allowed to move in this scope. exemptionsFor says
 	// which refusals a request is excused from.
-	stage, authErr := authorizedStage(state.Ctx, req.PlayerID)
-	move, err := resolveMove(game, state.Ctx, stage, req.Move)
 	exempt := exemptionsFor(move, resumingBlock, req)
 	if authErr != nil && (err != nil || !exempt.turn) {
 		return rollback, authErr
@@ -169,12 +170,13 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 
 	// An Exclusive stage confines its players to its own move table,
 	// so a name that resolved from the phase/global fallback is refused.
-	if stage != "" && !exempt.stageScope {
+	// resolveMove says which table the move came from; lookupStage picks
+	// the stage config whose Exclusive flag governs, as it does for the
+	// stage's hooks.
+	if stage != "" && !inStage && !exempt.stageScope {
 		if sc := lookupStage(game, state.Ctx.Phase, stage); sc != nil && sc.Exclusive {
-			if _, ok := sc.Moves[req.Move]; !ok {
-				return rollback, fmt.Errorf("%w: move=%q stage=%q",
-					ErrMoveNotInStage, req.Move, stage)
-			}
+			return rollback, fmt.Errorf("%w: move=%q stage=%q",
+				ErrMoveNotInStage, req.Move, stage)
 		}
 	}
 
@@ -430,7 +432,7 @@ func applyStep(ctx context.Context, game *Game, state State, action QueuedAction
 	if err != nil {
 		return state, err
 	}
-	move, err := resolveMove(game, state.Ctx, stage, action.Move)
+	move, _, err := resolveMove(game, state.Ctx, stage, action.Move)
 	if err != nil {
 		return state, err
 	}
@@ -531,19 +533,26 @@ func authorizedStage(ctx Ctx, playerID string) (string, error) {
 func (g *Game) ResolveMove(ctx Ctx, playerID, name string) (Move, error) {
 	// A player the turn check refuses has no stage, exactly as in Apply.
 	stage, _ := authorizedStage(ctx, playerID)
-	return resolveMove(g, ctx, stage, name)
+	move, _, err := resolveMove(g, ctx, stage, name)
+	return move, err
 }
 
 // resolveMove finds the Move for the named move in the current scope.
-// Stage moves win over phase moves, which win over global moves.
-func resolveMove(game *Game, ctx Ctx, stage, name string) (Move, error) {
+// Stage moves win over phase moves, which win over global moves. The
+// stage table layers the active phase's Turn.Stages entry over the
+// game-level entry of the same name, so a name either defines is a stage
+// move. inStage reports whether the move came from that stage table
+// rather than the phase/global fallback; it is the one statement of
+// which moves an Exclusive stage holds.
+func resolveMove(game *Game, ctx Ctx, stage, name string) (move Move, inStage bool, err error) {
 	// 1. Stage moves (only if a stage is active).
 	if stage != "" && ctx.Phase != "" {
 		if p, ok := game.Phases[ctx.Phase]; ok {
 			if p.Turn != nil {
 				if s, ok := p.Turn.Stages[stage]; ok && s.Moves != nil {
 					if v, ok := s.Moves[name]; ok {
-						return asMove(v)
+						move, err = asMove(v)
+						return move, true, err
 					}
 				}
 			}
@@ -552,16 +561,18 @@ func resolveMove(game *Game, ctx Ctx, stage, name string) (Move, error) {
 	if stage != "" && game.Turn != nil {
 		if s, ok := game.Turn.Stages[stage]; ok && s.Moves != nil {
 			if v, ok := s.Moves[name]; ok {
-				return asMove(v)
+				move, err = asMove(v)
+				return move, true, err
 			}
 		}
 	}
 	// 2. Phase moves (or global if phase didn't override).
 	scope := game.scopeMoves(ctx.Phase)
 	if v, ok := scope[name]; ok {
-		return asMove(v)
+		move, err = asMove(v)
+		return move, false, err
 	}
-	return Move{}, fmt.Errorf("%w: %q", ErrUnknownMove, name)
+	return Move{}, false, fmt.Errorf("%w: %q", ErrUnknownMove, name)
 }
 
 // checkTurnAutoEnd evaluates turn.EndIf and turn.MaxMoves and ends the turn

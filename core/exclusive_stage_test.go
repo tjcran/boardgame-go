@@ -253,6 +253,52 @@ func TestExclusiveStagePhaseOverridesGlobal(t *testing.T) {
 	}
 }
 
+// TestExclusiveStageAdmitsEveryStageLayer: a phase's Turn.Stages entry
+// and the game-level entry of the same name layer into one stage move
+// table (the phase's entry wins a name both define). An Exclusive stage
+// confines its players to that whole table, so a move that resolves from
+// the game-level layer is in the stage and runs; only a move from the
+// phase/global fallback is refused.
+func TestExclusiveStageAdmitsEveryStageLayer(t *testing.T) {
+	game := &Game{
+		Name:       "exclusive-stage-layers-test",
+		MinPlayers: 2,
+		MaxPlayers: 2,
+		Setup:      func(_ Ctx, _ any) G { return &targetState{} },
+		Moves: map[string]any{
+			"enter": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
+				mc.Events.SetActivePlayers(ActivePlayersConfig{CurrentPlayer: Stage("respond")})
+				return cloneT(mc.G.(*targetState), "enter"), nil
+			}),
+			"phaseMove": recordMove("phaseMove"),
+		},
+		Phases: map[string]*PhaseConfig{
+			"main": {Start: true, Turn: &TurnConfig{Stages: map[string]*StageConfig{
+				"respond": {Exclusive: true, Moves: map[string]any{"respond": recordMove("respond")}},
+			}}},
+		},
+		Turn: &TurnConfig{Stages: map[string]*StageConfig{
+			"respond": {Moves: map[string]any{"globalRespond": recordMove("globalRespond")}},
+		}},
+	}
+	state, player := enterStage(t, game, "enter")
+
+	for _, move := range []string{"respond", "globalRespond"} {
+		next, err := Apply(game, state, MoveRequest{PlayerID: player, Move: move})
+		if err != nil {
+			t.Fatalf("%s: %v", move, err)
+		}
+		if events := next.G.(*targetState).Events; events[len(events)-1] != move {
+			t.Fatalf("%s did not run: events = %v", move, events)
+		}
+	}
+	next, err := Apply(game, state, MoveRequest{PlayerID: player, Move: "phaseMove"})
+	if !errors.Is(err, ErrMoveNotInStage) {
+		t.Fatalf("phaseMove: err = %v, want ErrMoveNotInStage", err)
+	}
+	assertUnchanged(t, state, next)
+}
+
 // assertUnchanged fails when a rejected move left any trace: the
 // returned state must be the pre-move state, pending prompts and the
 // caller's stage included.
