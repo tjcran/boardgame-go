@@ -93,13 +93,26 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 // Which requests skip steps 5 and 7 is decided in one place,
 // exemptionsFor.
 //
-// On any error after the external move starts, the returned state
-// equals the pre-Apply state (cascades are atomic).
+// On any error, whichever step raised it, ApplyContext returns the state
+// it was given (cascades are atomic). It never changes that state: the
+// move works on private copies of the containers the reducer writes
+// into in place (see ownContainers), so neither a failed nor a
+// successful move writes through to the caller's State.
 func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest) (State, error) {
-	rollback := state
+	next, err := applyExternal(ctx, game, ownContainers(state), req)
+	if err != nil {
+		return state, err
+	}
+	return next, nil
+}
 
+// applyExternal is ApplyContext's pipeline. state is the caller's state
+// with containers of its own, so it may be changed freely; on error the
+// returned State is meaningless, because ApplyContext discards it and
+// hands back the caller's state.
+func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest) (State, error) {
 	if state.Ctx.Gameover != nil {
-		return state, ErrGameOver
+		return State{}, ErrGameOver
 	}
 
 	// Expose the request's wall clock to moves and hooks for this apply.
@@ -114,14 +127,13 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	if req.ResumeTag != "" {
 		idx := findBlock(state.Blocks, req.ResumeTag, req.PlayerID, req.Move)
 		if idx < 0 {
-			return state, fmt.Errorf("%w: tag=%s player=%s move=%s",
+			return State{}, fmt.Errorf("%w: tag=%s player=%s move=%s",
 				ErrUnknownResumeTag, req.ResumeTag, req.PlayerID, req.Move)
 		}
 		b := state.Blocks[idx]
 		resumingBlock = &b
-		// Fresh slice: removing in place would shift the shared backing
-		// array under rollback.Blocks, and every rejection below returns
-		// rollback as the unchanged pre-move state.
+		// Fresh slice: removing in place would shift the backing array
+		// the caller's state shares (ownContainers does not copy Blocks).
 		kept := make([]BlockSpec, 0, len(state.Blocks)-1)
 		kept = append(kept, state.Blocks[:idx]...)
 		state.Blocks = append(kept, state.Blocks[idx+1:]...)
@@ -144,17 +156,17 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// "all blocks gone" would soft-lock the match; the remaining blocks
 	// keep gating every non-resume move).
 	if resumingBlock == nil && len(state.Blocks) > 0 && err == nil && !move.IgnoreBlocks {
-		return rollback, ErrBlocked
+		return State{}, ErrBlocked
 	}
 
 	// Player must be allowed to move in this scope. exemptionsFor says
 	// which refusals a request is excused from.
 	exempt := exemptionsFor(move, resumingBlock, req)
 	if authErr != nil && (err != nil || !exempt.turn) {
-		return rollback, authErr
+		return State{}, authErr
 	}
 	if err != nil {
-		return rollback, err
+		return State{}, err
 	}
 
 	// Stale-state guard. Opt-in: req.StateID=0 means "don't check"
@@ -165,7 +177,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// client acting on an old view is told to refresh rather than that
 	// its move is illegal in a stage it may no longer be in.
 	if req.StateID > 0 && req.StateID != state.StateID && !move.IgnoreStaleStateID {
-		return rollback, ErrStaleState
+		return State{}, ErrStaleState
 	}
 
 	// An Exclusive stage confines its players to its own move table,
@@ -175,7 +187,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// stage's hooks.
 	if stage != "" && !inStage && !exempt.stageScope {
 		if sc := lookupStage(game, state.Ctx.Phase, stage); sc != nil && sc.Exclusive {
-			return rollback, fmt.Errorf("%w: move=%q stage=%q",
+			return State{}, fmt.Errorf("%w: move=%q stage=%q",
 				ErrMoveNotInStage, req.Move, stage)
 		}
 	}
@@ -215,7 +227,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	moveFn := applyFnWrapMove(game, move.Move)
 	nextG, err := moveFn(mc, req.Args...)
 	if err != nil {
-		return state, err
+		return State{}, err
 	}
 
 	next := state
@@ -251,7 +263,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 
 	// Reject the move if any plugin signals invalidity (BGIO's isInvalid).
 	if err := validatePlugins(game, next); err != nil {
-		return state, err
+		return State{}, err
 	}
 
 	// Run turn.OnMove with the updated G.
@@ -270,7 +282,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// transitions the move asked for (events.EndTurn, events.SetStage, …).
 	next, err = drainEvents(game, next, mc, env)
 	if err != nil {
-		return state, err
+		return State{}, err
 	}
 
 	// BGIO order: Game.EndIf is evaluated BEFORE any auto-end behaviour
@@ -299,7 +311,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// Drain anything queued by the EndIf / auto-end paths above.
 	next, err = drainEvents(game, next, mc, env)
 	if err != nil {
-		return state, err
+		return State{}, err
 	}
 
 	// Flush any AddLog entries that hooks/moves appended.
@@ -315,8 +327,8 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		for _, pid := range mc.dropBlocksFor {
 			drop[pid] = true
 		}
-		// Fresh slice — next.Blocks aliases the pre-move state's array,
-		// and later error paths return that state for rollback.
+		// Fresh slice — next.Blocks may alias the caller's array, and
+		// the undo snapshot's.
 		kept := make([]BlockSpec, 0, len(next.Blocks))
 		for _, b := range next.Blocks {
 			if !drop[b.PlayerID] {
@@ -341,14 +353,14 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	for len(next.Queue) > 0 && len(next.Blocks) == 0 && next.Ctx.Gameover == nil {
 		depth++
 		if depth > MaxDrainDepth {
-			return rollback, ErrDrainOverflow
+			return State{}, ErrDrainOverflow
 		}
 		step := next.Queue[0]
 		next.Queue = next.Queue[1:]
 		var stepErr error
 		next, stepErr = applyStep(ctx, game, next, step, parentIdx)
 		if stepErr != nil {
-			return rollback, stepErr
+			return State{}, stepErr
 		}
 	}
 
