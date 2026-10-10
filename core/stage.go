@@ -26,17 +26,17 @@ type StageConfig struct {
 	// that table — a name missing here (or every name, when Moves is nil)
 	// still resolves from the phase/global moves. Set Exclusive to make
 	// this table the complete set of moves a player in the stage may make.
+	//
+	// When the active phase's Turn.Stages and the game-level Turn.Stages
+	// both define a stage name, the phase's entry is that stage while the
+	// phase is active: its Moves, Exclusive flag and hooks apply, and the
+	// game-level entry's Moves are not consulted.
 	Moves map[string]any
 
 	// Exclusive, when true, restricts a player in this stage to the moves
 	// listed in Moves; any other move is rejected with ErrMoveNotInStage
 	// instead of falling through to the phase/global table. This matches
 	// boardgame.io, where a stage that defines moves is exclusive.
-	//
-	// When the active phase's Turn.Stages and the game-level Turn.Stages
-	// both define the stage, the two Moves tables layer into one (the
-	// phase's entry wins a name both define), and the phase's entry
-	// decides Exclusive, as it decides which OnBegin/OnEnd hooks run.
 	//
 	// Some moves stay legal regardless, because refusing them would
 	// strand the match or override the server:

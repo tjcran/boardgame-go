@@ -182,9 +182,8 @@ func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest
 
 	// An Exclusive stage confines its players to its own move table,
 	// so a name that resolved from the phase/global fallback is refused.
-	// resolveMove says which table the move came from; lookupStage picks
-	// the stage config whose Exclusive flag governs, as it does for the
-	// stage's hooks.
+	// resolveMove read the stage table from the same lookupStage config
+	// whose Exclusive flag is checked here.
 	if stage != "" && !inStage && !exempt.stageScope {
 		if sc := lookupStage(game, state.Ctx.Phase, stage); sc != nil && sc.Exclusive {
 			return State{}, fmt.Errorf("%w: move=%q stage=%q",
@@ -551,36 +550,22 @@ func (g *Game) ResolveMove(ctx Ctx, playerID, name string) (Move, error) {
 
 // resolveMove finds the Move for the named move in the current scope.
 // Stage moves win over phase moves, which win over global moves. The
-// stage table layers the active phase's Turn.Stages entry over the
-// game-level entry of the same name, so a name either defines is a stage
-// move. inStage reports whether the move came from that stage table
-// rather than the phase/global fallback; it is the one statement of
-// which moves an Exclusive stage holds.
+// stage's moves are the Moves of the stage config lookupStage picks (the
+// active phase's Turn.Stages entry, else the game-level one), the same
+// config whose Exclusive flag and hooks govern the stage. inStage
+// reports whether the move came from that table rather than the
+// phase/global fallback; it is the one statement of which moves an
+// Exclusive stage holds.
 func resolveMove(game *Game, ctx Ctx, stage, name string) (move Move, inStage bool, err error) {
-	// 1. Stage moves (only if a stage is active).
-	if stage != "" && ctx.Phase != "" {
-		if p, ok := game.Phases[ctx.Phase]; ok {
-			if p.Turn != nil {
-				if s, ok := p.Turn.Stages[stage]; ok && s.Moves != nil {
-					if v, ok := s.Moves[name]; ok {
-						move, err = asMove(v)
-						return move, true, err
-					}
-				}
-			}
-		}
-	}
-	if stage != "" && game.Turn != nil {
-		if s, ok := game.Turn.Stages[stage]; ok && s.Moves != nil {
-			if v, ok := s.Moves[name]; ok {
+	if stage != "" {
+		if sc := lookupStage(game, ctx.Phase, stage); sc != nil {
+			if v, ok := sc.Moves[name]; ok {
 				move, err = asMove(v)
 				return move, true, err
 			}
 		}
 	}
-	// 2. Phase moves (or global if phase didn't override).
-	scope := game.scopeMoves(ctx.Phase)
-	if v, ok := scope[name]; ok {
+	if v, ok := game.scopeMoves(ctx.Phase)[name]; ok {
 		move, err = asMove(v)
 		return move, false, err
 	}
