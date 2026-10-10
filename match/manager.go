@@ -844,6 +844,9 @@ func (m *Manager) DryMoveReq(matchID, playerID, credentials string, req core.Mov
 	}
 	req.PlayerID = seat
 	req.ServerDispatch = false // a client request; see MoveReqCtx
+	if err := refuseServerOnly(g, match.State, req); err != nil {
+		return core.State{}, err
+	}
 	return core.Apply(g, match.State, req)
 }
 
@@ -896,21 +899,24 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 	req.PlayerID = seat
 	// A credentialed request is a client's move, never the server's own,
 	// whatever the caller put in the struct. Only DispatchServer sets it.
+	// dispatchLocked refuses a client's ServerOnly move.
 	req.ServerDispatch = false
 
-	// Look up the move definition to check ServerOnly. Credentialed
-	// clients cannot dispatch server-only moves — they must go via
-	// Manager.DispatchServer.
-	if mv, ok := g.Moves[req.Move]; ok {
-		// g.Moves values are core.Move (value type) or core.MoveFn.
-		// Only core.Move carries the ServerOnly flag; MoveFn implicitly
-		// has ServerOnly=false.
-		if move, ok := mv.(core.Move); ok && move.ServerOnly {
-			return core.State{}, ErrServerOnly
-		}
-	}
-
 	return m.dispatchLocked(ctx, matchID, playerID, g, match, req)
+}
+
+// refuseServerOnly returns ErrServerOnly when req, a client's request,
+// names a move flagged Move.ServerOnly in state. Clients must leave such
+// moves to Manager.DispatchServer. The name is resolved with
+// core.Game.ResolveMove, the reducer's own lookup, so a ServerOnly move
+// registered in a phase or stage table is refused like a top-level one,
+// and a stage move that shadows a ServerOnly name is judged as the move
+// that would actually run.
+func refuseServerOnly(g *core.Game, state core.State, req core.MoveRequest) error {
+	if move, err := g.ResolveMove(state.Ctx, req.PlayerID, req.Move); err == nil && move.ServerOnly {
+		return ErrServerOnly
+	}
+	return nil
 }
 
 // dispatchLocked runs a move through the OCC retry loop, persists,
@@ -919,7 +925,9 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 //
 // Shared between MoveReqCtx (credentialed) and DispatchServer (no
 // credentials) so both paths go through identical lifecycle and
-// persist semantics — the only difference is what runs upstream.
+// persist semantics. The differences are what runs upstream and that a
+// client's request (req.ServerDispatch false) may not run a ServerOnly
+// move.
 func (m *Manager) dispatchLocked(
 	ctx context.Context,
 	matchID string,
@@ -948,6 +956,13 @@ func (m *Manager) dispatchLocked(
 		prevGameover any
 	)
 	for attempt := 0; ; attempt++ {
+		// Checked against the state this attempt applies to, so an OCC
+		// reload that moved the player into another stage is re-checked.
+		if !req.ServerDispatch {
+			if err := refuseServerOnly(g, match.State, req); err != nil {
+				return core.State{}, err
+			}
+		}
 		prevGameover = match.State.Ctx.Gameover
 		prevState = match.State // pre-move snapshot for lifecycle observers
 		var err error
@@ -1046,7 +1061,8 @@ func (m *Manager) dispatchLocked(
 //
 // playerID is the seat the move appears as having been made by;
 // LifecycleMatchMoved observers see this as PlayerID just like a
-// credentialed move. moveName must match a key in Game.Moves. ServerOnly
+// credentialed move. moveName resolves like any move: the seat's stage
+// table, then the active phase's, then the game's. ServerOnly
 // moves are dispatchable here (the asymmetric counterpart to MoveReqCtx's
 // ServerOnly refusal); non-ServerOnly moves are dispatchable too — the
 // server's authority covers anything in the game's move set.

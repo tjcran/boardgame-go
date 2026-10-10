@@ -519,6 +519,21 @@ func authorizedStage(ctx Ctx, playerID string) (string, error) {
 	return "", nil
 }
 
+// ResolveMove returns the Move that a request from playerID naming the
+// move name would run against ctx: the player's stage table first, then
+// the active phase's table, then the game's. It is the lookup Apply
+// uses, so a caller that gates requests on a move's flags (the match
+// manager refusing ServerOnly moves to clients) judges the move the
+// reducer would actually run, wherever it is registered.
+//
+// It does not decide whether the request would be accepted: Apply still
+// checks the turn, pending blocks, stale state and Exclusive stages.
+func (g *Game) ResolveMove(ctx Ctx, playerID, name string) (Move, error) {
+	// A player the turn check refuses has no stage, exactly as in Apply.
+	stage, _ := authorizedStage(ctx, playerID)
+	return resolveMove(g, ctx, stage, name)
+}
+
 // resolveMove finds the Move for the named move in the current scope.
 // Stage moves win over phase moves, which win over global moves.
 func resolveMove(game *Game, ctx Ctx, stage, name string) (Move, error) {
