@@ -189,6 +189,41 @@ func TestWindowStageIsExclusive(t *testing.T) {
 	}
 }
 
+// TestServerDispatchMidWindowRefused pins the game's own window guard.
+// A move the server dispatches is not confined by the Exclusive respond
+// stage, so a server-dispatched cast or endTurn reaches the move
+// function mid-window; the move must refuse with errWindowOpen before it
+// touches the (in-place mutated) G.
+func TestServerDispatchMidWindowRefused(t *testing.T) {
+	game := New()
+	s := core.NewMatch(game, 2, nil)
+	s = applyOK(t, game, s, "0", "cast", handCard(t, s, "0", "duskwisp"))
+	before, err := json.Marshal(s.G)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	for _, req := range []core.MoveRequest{
+		{PlayerID: "0", Move: "cast", Args: []any{any(handCard(t, s, "0", "glowmoth"))}, ServerDispatch: true},
+		{PlayerID: "0", Move: "endTurn", ServerDispatch: true},
+	} {
+		next, err := core.Apply(game, s, req)
+		if !errors.Is(err, errWindowOpen) {
+			t.Fatalf("server-dispatched %s during window err = %v, want errWindowOpen", req.Move, err)
+		}
+		if next.StateID != s.StateID {
+			t.Fatalf("%s during window changed StateID %d -> %d", req.Move, s.StateID, next.StateID)
+		}
+		after, err := json.Marshal(next.G)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if string(after) != string(before) {
+			t.Fatalf("refused %s changed G:\n%s\n%s", req.Move, before, after)
+		}
+	}
+}
+
 // TestReplayDeterminism applies the same move log twice and requires
 // byte-identical serialized states — the whole stack/priority/trigger
 // pipeline must add no hidden nondeterminism.
