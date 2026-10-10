@@ -13,6 +13,17 @@ func TestValidateRejectsNilSetup(t *testing.T) {
 	}
 }
 
+// TestValidateAcceptsExclusiveStageWithoutMoves: an Exclusive stage with
+// no move table (exclusiveStageGame's "locked") is a legitimate hold,
+// released by the named answer to a prompt, the server or an AnyPlayer
+// move. Validate cannot see those at registration, so it accepts the
+// stage. See StageConfig.Exclusive.
+func TestValidateAcceptsExclusiveStageWithoutMoves(t *testing.T) {
+	if err := exclusiveStageGame(true).Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
 func TestValidateRejectsMultipleStartPhases(t *testing.T) {
 	g := &Game{
 		Name:  "x",
