@@ -262,7 +262,10 @@ table or [JS_LIMITATIONS.md](JS_LIMITATIONS.md) for the full
 analysis.
 
 - **Action queue + drain primitive** (`mc.Queue.Push` / `Block` with
-  `ResumeTag` matching) for MTG-style trigger cascades with pause/resume
+  `ResumeTag` matching) for MTG-style trigger cascades with pause/resume.
+  Lifecycle hooks and `Events.RunMove` chained moves share the move's
+  queue (match setup and `ForceEndTurn` give theirs one too), so a
+  start-of-turn trigger can raise a prompt from `Turn.OnBegin`
 - **Per-move observability primitives** — `LifecycleMatchMoved` events
   carry `PrevState` and `LogDelta`; `LifecycleMatchMoveRejected` fires
   with `Err` and `StateID` when the engine rejects a move;

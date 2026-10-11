@@ -99,9 +99,11 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 //  11. Drain queued events (endTurn, setStage, ...).
 //  12. Check Game.EndIf, phase.EndIf, turn.EndIf / MaxMoves.
 //  13. Bump State.StateID once.
-//  14. Drain State.Queue (cascade). Each drain step runs through
-//     applyOne with a Parent log index; the outer state-ID stays put.
-//     Pauses on the first non-empty Blocks set.
+//  14. Harvest the Queue.Push / Queue.Block calls of the move and of
+//     every hook it fired, then drain State.Queue (cascade, see
+//     drainCascade). Each drain step runs through applyStep with a
+//     Parent log index; the outer state-ID stays put. Pauses on the
+//     first non-empty Blocks set.
 //
 // Which requests skip steps 6 and 8 is decided in one place,
 // exemptionsFor.
@@ -240,8 +242,10 @@ func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest
 		ResumingBlock: resumingBlock,
 	}).attachPlugins(plugins)
 	// Hooks fired during this move share the move's plugin APIs, so their
-	// mutations land in the same objects flushPlugins persists below.
-	env := &hookEnv{events: events, plugins: plugins}
+	// mutations land in the same objects flushPlugins persists below, and
+	// the move's action Queue, so the moves they push and the blocks they
+	// raise are harvested with the move's own, after them.
+	env := &hookEnv{events: events, queue: queue, plugins: plugins}
 
 	// Snapshot pre-move state for undo. Only meaningful when the game
 	// hasn't disabled undo and the specific move is undoable. We resolve
@@ -350,7 +354,10 @@ func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest
 
 	// Apply DropBlocksFor requests BEFORE merging new blocks: a
 	// timeout/forfeit move abandons the named players' stranded
-	// prompts (their pending effects die with them).
+	// prompts (their pending effects die with them). Blocks raised during
+	// this move, by the move or by a hook its events fired (the next
+	// turn's OnBegin, say), are still in the queue at this point, so they
+	// survive the drop.
 	if len(mc.dropBlocksFor) > 0 {
 		drop := map[string]bool{}
 		for _, pid := range mc.dropBlocksFor {
@@ -367,33 +374,70 @@ func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest
 		next.Blocks = kept
 	}
 
-	// Harvest the move's Queue.Push / Queue.Block calls.
-	pending, newBlocks := queue.drain()
-	next.Queue = append(next.Queue, pending...)
-	next.Blocks = append(next.Blocks, newBlocks...)
-
-	// Cascade drain. Each pending action runs through applyStep (the
-	// same machinery as Apply but no state-ID bump, no resume-tag
-	// handling, no ErrBlocked gate — those are external-move concerns).
-	// Pauses on the first non-empty Blocks set. Any error inside the
-	// cascade rolls back the WHOLE external move so we never persist a
+	// Harvest the Queue.Push / Queue.Block calls of the move and of the
+	// hooks it fired, then run the cascade. Any error inside the cascade
+	// rolls back the WHOLE external move so we never persist a
 	// half-finished resolution.
-	depth := 0
-	for len(next.Queue) > 0 && len(next.Blocks) == 0 && next.Ctx.Gameover == nil {
-		depth++
-		if depth > MaxDrainDepth {
-			return State{}, ErrDrainOverflow
-		}
-		step := next.Queue[0]
-		next.Queue = next.Queue[1:]
-		var stepErr error
-		next, stepErr = applyStep(ctx, game, next, step, parentIdx)
-		if stepErr != nil {
-			return State{}, stepErr
-		}
+	next, err = drainCascade(ctx, game, next, queue, parentIdx)
+	if err != nil {
+		return State{}, err
 	}
 
 	return next, nil
+}
+
+// harvestQueue moves the actions pushed and the blocks raised on q into
+// State.Queue and State.Blocks, after any already there.
+func harvestQueue(state State, q *Queue) State {
+	pending, blocks := q.drain()
+	state.Queue = append(state.Queue, pending...)
+	state.Blocks = append(state.Blocks, blocks...)
+	return state
+}
+
+// drainCascade is the one cascade drain. It harvests q into state, then
+// applies State.Queue FIFO, each action through applyStep (the same
+// machinery as Apply but no state-ID bump, no resume-tag handling, no
+// ErrBlocked gate — those are external-move concerns). It stops when the
+// queue is empty, on the first non-empty Blocks set, or at game over;
+// whatever is left in State.Queue resumes after a later move. Apply runs
+// it after a move, NewMatch and ForceEndTurn after the hooks they run.
+//
+// parentIdx is the State.Log index of the move that started the cascade,
+// recorded as each drain step's Parent; -1 when no move did.
+//
+// The cascade is all-or-nothing. If a step fails, or the drain runs more
+// than MaxDrainDepth steps, drainCascade returns the error together with
+// the state as it stood after the harvest, before the first step ran:
+// the harvested actions are still queued and the harvested blocks still
+// pending. Callers that roll back further (Apply discards the whole
+// move) ignore that state. As with ApplyContext, G and plugin data that
+// a step mutates in place, rather than returning new values, are not
+// rolled back.
+func drainCascade(ctx context.Context, game *Game, state State, q *Queue, parentIdx int) (State, error) {
+	state = harvestQueue(state, q)
+	if len(state.Queue) == 0 || len(state.Blocks) > 0 || state.Ctx.Gameover != nil {
+		return state, nil
+	}
+	// Steps write some containers in place (stage bookkeeping, plugin
+	// data); own them so the pre-cascade state survives for rollback.
+	start := state
+	state = ownContainers(state)
+	depth := 0
+	for len(state.Queue) > 0 && len(state.Blocks) == 0 && state.Ctx.Gameover == nil {
+		depth++
+		if depth > MaxDrainDepth {
+			return start, ErrDrainOverflow
+		}
+		step := state.Queue[0]
+		state.Queue = state.Queue[1:]
+		var err error
+		state, err = applyStep(ctx, game, state, step, parentIdx)
+		if err != nil {
+			return start, err
+		}
+	}
+	return state, nil
 }
 
 // findBlock returns the index of the first BlockSpec matching tag +
@@ -489,7 +533,7 @@ func applyStep(ctx context.Context, game *Game, state State, action QueuedAction
 		Context:  ctx,
 		Queue:    queue,
 	}).attachPlugins(plugins)
-	env := &hookEnv{events: events, plugins: plugins}
+	env := &hookEnv{events: events, queue: queue, plugins: plugins}
 
 	moveFn := applyFnWrapMove(game, move.Move)
 	nextG, err := moveFn(mc, action.Args...)
@@ -521,10 +565,9 @@ func applyStep(ctx context.Context, game *Game, state State, action QueuedAction
 	if mc.extra != nil {
 		next.Log = append(next.Log, mc.extra.entries...)
 	}
-	pending, newBlocks := queue.drain()
-	next.Queue = append(next.Queue, pending...)
-	next.Blocks = append(next.Blocks, newBlocks...)
-	return next, nil
+	// The step's own pushes and blocks, and its hooks', join the cascade
+	// the caller's drain loop is running.
+	return harvestQueue(next, queue), nil
 }
 
 // authorizedStageDrain is the same as authorizedStage but tolerates an

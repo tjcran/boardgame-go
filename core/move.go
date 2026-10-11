@@ -35,6 +35,15 @@ type MoveContext struct {
 	// Queue is the server-driven cascade scheduler. Use mc.Queue.Push
 	// to schedule follow-up moves; mc.Queue.Block to pause for player
 	// input. Drained by the reducer after the move + Events drain.
+	//
+	// Moves, Events.RunMove chained moves and lifecycle hooks (phase,
+	// turn and stage OnBegin/OnEnd, Turn.OnMove, the EndIf predicates,
+	// Game.OnEnd) all get the Queue of the move that fired them, or of
+	// NewMatch / ForceEndTurn when those run the hooks. See Queue for
+	// what a block raised in a hook pauses. Nil in TurnOrder.Next and
+	// Phase.Next, which get no Events either, and in Game.OnUndo. The
+	// TurnOrder callbacks answer "who is next?" and must not push moves
+	// or raise blocks.
 	Queue *Queue
 
 	// ResumingBlock is the BlockSpec this move resumed, when applicable.
@@ -118,9 +127,9 @@ func (mc *MoveContext) AddLog(entry LogEntry) {
 type MoveFn func(mc *MoveContext, args ...any) (G, error)
 
 // HookFn is the signature for lifecycle hooks (onBegin/onEnd/onMove on a
-// turn or phase, plus Game.OnEnd). Hooks can produce new G and can also
-// queue events via mc.Events. They cannot fail — return the (possibly
-// unchanged) G.
+// turn or phase, plus Game.OnEnd). Hooks can produce new G, queue events
+// via mc.Events, and push moves or raise blocks via mc.Queue. They cannot
+// fail — return the (possibly unchanged) G.
 type HookFn func(mc *MoveContext) G
 
 // Move is the long-form move definition. Use this when you need any of the

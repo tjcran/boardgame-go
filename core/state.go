@@ -1,6 +1,9 @@
 package core
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // State is the complete authoritative state of a match. The transport sends
 // (a redacted view of) this object to clients.
@@ -47,8 +50,9 @@ type State struct {
 	TurnSnapshots []State `json:"-"`
 
 	// Queue is the pending FIFO of server-driven actions waiting for the
-	// reducer to drain. Populated by moves calling mc.Queue.Push;
-	// drained by the engine after each external move's event drain.
+	// reducer to drain. Populated by moves and hooks calling
+	// mc.Queue.Push; drained by the engine after each external move's
+	// event drain (and after the hooks NewMatch and ForceEndTurn run).
 	// Persisted across pauses (when Blocks is non-empty).
 	Queue []QueuedAction `json:"queue,omitempty"`
 
@@ -97,6 +101,21 @@ func NewMatch(game *Game, numPlayers int, setupData any) State {
 // Ctx before Game.Setup runs, so setup-time randomness can already
 // derive from it. Replays of a seeded match must use ReplaySeeded with
 // the same value or RNG-dependent games diverge.
+//
+// The starting phase's OnBegin and the first turn's OnBegin run here with
+// the same MoveContext a move's hooks get, Queue included. A block they
+// raise is in the returned State.Blocks, so a match can open on a prompt
+// (a mulligan, say). Moves they push drain before NewMatch returns,
+// exactly as Apply drains a move's cascade, stopping at the first block
+// or at game over; their log entries carry Parent -1, since no move
+// started them.
+//
+// NewMatch has no error to return and no earlier state to roll back to.
+// If a pushed move fails, or the drain exceeds MaxDrainDepth, the cascade
+// is rolled back to where it started and its moves stay in State.Queue.
+// Nothing is dropped: the next Apply runs them after its own move and, if
+// one still fails, returns that error and refuses the move, as it does
+// for any failing drain step.
 func NewMatchSeeded(game *Game, numPlayers int, setupData any, seed uint64) State {
 	n := game.PlayerCount(numPlayers)
 	order := defaultPlayOrder(n)
@@ -122,10 +141,10 @@ func NewMatchSeeded(game *Game, numPlayers int, setupData any, seed uint64) Stat
 	// reach into mc.Plugins via the API path.
 	st = runPluginSetup(game, st)
 
-	// Setup-time hooks are game code and get the same plugin surface a move
-	// would — a game that randomises its opening (first player, opening
-	// hands) does it from here.
-	env := newHookEnv(game, st, &Events{})
+	// Setup-time hooks are game code and get the same plugin surface and
+	// queues a move would — a game that randomises its opening (first
+	// player, opening hands) or opens on a prompt does it from here.
+	env := newHookEnv(game, st)
 
 	// Apply the active scope's TurnOrder.PlayOrder override and starting
 	// position. Same code path is used to enter a phase mid-game.
@@ -145,8 +164,16 @@ func NewMatchSeeded(game *Game, numPlayers int, setupData any, seed uint64) Stat
 
 	// Persist whatever the setup hooks did to plugin data, exactly as Apply
 	// does after a move. Without this a plugin whose API isn't a pointer
-	// into its private state would lose every setup-time mutation.
-	return flushPlugins(game, st, drainMC)
+	// into its private state would lose every setup-time mutation. It must
+	// happen before the cascade: each drain step builds its plugin APIs
+	// from State.Plugins.
+	st = flushPlugins(game, st, drainMC)
+
+	// Harvest the hooks' pushes and blocks and run the cascade. On error
+	// drainCascade hands back the pre-cascade state with the moves still
+	// queued, which is what NewMatch keeps (see the doc comment).
+	st, _ = drainCascade(context.Background(), game, st, env.queue, -1)
+	return st
 }
 
 // PlayerView returns a copy of the state with G and plugin private data

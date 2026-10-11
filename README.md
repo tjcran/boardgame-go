@@ -240,7 +240,12 @@ for the full boardgame.io feature checklist.
   the player who must answer it, and that player may answer out of turn —
   so reaction windows and "your opponent chooses" prompts need no
   active-player bookkeeping of their own. `core.AnsweredBy` names the
-  move that answers a block, so no other move can consume it.
+  move that answers a block, so no other move can consume it. Lifecycle
+  hooks share the move's queue, so a `Turn.OnBegin` can open a
+  start-of-turn prompt or push follow-up moves — also when the hooks run
+  at match setup or from a forced turn end. A block raised in
+  `Turn.OnEnd` does not hold the turn open; input owed before the turn
+  passes belongs in the move that ends it.
 - Undo / Redo with per-turn snapshots, `Game.DisableUndo`,
   per-move `Undoable`, log redaction via per-move `Redact`
 - Pure replay: `core.Replay` / `core.ReplayUntil(n)` reproduces a
