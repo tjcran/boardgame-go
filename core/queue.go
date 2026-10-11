@@ -82,7 +82,9 @@ func newBlock(b BlockSpec, opts []BlockOption) BlockSpec {
 //
 // A block raised during a move that calls MoveContext.DropBlocksFor
 // survives the drop: the drop applies to blocks already pending before
-// the move, and new blocks merge after it.
+// the move, and new blocks merge after it. ForceEndTurn drops the
+// ending player's pending blocks the same way, so a block its hooks
+// raise for the next turn survives.
 type Queue struct {
 	pending []QueuedAction
 	blocks  []BlockSpec
@@ -105,6 +107,10 @@ func (q *Queue) Push(playerID, move string, args ...any) {
 // move whose ResumeTag + PlayerID match the block clears it (and whose
 // Move matches, when the block names its answer via AnsweredBy); if
 // all blocks are gone the drain continues.
+//
+// playerID is the seat that must answer. Name it explicitly from a turn
+// or phase hook, where mc.PlayerID is "": a block addressed to "" can be
+// answered by no seat.
 func (q *Queue) Block(tag, playerID string, data any, opts ...BlockOption) {
 	q.blocks = append(q.blocks, newBlock(BlockSpec{
 		Tag: tag, PlayerID: playerID, Data: data,

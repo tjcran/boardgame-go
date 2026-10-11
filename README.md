@@ -245,7 +245,12 @@ for the full boardgame.io feature checklist.
   start-of-turn prompt or push follow-up moves — also when the hooks run
   at match setup or from a forced turn end. A block raised in
   `Turn.OnEnd` does not hold the turn open; input owed before the turn
-  passes belongs in the move that ends it.
+  passes belongs in the move that ends it. A forced turn end
+  (`core.ForceEndTurn`, the turn timer) expires the ending player's
+  pending prompts. `core.NewMatchSeededE` / `core.ForceEndTurnE` report
+  a failing hook cascade: `match.Manager` refuses to create or reset a
+  match whose setup cascade fails, and logs and skips a timer expiry
+  whose cascade fails.
 - Undo / Redo with per-turn snapshots, `Game.DisableUndo`,
   per-move `Undoable`, log redaction via per-move `Redact`
 - Pure replay: `core.Replay` / `core.ReplayUntil(n)` reproduces a

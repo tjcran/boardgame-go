@@ -265,7 +265,10 @@ analysis.
   `ResumeTag` matching) for MTG-style trigger cascades with pause/resume.
   Lifecycle hooks and `Events.RunMove` chained moves share the move's
   queue (match setup and `ForceEndTurn` give theirs one too), so a
-  start-of-turn trigger can raise a prompt from `Turn.OnBegin`
+  start-of-turn trigger can raise a prompt from `Turn.OnBegin`.
+  `ForceEndTurn` expires the ending player's pending prompts and bumps
+  the StateID; `NewMatchSeededE` / `ForceEndTurnE` report a failing
+  hook cascade
 - **Per-move observability primitives** — `LifecycleMatchMoved` events
   carry `PrevState` and `LogDelta`; `LifecycleMatchMoveRejected` fires
   with `Err` and `StateID` when the engine rejects a move;

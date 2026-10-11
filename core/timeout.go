@@ -20,17 +20,41 @@ import "context"
 // drains a move's cascade, stopping at the first block or at game over.
 // Their log entries carry Parent -1, since no move started them.
 //
+// The ending player's pending blocks expire with their turn. A player
+// timed out mid-prompt would otherwise keep gating every move of the
+// next player, who could not act until the absent player answered.
+// ForceEndTurn drops every block in State.Blocks addressed to the
+// CurrentPlayer it was called with, as a move's DropBlocksFor would, and
+// it honours DropBlocksFor calls from the hooks it runs. Blocks raised
+// during the forced turn end, including any for the ending player,
+// merge after the drop and survive it. Moves the dropped blocks were
+// holding back on State.Queue then drain with the rest, as they do
+// after a move's DropBlocksFor.
+//
+// A successful forced turn end is a state change like an accepted move,
+// so it bumps State.StateID once: a client still holding the previous
+// StateID is refused with ErrStaleState until it has seen the new turn.
+//
 // ForceEndTurn is atomic like Apply. If a pushed move fails, or the drain
 // exceeds MaxDrainDepth, it returns the state it was given, unchanged:
 // the turn does not end, just as Apply refuses a move that ends the turn
-// into the same failure. A timer that fires again later gets the same
-// outcome until the game state changes. (As with Apply, G and plugin data
-// that game code mutates in place, rather than returning new values, are
-// not rolled back.)
+// into the same failure. Use ForceEndTurnE to learn that it failed and
+// why. (As with Apply, G and plugin data that game code mutates in place,
+// rather than returning new values, are not rolled back.)
 func ForceEndTurn(game *Game, state State) State {
+	next, _ := ForceEndTurnE(game, state)
+	return next
+}
+
+// ForceEndTurnE is ForceEndTurn that reports failure. On error it returns
+// the state it was given, unchanged, with the error: ErrGameOver when the
+// game is already over, else the failing drain step's error or
+// ErrDrainOverflow.
+func ForceEndTurnE(game *Game, state State) (State, error) {
 	if state.Ctx.Gameover != nil {
-		return state
+		return state, ErrGameOver
 	}
+	ending := state.Ctx.CurrentPlayer
 	// Turn.OnEnd fires from here just as it does from events.EndTurn, so it
 	// gets the same plugin surface and queues — and the same post-hook
 	// flush. Work on private containers so a failed cascade can hand back
@@ -39,14 +63,21 @@ func ForceEndTurn(game *Game, state State) State {
 	next := ownContainers(state)
 	mc := env.mc(next, "")
 	next = endTurn(game, next, "", env)
-	next, _ = drainEvents(game, next, mc, env)
+	next, err := drainEvents(game, next, mc, env)
+	if err != nil {
+		return state, err
+	}
 	mc.G, mc.Ctx = next.G, next.Ctx
 	// Flush before the cascade: each drain step builds its plugin APIs
 	// from State.Plugins.
 	next = flushPlugins(game, next, mc)
-	next, err := drainCascade(context.Background(), game, next, env.queue, -1)
+	// Expire the ending player's prompts (and any a hook dropped) before
+	// the hooks' new blocks merge, so those survive.
+	next.Blocks = withoutBlocksFor(next.Blocks, append([]string{ending}, *env.drops...))
+	next, err = drainCascade(context.Background(), game, next, env.queue, -1)
 	if err != nil {
-		return state
+		return state, err
 	}
-	return next
+	next.StateID = state.StateID + 1
+	return next, nil
 }

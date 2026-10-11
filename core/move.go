@@ -40,10 +40,19 @@ type MoveContext struct {
 	// turn and stage OnBegin/OnEnd, Turn.OnMove, the EndIf predicates,
 	// Game.OnEnd) all get the Queue of the move that fired them, or of
 	// NewMatch / ForceEndTurn when those run the hooks. See Queue for
-	// what a block raised in a hook pauses. Nil in TurnOrder.Next and
-	// Phase.Next, which get no Events either, and in Game.OnUndo. The
-	// TurnOrder callbacks answer "who is next?" and must not push moves
-	// or raise blocks.
+	// what a block raised in a hook pauses.
+	//
+	// Turn and phase hooks run with PlayerID "", so a block they raise
+	// must name its addressee explicitly (mc.Ctx.CurrentPlayer, or a
+	// specific seat): a block addressed to "" matches no seat's
+	// ResumeTag, and it gates every non-resume move until a move drops
+	// it.
+	//
+	// Nil in TurnOrder.Next and Phase.Next, which get no Events either,
+	// and in Game.OnUndo. TurnOrder.First and TurnOrder.PlayOrder get no
+	// Queue at match setup but do on a mid-game phase entry, which hands
+	// them the full hook context. The TurnOrder callbacks answer "who is
+	// next?" and must not push moves or raise blocks either way.
 	Queue *Queue
 
 	// ResumingBlock is the BlockSpec this move resumed, when applicable.
@@ -57,8 +66,12 @@ type MoveContext struct {
 	ResumingBlock *BlockSpec
 
 	// dropBlocksFor collects player IDs whose PERSISTED pending blocks
-	// (State.Blocks) this move wants removed — see DropBlocksFor.
-	dropBlocksFor []string
+	// (State.Blocks) this move wants removed — see DropBlocksFor. The
+	// reducer shares one list by pointer between a move and the hooks and
+	// chained moves it fires, so their requests count as the move's. Nil
+	// until DropBlocksFor is called on a context nobody shares one with,
+	// whose requests then go nowhere.
+	dropBlocksFor *[]string
 
 	// extra holds AddLog entries appended during this MoveContext's
 	// lifetime. Engine-only; not visible to plugins.
@@ -76,8 +89,21 @@ type MoveContext struct {
 // otherwise hold the match hostage — their unanswered block gates
 // every move, including the one trying to end their turn. Dropping a
 // block abandons its pending effect, mirroring "the prompt expired".
+//
+// "Persisted" means pending before the move began: blocks raised during
+// the move, by the move or by anything it fires, merge after the drop
+// and survive it. A lifecycle hook the move's events fire (Turn.OnEnd,
+// say) and an Events.RunMove chained move may call it too; their
+// requests count as the move's. So may the hooks ForceEndTurn runs,
+// which drops the ending player's blocks on its own (see ForceEndTurn).
+// Calls from drain steps (moves on State.Queue) and from TurnOrder.Next
+// and Phase.Next have no effect: a drain step runs only when no block is
+// pending, and those callbacks do not drive the game.
 func (mc *MoveContext) DropBlocksFor(playerID string) {
-	mc.dropBlocksFor = append(mc.dropBlocksFor, playerID)
+	if mc.dropBlocksFor == nil {
+		mc.dropBlocksFor = new([]string)
+	}
+	*mc.dropBlocksFor = append(*mc.dropBlocksFor, playerID)
 }
 
 // Plugin returns the API object exposed by the named plugin, or nil if no

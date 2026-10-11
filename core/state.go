@@ -97,6 +97,12 @@ func NewMatch(game *Game, numPlayers int, setupData any) State {
 	return NewMatchSeeded(game, numPlayers, setupData, 0)
 }
 
+// NewMatchE is NewMatch that also reports a failed setup cascade; see
+// NewMatchSeededE.
+func NewMatchE(game *Game, numPlayers int, setupData any) (State, error) {
+	return NewMatchSeededE(game, numPlayers, setupData, 0)
+}
+
 // NewMatchSeeded is NewMatch with a per-match secret seed installed in
 // Ctx before Game.Setup runs, so setup-time randomness can already
 // derive from it. Replays of a seeded match must use ReplaySeeded with
@@ -110,13 +116,27 @@ func NewMatch(game *Game, numPlayers int, setupData any) State {
 // or at game over; their log entries carry Parent -1, since no move
 // started them.
 //
-// NewMatch has no error to return and no earlier state to roll back to.
-// If a pushed move fails, or the drain exceeds MaxDrainDepth, the cascade
-// is rolled back to where it started and its moves stay in State.Queue.
-// Nothing is dropped: the next Apply runs them after its own move and, if
-// one still fails, returns that error and refuses the move, as it does
-// for any failing drain step.
+// NewMatchSeeded has no error to return and no earlier state to roll back
+// to. If a pushed move fails, or the drain exceeds MaxDrainDepth, the
+// cascade is rolled back to where it started and its moves stay in
+// State.Queue. Nothing is dropped, but the match cannot recover on its
+// own: the next Apply runs those moves after its own move and, if one
+// still fails, returns that error and refuses the move, as it does for
+// any failing drain step — whatever the move, an IgnoreBlocks concede
+// included. Callers that create matches for players should use
+// NewMatchSeededE and refuse to create the match instead.
 func NewMatchSeeded(game *Game, numPlayers int, setupData any, seed uint64) State {
+	st, _ := NewMatchSeededE(game, numPlayers, setupData, seed)
+	return st
+}
+
+// NewMatchSeededE is NewMatchSeeded that also returns the error of a
+// failed setup cascade (the failing drain step's error, or
+// ErrDrainOverflow). The State it returns alongside the error is the one
+// NewMatchSeeded would return; a caller creating a match for players
+// should discard it and report the error, since every move on it would
+// fail. match.Manager does so.
+func NewMatchSeededE(game *Game, numPlayers int, setupData any, seed uint64) (State, error) {
 	n := game.PlayerCount(numPlayers)
 	order := defaultPlayOrder(n)
 
@@ -171,9 +191,8 @@ func NewMatchSeeded(game *Game, numPlayers int, setupData any, seed uint64) Stat
 
 	// Harvest the hooks' pushes and blocks and run the cascade. On error
 	// drainCascade hands back the pre-cascade state with the moves still
-	// queued, which is what NewMatch keeps (see the doc comment).
-	st, _ = drainCascade(context.Background(), game, st, env.queue, -1)
-	return st
+	// queued, which is what NewMatchSeeded keeps (see its doc comment).
+	return drainCascade(context.Background(), game, st, env.queue, -1)
 }
 
 // PlayerView returns a copy of the state with G and plugin private data

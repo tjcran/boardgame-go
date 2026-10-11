@@ -36,6 +36,12 @@ var errHookQFail = errors.New("hook queue test: step failed")
 //   - "forceTimeout" is the timeout escape hatch: drop the current
 //     player's pending blocks and end the turn.
 //   - "chain" runs "chainedBlock" via Events.RunMove, which raises a block.
+//   - "skipTurn" ends the turn past pending blocks without dropping any,
+//     so a test can show a hook doing the dropping.
+//   - "loop" pushes itself, for the drain-overflow tests.
+//   - "toStage" moves the caller into stage "other", a write into the
+//     stage bookkeeping the rollback tests watch.
+//   - "bump" increments the tally plugin, when the game has it.
 func hookQueueGame(onBegin, onEnd func(mc *MoveContext)) *Game {
 	return &Game{
 		Name:       "hook-queue",
@@ -82,6 +88,26 @@ func hookQueueGame(onBegin, onEnd func(mc *MoveContext)) *Game {
 			"chainedBlock": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
 				mc.Queue.Block("chained", mc.PlayerID, nil)
 				return hookQAppend(mc.G, "chained:"+mc.PlayerID), nil
+			}),
+			"skipTurn": Move{
+				AnyPlayer:    true,
+				IgnoreBlocks: true,
+				Move: MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
+					mc.Events.EndTurn()
+					return hookQAppend(mc.G, "skip:"+mc.Ctx.CurrentPlayer), nil
+				}),
+			},
+			"loop": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
+				mc.Queue.Push(mc.PlayerID, "loop")
+				return mc.G, nil
+			}),
+			"toStage": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
+				mc.Events.SetStage("other")
+				return hookQAppend(mc.G, "toStage:"+mc.PlayerID), nil
+			}),
+			"bump": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
+				bumpTally(mc)
+				return hookQAppend(mc.G, "bump:"+mc.PlayerID), nil
 			}),
 		},
 		Turn: &TurnConfig{

@@ -54,9 +54,14 @@ const maxChainedMoves = 32
 // with the persisted plugin data, and Apply flushes that data once through
 // the move's MoveContext. Rebuilding the table per hook would strand
 // mutations from any plugin that doesn't share a pointer.
+//
+// drops is the surrounding move's DropBlocksFor list, shared for the same
+// reason as the queues: a hook's request to abandon stranded prompts
+// would otherwise land on a MoveContext nobody reads.
 type hookEnv struct {
 	events  *Events
 	queue   *Queue
+	drops   *[]string
 	plugins map[string]any
 }
 
@@ -69,6 +74,7 @@ func newHookEnv(game *Game, state State) *hookEnv {
 	return &hookEnv{
 		events:  &Events{},
 		queue:   &Queue{},
+		drops:   new([]string),
 		plugins: buildPluginAPIs(game, state, ""),
 	}
 }
@@ -78,7 +84,7 @@ func newHookEnv(game *Game, state State) *hookEnv {
 func (e *hookEnv) mc(state State, playerID string) *MoveContext {
 	return (&MoveContext{
 		G: state.G, Ctx: state.Ctx, PlayerID: playerID,
-		Events: e.events, Queue: e.queue,
+		Events: e.events, Queue: e.queue, dropBlocksFor: e.drops,
 	}).attachPlugins(e.plugins)
 }
 
@@ -96,10 +102,10 @@ func (e *hookEnv) mcNoEvents(state State) *MoveContext {
 // runChainedMove resolves and applies a move queued via Events.RunMove.
 // It re-uses the surrounding events queue so further events from the
 // chained move land in the same drain loop, and the surrounding action
-// Queue so moves it pushes and blocks it raises are harvested with the
-// parent's. Errors (unknown move, invalid args) are dropped; that's the
-// price of "fire-and-forget" dispatch from a move body. Use Apply
-// directly when you need errors.
+// Queue and DropBlocksFor list so moves it pushes, blocks it raises and
+// blocks it drops count as the parent's. Errors (unknown move, invalid
+// args) are dropped; that's the price of "fire-and-forget" dispatch from
+// a move body. Use Apply directly when you need errors.
 func runChainedMove(game *Game, state State, parent *MoveContext, name string, args []any) State {
 	// Resolve from the current scope: phase first, then global. Stage
 	// lookups don't apply here — RunMove is dispatched in the surrounding
@@ -121,6 +127,7 @@ func runChainedMove(game *Game, state State, parent *MoveContext, name string, a
 		Queue:    parent.Queue,
 		Context:  parent.Context,
 	}).attachPlugins(parent.Plugins)
+	mc.dropBlocksFor = parent.dropBlocksFor
 	mc.chainedMoves = parent.chainedMoves // share counter
 	nextG, err := move.Move(mc, args...)
 	if err != nil {

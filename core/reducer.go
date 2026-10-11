@@ -225,6 +225,7 @@ func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest
 
 	events := &Events{}
 	queue := &Queue{}
+	drops := new([]string)
 	plugins := buildPluginAPIs(game, state, req.PlayerID)
 	moveCtx := ctx
 	if move.Timeout > 0 {
@@ -240,12 +241,14 @@ func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest
 		Context:       moveCtx,
 		Queue:         queue,
 		ResumingBlock: resumingBlock,
+		dropBlocksFor: drops,
 	}).attachPlugins(plugins)
 	// Hooks fired during this move share the move's plugin APIs, so their
-	// mutations land in the same objects flushPlugins persists below, and
-	// the move's action Queue, so the moves they push and the blocks they
-	// raise are harvested with the move's own, after them.
-	env := &hookEnv{events: events, queue: queue, plugins: plugins}
+	// mutations land in the same objects flushPlugins persists below; the
+	// move's action Queue, so the moves they push and the blocks they
+	// raise are harvested with the move's own, after them; and the move's
+	// DropBlocksFor list.
+	env := &hookEnv{events: events, queue: queue, drops: drops, plugins: plugins}
 
 	// Snapshot pre-move state for undo. Only meaningful when the game
 	// hasn't disabled undo and the specific move is undoable. We resolve
@@ -352,27 +355,13 @@ func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest
 		next.Log = append(next.Log, mc.extra.entries...)
 	}
 
-	// Apply DropBlocksFor requests BEFORE merging new blocks: a
-	// timeout/forfeit move abandons the named players' stranded
-	// prompts (their pending effects die with them). Blocks raised during
-	// this move, by the move or by a hook its events fired (the next
-	// turn's OnBegin, say), are still in the queue at this point, so they
-	// survive the drop.
-	if len(mc.dropBlocksFor) > 0 {
-		drop := map[string]bool{}
-		for _, pid := range mc.dropBlocksFor {
-			drop[pid] = true
-		}
-		// Fresh slice — next.Blocks may alias the caller's array, and
-		// the undo snapshot's.
-		kept := make([]BlockSpec, 0, len(next.Blocks))
-		for _, b := range next.Blocks {
-			if !drop[b.PlayerID] {
-				kept = append(kept, b)
-			}
-		}
-		next.Blocks = kept
-	}
+	// Apply DropBlocksFor requests (the move's, and its hooks' and
+	// chained moves') BEFORE merging new blocks: a timeout/forfeit move
+	// abandons the named players' stranded prompts (their pending effects
+	// die with them). Blocks raised during this move, by the move or by a
+	// hook its events fired (the next turn's OnBegin, say), are still in
+	// the queue at this point, so they survive the drop.
+	next.Blocks = withoutBlocksFor(next.Blocks, *drops)
 
 	// Harvest the Queue.Push / Queue.Block calls of the move and of the
 	// hooks it fired, then run the cascade. Any error inside the cascade
@@ -384,6 +373,27 @@ func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest
 	}
 
 	return next, nil
+}
+
+// withoutBlocksFor returns blocks minus those addressed to any of
+// players. It never writes into blocks: the result is a fresh slice when
+// anything is dropped, because blocks may alias the caller's array and
+// the undo snapshot's.
+func withoutBlocksFor(blocks []BlockSpec, players []string) []BlockSpec {
+	if len(players) == 0 || len(blocks) == 0 {
+		return blocks
+	}
+	drop := make(map[string]bool, len(players))
+	for _, pid := range players {
+		drop[pid] = true
+	}
+	kept := make([]BlockSpec, 0, len(blocks))
+	for _, b := range blocks {
+		if !drop[b.PlayerID] {
+			kept = append(kept, b)
+		}
+	}
+	return kept
 }
 
 // harvestQueue moves the actions pushed and the blocks raised on q into
