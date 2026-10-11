@@ -12,7 +12,9 @@
 //     engine itself rejects out-of-window moves. The stage is Exclusive,
 //     so its move table is the complete set of legal responses: the
 //     engine also refuses the holder's sorcery-speed cast or endTurn
-//     mid-window with core.ErrMoveNotInStage.
+//     mid-window with core.ErrMoveNotInStage. A server-dispatched move
+//     is not confined by a stage, so cast and endTurn still refuse an
+//     open window themselves (errWindowOpen).
 //   - The stack is ccg.State.PendingEffects ordered by ccg.PickBack
 //     (tail = top), halted by ccg.HaltWhileOpen while a window is open.
 //   - A counterspell is itself a stack object: its resolver runs first
@@ -257,6 +259,9 @@ var (
 // the stack, and open a priority window over APNAP order.
 func cast(mc *core.MoveContext, args ...any) (core.G, error) {
 	g := mc.G.(*State)
+	// The Exclusive respond stage refuses a client's cast mid-window; a
+	// server-dispatched one gets here. Refuse it before paying, since G
+	// is mutated in place.
 	if g.Priority.IsOpen() {
 		return nil, errWindowOpen
 	}
@@ -311,6 +316,8 @@ func pass(mc *core.MoveContext, _ ...any) (core.G, error) {
 
 func endTurn(mc *core.MoveContext, _ ...any) (core.G, error) {
 	g := mc.G.(*State)
+	// As in cast: only a server-dispatched endTurn reaches this
+	// mid-window.
 	if g.Priority.IsOpen() {
 		return nil, errWindowOpen
 	}
@@ -323,8 +330,10 @@ func endTurn(mc *core.MoveContext, _ ...any) (core.G, error) {
 
 func turnBegin(mc *core.MoveContext) core.G {
 	g := mc.G.(*State)
-	// Hygiene: a window must be closed before EndTurn (endTurn enforces
-	// it), but a forced boundary would leave stale protocol state.
+	// Hygiene: a window must be closed before EndTurn (the Exclusive
+	// respond stage refuses a client's endTurn mid-window, and endTurn
+	// refuses a server-dispatched one), but a forced boundary would
+	// leave stale protocol state.
 	g.Priority.Reset()
 	pid := mc.Ctx.CurrentPlayer
 	for _, kind := range []string{"sun", "moon"} {

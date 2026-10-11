@@ -504,8 +504,11 @@ func removePlayer(game *Game, state State, playerID string, env *hookEnv) State 
 	if idx < 0 {
 		return state
 	}
-	// Splice.
-	state.Ctx.PlayOrder = append(state.Ctx.PlayOrder[:idx], state.Ctx.PlayOrder[idx+1:]...)
+	// Splice into a fresh slice: splicing in place would shift the
+	// backing array the caller's state and the undo snapshot share.
+	order := make([]string, 0, len(state.Ctx.PlayOrder)-1)
+	order = append(order, state.Ctx.PlayOrder[:idx]...)
+	state.Ctx.PlayOrder = append(order, state.Ctx.PlayOrder[idx+1:]...)
 
 	// Adjust PlayOrderPos. If the removed seat was before or at the cursor,
 	// keep the same index so the NEXT player picks up naturally — except

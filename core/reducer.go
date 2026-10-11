@@ -34,6 +34,16 @@ type MoveRequest struct {
 	// wire; the reducer records it on the move's log entry so Replay
 	// and Redo re-apply the move the same way.
 	ServerDispatch bool `json:"-"`
+	// FromClient marks a request a client sent through the match
+	// manager's credentialed ingress (Manager.MoveReqCtx and
+	// Manager.DryMoveReq set it). Such a request may not make a move
+	// flagged Move.ServerOnly, wherever that move is registered: the
+	// reducer judges the move it resolved for the request and refuses
+	// with ErrServerOnly. In-process callers (tests, bots, Replay) leave
+	// it off and keep the server's authority. Never decoded from the
+	// wire and not logged, because the refusal is an ingress check that
+	// a recorded move has already passed.
+	FromClient bool `json:"-"`
 }
 
 // Public sentinel errors. They're surfaced through the transport with
@@ -49,6 +59,7 @@ var (
 	ErrBlocked          = errors.New("match has pending blocks; supply MoveRequest.ResumeTag")
 	ErrUnknownResumeTag = errors.New("ResumeTag does not match any pending block")
 	ErrMoveNotInStage   = errors.New("move is not allowed in the player's current stage")
+	ErrServerOnly       = errors.New("move is marked Move.ServerOnly — credentialed clients cannot dispatch it; use Manager.DispatchServer")
 	ErrDrainOverflow    = errors.New("cascade drain exceeded MaxDrainDepth")
 )
 
@@ -73,32 +84,55 @@ func Apply(game *Game, state State, req MoveRequest) (State, error) {
 //
 //  1. Reject if the game is already over.
 //  2. Resolve ResumeTag against State.Blocks (removes one matching).
-//  3. If blocks remain and the move doesn't IgnoreBlocks, ErrBlocked.
-//  4. Check the player is allowed to move in the current scope.
-//  5. Resolve the move from the player's stage table, then the active
-//     phase or global table.
-//  6. Reject a stale StateID (ErrStaleState).
-//  7. An Exclusive stage refuses a move that is not in its own table
-//     (ErrMoveNotInStage).
-//  8. Run the move function -> new G.
-//  9. Run turn.OnMove and count the move (unless NoLimit).
-//  10. Drain queued events (endTurn, setStage, ...).
-//  11. Check Game.EndIf, phase.EndIf, turn.EndIf / MaxMoves.
-//  12. Bump State.StateID once.
-//  13. Drain State.Queue (cascade). Each drain step runs through
+//  3. Resolve the move from the player's stage table, then the active
+//     phase or global table. Steps 4 to 8 all judge this one move.
+//  4. A client's request (FromClient) may not make a ServerOnly move
+//     (ErrServerOnly).
+//  5. If blocks remain, no ResumeTag was consumed and the move doesn't
+//     IgnoreBlocks, ErrBlocked.
+//  6. Check the player is allowed to move in the current scope.
+//  7. Reject a stale StateID (ErrStaleState).
+//  8. An Exclusive stage refuses a move that did not resolve from its
+//     own table (ErrMoveNotInStage).
+//  9. Run the move function -> new G.
+//  10. Run turn.OnMove and count the move (unless NoLimit).
+//  11. Drain queued events (endTurn, setStage, ...).
+//  12. Check Game.EndIf, phase.EndIf, turn.EndIf / MaxMoves.
+//  13. Bump State.StateID once.
+//  14. Drain State.Queue (cascade). Each drain step runs through
 //     applyOne with a Parent log index; the outer state-ID stays put.
 //     Pauses on the first non-empty Blocks set.
 //
-// Which requests skip steps 4 and 7 is decided in one place,
+// Which requests skip steps 6 and 8 is decided in one place,
 // exemptionsFor.
 //
-// On any error after the external move starts, the returned state
-// equals the pre-Apply state (cascades are atomic).
+// On any error, whichever step raised it, ApplyContext returns the state
+// it was given (cascades are atomic). The reducer never writes into that
+// state: before the move runs it takes private copies of the containers
+// it changes in place (see ownContainers). Two things stay shared. G and
+// plugin data: a move or plugin that mutates them in place, rather than
+// returning new values, writes through to the caller's state even when
+// the move fails. And the spare capacity of the slices the reducer
+// appends to (Log, Queue, Blocks, TurnSnapshots): results of two Apply
+// calls on one input can share a backing array, so a caller that keeps
+// both should first cut those slices to their length
+// (s.Log = s.Log[:len(s.Log):len(s.Log)], and so on).
 func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest) (State, error) {
-	rollback := state
+	next, err := applyExternal(ctx, game, state, req)
+	if err != nil {
+		return state, err
+	}
+	return next, nil
+}
 
+// applyExternal is ApplyContext's pipeline. state is a value copy of the
+// caller's state: the checks only reassign its fields, and it takes its
+// own containers before the move runs. On error the returned State is
+// meaningless, because ApplyContext discards it and hands back the
+// caller's state.
+func applyExternal(ctx context.Context, game *Game, state State, req MoveRequest) (State, error) {
 	if state.Ctx.Gameover != nil {
-		return state, ErrGameOver
+		return State{}, ErrGameOver
 	}
 
 	// Expose the request's wall clock to moves and hooks for this apply.
@@ -113,17 +147,30 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	if req.ResumeTag != "" {
 		idx := findBlock(state.Blocks, req.ResumeTag, req.PlayerID, req.Move)
 		if idx < 0 {
-			return state, fmt.Errorf("%w: tag=%s player=%s move=%s",
+			return State{}, fmt.Errorf("%w: tag=%s player=%s move=%s",
 				ErrUnknownResumeTag, req.ResumeTag, req.PlayerID, req.Move)
 		}
 		b := state.Blocks[idx]
 		resumingBlock = &b
-		// Fresh slice: removing in place would shift the shared backing
-		// array under rollback.Blocks, and every rejection below returns
-		// rollback as the unchanged pre-move state.
+		// Fresh slice: removing in place would shift the backing array
+		// the caller's state shares (ownContainers does not copy Blocks).
 		kept := make([]BlockSpec, 0, len(state.Blocks)-1)
 		kept = append(kept, state.Blocks[:idx]...)
 		state.Blocks = append(kept, state.Blocks[idx+1:]...)
+	}
+
+	// Resolve the move once, from the caller's stage table first, then
+	// the phase's table, then the game's. Every check below judges this
+	// move, so none of them can disagree about which move would run. A
+	// player authorizedStage refuses is not listed in ActivePlayers, so
+	// their stage is "" and an exempt move resolves from the phase/global
+	// table.
+	stage, authErr := authorizedStage(state.Ctx, req.PlayerID)
+	move, inStage, err := resolveMove(game, state.Ctx, stage, req.Move)
+
+	// A client may not make a ServerOnly move, wherever it is registered.
+	if req.FromClient && err == nil && move.ServerOnly {
+		return State{}, ErrServerOnly
 	}
 
 	// Block gate: pending blocks refuse non-IgnoreBlocks moves that are
@@ -133,27 +180,18 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// once, and they must be answerable one at a time (gating resumes on
 	// "all blocks gone" would soft-lock the match; the remaining blocks
 	// keep gating every non-resume move).
-	if resumingBlock == nil && len(state.Blocks) > 0 {
-		move, err := resolveMove(game, state.Ctx, "", req.Move)
-		if err == nil && !move.IgnoreBlocks {
-			return rollback, ErrBlocked
-		}
+	if resumingBlock == nil && len(state.Blocks) > 0 && err == nil && !move.IgnoreBlocks {
+		return State{}, ErrBlocked
 	}
 
-	// Player must be allowed to move in this scope, then the move is
-	// resolved from the active move table: stage overrides first, then
-	// phase overrides, then global. A player authorizedStage refuses is
-	// not listed in ActivePlayers, so their stage is "" and an exempt
-	// move resolves from the phase/global table. exemptionsFor says
+	// Player must be allowed to move in this scope. exemptionsFor says
 	// which refusals a request is excused from.
-	stage, authErr := authorizedStage(state.Ctx, req.PlayerID)
-	move, err := resolveMove(game, state.Ctx, stage, req.Move)
 	exempt := exemptionsFor(move, resumingBlock, req)
 	if authErr != nil && (err != nil || !exempt.turn) {
-		return rollback, authErr
+		return State{}, authErr
 	}
 	if err != nil {
-		return rollback, err
+		return State{}, err
 	}
 
 	// Stale-state guard. Opt-in: req.StateID=0 means "don't check"
@@ -164,19 +202,24 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// client acting on an old view is told to refresh rather than that
 	// its move is illegal in a stage it may no longer be in.
 	if req.StateID > 0 && req.StateID != state.StateID && !move.IgnoreStaleStateID {
-		return rollback, ErrStaleState
+		return State{}, ErrStaleState
 	}
 
 	// An Exclusive stage confines its players to its own move table,
 	// so a name that resolved from the phase/global fallback is refused.
-	if stage != "" && !exempt.stageScope {
+	// resolveMove read the stage table from the same lookupStage config
+	// whose Exclusive flag is checked here.
+	if stage != "" && !inStage && !exempt.stageScope {
 		if sc := lookupStage(game, state.Ctx.Phase, stage); sc != nil && sc.Exclusive {
-			if _, ok := sc.Moves[req.Move]; !ok {
-				return rollback, fmt.Errorf("%w: move=%q stage=%q",
-					ErrMoveNotInStage, req.Move, stage)
-			}
+			return State{}, fmt.Errorf("%w: move=%q stage=%q",
+				ErrMoveNotInStage, req.Move, stage)
 		}
 	}
+
+	// The checks above only reassign fields of this value copy. From here
+	// on the pipeline writes into containers in place, so take private
+	// copies now: a request refused above costs no copying.
+	state = ownContainers(state)
 
 	events := &Events{}
 	queue := &Queue{}
@@ -213,7 +256,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	moveFn := applyFnWrapMove(game, move.Move)
 	nextG, err := moveFn(mc, req.Args...)
 	if err != nil {
-		return state, err
+		return State{}, err
 	}
 
 	next := state
@@ -249,7 +292,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 
 	// Reject the move if any plugin signals invalidity (BGIO's isInvalid).
 	if err := validatePlugins(game, next); err != nil {
-		return state, err
+		return State{}, err
 	}
 
 	// Run turn.OnMove with the updated G.
@@ -268,7 +311,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// transitions the move asked for (events.EndTurn, events.SetStage, …).
 	next, err = drainEvents(game, next, mc, env)
 	if err != nil {
-		return state, err
+		return State{}, err
 	}
 
 	// BGIO order: Game.EndIf is evaluated BEFORE any auto-end behaviour
@@ -297,7 +340,7 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	// Drain anything queued by the EndIf / auto-end paths above.
 	next, err = drainEvents(game, next, mc, env)
 	if err != nil {
-		return state, err
+		return State{}, err
 	}
 
 	// Flush any AddLog entries that hooks/moves appended.
@@ -313,8 +356,8 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 		for _, pid := range mc.dropBlocksFor {
 			drop[pid] = true
 		}
-		// Fresh slice — next.Blocks aliases the pre-move state's array,
-		// and later error paths return that state for rollback.
+		// Fresh slice — next.Blocks may alias the caller's array, and
+		// the undo snapshot's.
 		kept := make([]BlockSpec, 0, len(next.Blocks))
 		for _, b := range next.Blocks {
 			if !drop[b.PlayerID] {
@@ -339,14 +382,14 @@ func ApplyContext(ctx context.Context, game *Game, state State, req MoveRequest)
 	for len(next.Queue) > 0 && len(next.Blocks) == 0 && next.Ctx.Gameover == nil {
 		depth++
 		if depth > MaxDrainDepth {
-			return rollback, ErrDrainOverflow
+			return State{}, ErrDrainOverflow
 		}
 		step := next.Queue[0]
 		next.Queue = next.Queue[1:]
 		var stepErr error
 		next, stepErr = applyStep(ctx, game, next, step, parentIdx)
 		if stepErr != nil {
-			return rollback, stepErr
+			return State{}, stepErr
 		}
 	}
 
@@ -430,7 +473,7 @@ func applyStep(ctx context.Context, game *Game, state State, action QueuedAction
 	if err != nil {
 		return state, err
 	}
-	move, err := resolveMove(game, state.Ctx, stage, action.Move)
+	move, _, err := resolveMove(game, state.Ctx, stage, action.Move)
 	if err != nil {
 		return state, err
 	}
@@ -520,33 +563,27 @@ func authorizedStage(ctx Ctx, playerID string) (string, error) {
 }
 
 // resolveMove finds the Move for the named move in the current scope.
-// Stage moves win over phase moves, which win over global moves.
-func resolveMove(game *Game, ctx Ctx, stage, name string) (Move, error) {
-	// 1. Stage moves (only if a stage is active).
-	if stage != "" && ctx.Phase != "" {
-		if p, ok := game.Phases[ctx.Phase]; ok {
-			if p.Turn != nil {
-				if s, ok := p.Turn.Stages[stage]; ok && s.Moves != nil {
-					if v, ok := s.Moves[name]; ok {
-						return asMove(v)
-					}
-				}
+// Stage moves win over phase moves, which win over global moves. The
+// stage's moves are the Moves of the stage config lookupStage picks (the
+// active phase's Turn.Stages entry, else the game-level one), the same
+// config whose Exclusive flag and hooks govern the stage. inStage
+// reports whether the move came from that table rather than the
+// phase/global fallback; it is the one statement of which moves an
+// Exclusive stage holds.
+func resolveMove(game *Game, ctx Ctx, stage, name string) (move Move, inStage bool, err error) {
+	if stage != "" {
+		if sc := lookupStage(game, ctx.Phase, stage); sc != nil {
+			if v, ok := sc.Moves[name]; ok {
+				move, err = asMove(v)
+				return move, true, err
 			}
 		}
 	}
-	if stage != "" && game.Turn != nil {
-		if s, ok := game.Turn.Stages[stage]; ok && s.Moves != nil {
-			if v, ok := s.Moves[name]; ok {
-				return asMove(v)
-			}
-		}
+	if v, ok := game.scopeMoves(ctx.Phase)[name]; ok {
+		move, err = asMove(v)
+		return move, false, err
 	}
-	// 2. Phase moves (or global if phase didn't override).
-	scope := game.scopeMoves(ctx.Phase)
-	if v, ok := scope[name]; ok {
-		return asMove(v)
-	}
-	return Move{}, fmt.Errorf("%w: %q", ErrUnknownMove, name)
+	return Move{}, false, fmt.Errorf("%w: %q", ErrUnknownMove, name)
 }
 
 // checkTurnAutoEnd evaluates turn.EndIf and turn.MaxMoves and ends the turn

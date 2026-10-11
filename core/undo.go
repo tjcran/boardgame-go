@@ -81,26 +81,55 @@ func Redo(game *Game, state State) (State, error) {
 	})
 }
 
+// ownContainers returns s with private copies of the containers the
+// reducer writes into in place: the stage bookkeeping maps, Plugins, and
+// the Revert stack, whose frames' maps become the live maps again when
+// popped (and a popped slot is reused by the next push). Changing the
+// result can therefore never change s. Nil stays nil and empty stays
+// empty, since a non-nil empty ActivePlayers means something different
+// from a nil one.
+//
+// G and plugin data values are shared: moves and plugins return new
+// values rather than mutate them. Slices the reducer only appends to
+// (Log, Queue, TurnSnapshots) or rebuilds fresh when it removes an
+// element (Blocks, Ctx.PlayOrder) are shared too, which keeps a move in
+// a game without stages or plugins free of copies.
+func ownContainers(s State) State {
+	if s.Plugins != nil {
+		plugins := make(map[string]any, len(s.Plugins))
+		for k, v := range s.Plugins {
+			plugins[k] = v
+		}
+		s.Plugins = plugins
+	}
+	s.Ctx.ActivePlayers = copyStrMap(s.Ctx.ActivePlayers)
+	s.MoveCounts = copyIntMap(s.MoveCounts)
+	s.StageMinMoves = copyIntMap(s.StageMinMoves)
+	s.StageMaxMoves = copyIntMap(s.StageMaxMoves)
+	if s.ActiveStack != nil {
+		stack := make([]activeFrame, len(s.ActiveStack))
+		for i, f := range s.ActiveStack {
+			stack[i] = activeFrame{
+				ActivePlayers: copyStrMap(f.ActivePlayers),
+				MoveCounts:    copyIntMap(f.MoveCounts),
+				StageMin:      copyIntMap(f.StageMin),
+				StageMax:      copyIntMap(f.StageMax),
+			}
+		}
+		s.ActiveStack = stack
+	}
+	return s
+}
+
 // cloneStateForSnapshot builds a shallow-clone of State suitable for the
-// undo stack. Slices/maps are duplicated so subsequent mutations don't leak
-// into the snapshot. G is shared by reference — moves are expected to
+// undo stack. Its containers are its own (ownContainers), so the live
+// state's later in-place writes don't leak into the snapshot, and the
+// log is copied too. G is shared by reference — moves are expected to
 // return new G values rather than mutate in place.
 func cloneStateForSnapshot(s State) State {
-	out := s
+	out := ownContainers(s)
 	out.Log = append([]LogEntry(nil), s.Log...)
 	out.Undone = append([]LogEntry(nil), s.Undone...)
-	if s.Plugins != nil {
-		out.Plugins = make(map[string]any, len(s.Plugins))
-		for k, v := range s.Plugins {
-			out.Plugins[k] = v
-		}
-	}
-	if s.Ctx.ActivePlayers != nil {
-		out.Ctx.ActivePlayers = copyStrMap(s.Ctx.ActivePlayers)
-	}
-	out.MoveCounts = copyIntMap(s.MoveCounts)
-	out.StageMinMoves = copyIntMap(s.StageMinMoves)
-	out.StageMaxMoves = copyIntMap(s.StageMaxMoves)
 	// TurnSnapshots intentionally not copied — they only matter at the
 	// top of the stack, and undo pops from the live state.
 	out.TurnSnapshots = nil

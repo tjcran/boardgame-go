@@ -30,7 +30,9 @@ var (
 	ErrUnknownSeat    = errors.New("player not seated in this match")
 	ErrSeatRequired   = errors.New("game not yet ready (seats unfilled)")
 	ErrBadCredentials = errors.New("invalid credentials")
-	ErrServerOnly     = errors.New("move is marked Move.ServerOnly — credentialed clients cannot dispatch it; use Manager.DispatchServer")
+	// ErrServerOnly is core.ErrServerOnly: the reducer refuses a client's
+	// request (MoveRequest.FromClient) for a ServerOnly move.
+	ErrServerOnly = core.ErrServerOnly
 
 	ErrInvalidPlayerCount = errors.New("requested player count outside game's [MinPlayers, MaxPlayers]")
 )
@@ -843,7 +845,9 @@ func (m *Manager) DryMoveReq(matchID, playerID, credentials string, req core.Mov
 		return core.State{}, ErrUnknownSeat
 	}
 	req.PlayerID = seat
-	req.ServerDispatch = false // a client request; see MoveReqCtx
+	// A client request; see MoveReqCtx.
+	req.ServerDispatch = false
+	req.FromClient = true
 	return core.Apply(g, match.State, req)
 }
 
@@ -895,20 +899,12 @@ func (m *Manager) MoveReqCtx(ctx context.Context, matchID, playerID, credentials
 
 	req.PlayerID = seat
 	// A credentialed request is a client's move, never the server's own,
-	// whatever the caller put in the struct. Only DispatchServer sets it.
+	// whatever the caller put in the struct. Only DispatchServer sets
+	// ServerDispatch. FromClient makes the reducer refuse a ServerOnly
+	// move, judged on the move it resolves for this request, so the
+	// refusal covers every move table and every OCC attempt.
 	req.ServerDispatch = false
-
-	// Look up the move definition to check ServerOnly. Credentialed
-	// clients cannot dispatch server-only moves — they must go via
-	// Manager.DispatchServer.
-	if mv, ok := g.Moves[req.Move]; ok {
-		// g.Moves values are core.Move (value type) or core.MoveFn.
-		// Only core.Move carries the ServerOnly flag; MoveFn implicitly
-		// has ServerOnly=false.
-		if move, ok := mv.(core.Move); ok && move.ServerOnly {
-			return core.State{}, ErrServerOnly
-		}
-	}
+	req.FromClient = true
 
 	return m.dispatchLocked(ctx, matchID, playerID, g, match, req)
 }
@@ -1046,7 +1042,8 @@ func (m *Manager) dispatchLocked(
 //
 // playerID is the seat the move appears as having been made by;
 // LifecycleMatchMoved observers see this as PlayerID just like a
-// credentialed move. moveName must match a key in Game.Moves. ServerOnly
+// credentialed move. moveName resolves like any move: the seat's stage
+// table, then the active phase's, then the game's. ServerOnly
 // moves are dispatchable here (the asymmetric counterpart to MoveReqCtx's
 // ServerOnly refusal); non-ServerOnly moves are dispatchable too — the
 // server's authority covers anything in the game's move set.

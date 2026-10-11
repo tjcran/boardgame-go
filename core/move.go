@@ -166,6 +166,11 @@ type Move struct {
 	// IgnoreBlocks lets this move bypass the ErrBlocked gate the
 	// reducer applies when State.Blocks is non-empty. Use sparingly —
 	// concede / forfeit / emergency-exit moves are the obvious case.
+	//
+	// The reducer reads this flag, like the other flags here, from the
+	// move a request resolves to. A stage move that reuses the name of
+	// a top-level escape hatch replaces it for players in that stage, so
+	// it must set IgnoreBlocks (and AnyPlayer) itself to stay one.
 	IgnoreBlocks bool
 
 	// AnyPlayer exempts this move from the current-player / active-stage

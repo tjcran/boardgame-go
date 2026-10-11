@@ -270,8 +270,9 @@ analysis.
   `LogEntry.Stage` self-describes exported logs
 - **Server-driven move ingress** — `Manager.DispatchServer` dispatches
   moves on the server's behalf (no credentials needed), and
-  `Move.ServerOnly` is now enforced in `MoveReqCtx` so credentialed
-  clients can't call server-only moves. Together they form the
+  `Move.ServerOnly` is enforced in `MoveReqCtx` and `DryMove` so
+  credentialed clients can't call server-only moves, whichever move
+  table (game, phase or stage) registers them. Together they form the
   asymmetric model: clients call non-ServerOnly moves; the server
   calls anything.
 - **`modules/ccg/` library** — CCG/TCG bookkeeping (entities, zones, layered

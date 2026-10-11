@@ -253,6 +253,75 @@ func TestExclusiveStagePhaseOverridesGlobal(t *testing.T) {
 	}
 }
 
+// TestPhaseStageShadowsGameStage: when a phase's Turn.Stages and the
+// game-level Turn.Stages both define the caller's stage, the phase's
+// entry is the stage, for its move table as for its Exclusive flag and
+// hooks. The game-level entry's moves are not reachable in that phase:
+// a name only it defines is unknown, and a name the top-level table also
+// defines resolves there, so an Exclusive stage refuses it.
+func TestPhaseStageShadowsGameStage(t *testing.T) {
+	cases := []struct {
+		exclusive bool
+		move      string
+		wantRan   string // recorded name of the move that runs; "" = refused
+		wantErr   error
+	}{
+		{exclusive: true, move: "respond", wantRan: "respond"},
+		{exclusive: true, move: "gameOnly", wantErr: ErrUnknownMove},
+		{exclusive: true, move: "shared", wantErr: ErrMoveNotInStage},
+		{exclusive: false, move: "respond", wantRan: "respond"},
+		{exclusive: false, move: "gameOnly", wantErr: ErrUnknownMove},
+		{exclusive: false, move: "shared", wantRan: "topShared"},
+	}
+	for _, tc := range cases {
+		name := tc.move + "/inclusive"
+		if tc.exclusive {
+			name = tc.move + "/exclusive"
+		}
+		t.Run(name, func(t *testing.T) {
+			game := &Game{
+				Name:       "stage-shadowing-test",
+				MinPlayers: 2,
+				MaxPlayers: 2,
+				Setup:      func(_ Ctx, _ any) G { return &targetState{} },
+				Moves: map[string]any{
+					"enter": MoveFn(func(mc *MoveContext, _ ...any) (G, error) {
+						mc.Events.SetActivePlayers(ActivePlayersConfig{CurrentPlayer: Stage("respond")})
+						return cloneT(mc.G.(*targetState), "enter"), nil
+					}),
+					"shared": recordMove("topShared"),
+				},
+				Phases: map[string]*PhaseConfig{
+					"main": {Start: true, Turn: &TurnConfig{Stages: map[string]*StageConfig{
+						"respond": {Exclusive: tc.exclusive, Moves: map[string]any{"respond": recordMove("respond")}},
+					}}},
+				},
+				Turn: &TurnConfig{Stages: map[string]*StageConfig{
+					"respond": {Moves: map[string]any{
+						"shared":   recordMove("stageShared"),
+						"gameOnly": recordMove("gameOnly"),
+					}},
+				}},
+			}
+			state, player := enterStage(t, game, "enter")
+			next, err := Apply(game, state, MoveRequest{PlayerID: player, Move: tc.move})
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("%s: err = %v, want %v", tc.move, err, tc.wantErr)
+				}
+				assertUnchanged(t, state, next)
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", tc.move, err)
+			}
+			if events := next.G.(*targetState).Events; events[len(events)-1] != tc.wantRan {
+				t.Fatalf("%s ran the wrong move: events = %v, want %s last", tc.move, events, tc.wantRan)
+			}
+		})
+	}
+}
+
 // assertUnchanged fails when a rejected move left any trace: the
 // returned state must be the pre-move state, pending prompts and the
 // caller's stage included.

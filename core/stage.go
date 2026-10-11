@@ -26,6 +26,11 @@ type StageConfig struct {
 	// that table — a name missing here (or every name, when Moves is nil)
 	// still resolves from the phase/global moves. Set Exclusive to make
 	// this table the complete set of moves a player in the stage may make.
+	//
+	// When the active phase's Turn.Stages and the game-level Turn.Stages
+	// both define a stage name, the phase's entry is that stage while the
+	// phase is active: its Moves, Exclusive flag and hooks apply, and the
+	// game-level entry's Moves are not consulted.
 	Moves map[string]any
 
 	// Exclusive, when true, restricts a player in this stage to the moves
@@ -49,7 +54,12 @@ type StageConfig struct {
 	//     Drain steps and Events.RunMove are not stage-scoped either.
 	//
 	// An Exclusive stage with nil Moves therefore permits only those
-	// exempt moves.
+	// exempt moves. That is a deliberate way to hold a player until they
+	// answer a prompt that names its answer, or until the server or an
+	// AnyPlayer move releases them, so Game.Validate accepts it: whether
+	// such a release exists is only known at runtime. A game that gates
+	// a player into such a stage must raise that prompt or provide that
+	// release, or the player is left with no legal move.
 	//
 	// Opt-in because the default fall-through is load-bearing for
 	// existing games (for example a resume or concede move registered
