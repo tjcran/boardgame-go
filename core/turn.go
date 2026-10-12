@@ -16,10 +16,17 @@ type TurnConfig struct {
 
 	// OnBegin runs at the start of a turn. May call mc.Events.* to queue
 	// further transitions, except those forbidden by BGIO's hook table
-	// (e.g. SetStage and EndStage are not allowed in OnBegin).
+	// (e.g. SetStage and EndStage are not allowed in OnBegin). May also
+	// push moves and raise blocks via mc.Queue: a block raised here
+	// pauses the new turn's cascade until its addressee answers it, which
+	// is how a game opens a start-of-turn prompt (see Queue).
 	OnBegin HookFn
 
-	// OnEnd runs when a turn ends, before the next turn begins.
+	// OnEnd runs when a turn ends, before the next turn begins. A block it
+	// raises via mc.Queue does not hold the turn open: the turn still
+	// passes and the next turn's OnBegin runs first, and the block pauses
+	// the cascade afterwards. Input the ending player owes before the
+	// turn passes belongs in the move that ends the turn (see Queue).
 	OnEnd HookFn
 
 	// OnMove runs after every successful move in this scope.

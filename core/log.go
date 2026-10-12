@@ -51,7 +51,9 @@ type LogEntry struct {
 	// Parent is the index in State.Log of the external move that
 	// initiated this cascade entry. -1 means "external" (top-level).
 	// Drain steps and resume entries point at their initiating move so
-	// clients can render hierarchical move logs.
+	// clients can render hierarchical move logs. Drain steps of a
+	// cascade no move started (moves pushed by hooks that NewMatch or
+	// ForceEndTurn ran) carry -1.
 	Parent int `json:"parent,omitempty"`
 
 	// ResumeTag, on a move entry, is the value of MoveRequest.ResumeTag

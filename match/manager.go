@@ -224,7 +224,9 @@ type CreateOptions struct {
 	JoinCode string
 }
 
-// Create starts a fresh match. Returns the new match ID.
+// Create starts a fresh match. Returns the new match ID. If the game's
+// setup hooks start a cascade that fails (see core.NewMatchSeededE),
+// Create returns that error and creates nothing.
 func (m *Manager) Create(gameName string, opts CreateOptions) (string, error) {
 	return m.createLockedFull(gameName, opts)
 }
@@ -403,7 +405,9 @@ func (m *Manager) SetConnected(matchID, playerID string, connected bool) error {
 // seated player with valid credentials. Addresses BGIO issue #1166
 // (client.reset doesn't work in multiplayer).
 //
-// After Reset the new state is broadcast like any other state change.
+// After Reset the new state is broadcast like any other state change. If
+// the new setup's hook cascade fails (see core.NewMatchSeededE), Reset
+// returns that error and the match keeps its current state.
 func (m *Manager) Reset(matchID, playerID, credentials string) error {
 	unlock := m.lockMatch(matchID)
 	defer unlock()
@@ -425,7 +429,13 @@ func (m *Manager) Reset(matchID, playerID, credentials string) error {
 	if g == nil {
 		return fmt.Errorf("%w: %s", ErrUnknownGame, match.GameName)
 	}
-	match.State = core.NewMatchSeeded(g, match.State.Ctx.NumPlayers, match.SetupData, m.seed())
+	// A setup whose hook cascade fails would hand the players a match on
+	// which every move fails; keep the current one instead.
+	fresh, err := core.NewMatchSeededE(g, match.State.Ctx.NumPlayers, match.SetupData, m.seed())
+	if err != nil {
+		return fmt.Errorf("match setup: %w", err)
+	}
+	match.State = fresh
 	// IsConnected flags are per-socket; on reset we reset them too so
 	// clients re-announce themselves on reconnect.
 	for i := range match.Players {
@@ -588,11 +598,17 @@ func (m *Manager) createLockedFull(gameName string, opts CreateOptions) (string,
 			return "", fmt.Errorf("join code %q already in use for game %s", opts.JoinCode, gameName)
 		}
 	}
+	// Refuse to create a match whose setup hook cascade failed: every move
+	// on it would fail.
+	state, err := core.NewMatchSeededE(g, opts.NumPlayers, opts.SetupData, m.seed())
+	if err != nil {
+		return "", fmt.Errorf("match setup: %w", err)
+	}
 	id := newID()
 	match := &storage.Match{
 		ID:            id,
 		GameName:      gameName,
-		State:         core.NewMatchSeeded(g, opts.NumPlayers, opts.SetupData, m.seed()),
+		State:         state,
 		SetupData:     opts.SetupData,
 		Unlisted:      opts.Unlisted,
 		CreatedAt:     m.now().Unix(),
@@ -630,11 +646,15 @@ func (m *Manager) createLocked(gameName string, numPlayers int, setupData any, u
 			return "", fmt.Errorf("invalid setupData: %s", msg)
 		}
 	}
+	state, err := core.NewMatchSeededE(g, numPlayers, setupData, m.seed())
+	if err != nil {
+		return "", fmt.Errorf("match setup: %w", err)
+	}
 	id := newID()
 	match := &storage.Match{
 		ID:            id,
 		GameName:      gameName,
-		State:         core.NewMatchSeeded(g, numPlayers, setupData, m.seed()),
+		State:         state,
 		SetupData:     setupData,
 		Unlisted:      unlisted,
 		CreatedAt:     m.now().Unix(),

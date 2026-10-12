@@ -67,6 +67,15 @@ func (m *Manager) cancelTurnTimer(matchID string) {
 // The deferred state update broadcasts to subscribers like any other
 // move, and emits a LifecycleMatchMoved event so app code sees the
 // expiry as a normal transition.
+//
+// If the forced turn end fails (a move the game's hooks pushed fails, or
+// the cascade overflows; see core.ForceEndTurnE), the match keeps its
+// state: nothing is stored, broadcast or announced, the failure is
+// logged as match.turn_expire_failed, and AutoExpire returns the error.
+// The timer is not re-armed. A retry would run the same failing cascade
+// against the same state, and each attempt could advance state that game
+// code mutates in place (a plugin's PRNG, say), which a failed attempt
+// does not roll back. The next accepted move re-arms the timer as usual.
 func (m *Manager) AutoExpire(matchID string, expectedTurn int) error {
 	unlock := m.lockMatch(matchID)
 	defer unlock()
@@ -86,7 +95,12 @@ func (m *Manager) AutoExpire(matchID string, expectedTurn int) error {
 	if g == nil {
 		return nil
 	}
-	next := core.ForceEndTurn(g, match.State)
+	next, err := core.ForceEndTurnE(g, match.State)
+	if err != nil {
+		m.Logger.Warn("match.turn_expire_failed",
+			"match_id", matchID, "turn", expectedTurn, "err", err.Error())
+		return err
+	}
 	match.State = next
 	if err := m.store.Update(match); err != nil {
 		return err

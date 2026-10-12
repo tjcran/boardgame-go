@@ -57,10 +57,34 @@ func newBlock(b BlockSpec, opts []BlockOption) BlockSpec {
 	return b
 }
 
-// Queue is the API exposed to moves via MoveContext.Queue. Like
-// Events, it queues operations for the reducer to drain after the
+// Queue is the API exposed to moves and hooks via MoveContext.Queue.
+// Like Events, it queues operations for the reducer to drain after the
 // move returns — but unlike Events these are full moves, with their
 // own validation / plugin pass / log entries.
+//
+// Hooks share the Queue of the move whose events fired them (NewMatch
+// and ForceEndTurn hold one for the hooks they run outside a move), so
+// a hook can push moves and raise blocks too. The reducer harvests
+// them after the move's events have drained, after whatever the move
+// itself queued. Because hooks run inside that event drain, where a
+// hook raises a block decides what it pauses:
+//
+//   - Turn.OnBegin: the block pauses the new turn's cascade until its
+//     addressee answers it, which is the natural start-of-turn prompt.
+//     Non-resume moves are refused with ErrBlocked meanwhile, and the
+//     addressee may answer out of turn.
+//   - Turn.OnEnd: the block does NOT suspend the turn rotation. The
+//     turn still passes and the next turn's OnBegin runs in the same
+//     drain; the block only pauses the cascade afterwards, with the new
+//     turn under way. A game that needs the ending player's input
+//     before the turn passes should collect it in the move that ends
+//     the turn.
+//
+// A block raised during a move that calls MoveContext.DropBlocksFor
+// survives the drop: the drop applies to blocks already pending before
+// the move, and new blocks merge after it. ForceEndTurn drops the
+// ending player's pending blocks the same way, so a block its hooks
+// raise for the next turn survives.
 type Queue struct {
 	pending []QueuedAction
 	blocks  []BlockSpec
@@ -83,6 +107,10 @@ func (q *Queue) Push(playerID, move string, args ...any) {
 // move whose ResumeTag + PlayerID match the block clears it (and whose
 // Move matches, when the block names its answer via AnsweredBy); if
 // all blocks are gone the drain continues.
+//
+// playerID is the seat that must answer. Name it explicitly from a turn
+// or phase hook, where mc.PlayerID is "": a block addressed to "" can be
+// answered by no seat.
 func (q *Queue) Block(tag, playerID string, data any, opts ...BlockOption) {
 	q.blocks = append(q.blocks, newBlock(BlockSpec{
 		Tag: tag, PlayerID: playerID, Data: data,

@@ -7,58 +7,105 @@ package core
 // All hooks share a single Events queue with their caller, so events
 // queued inside a hook (e.g. phase.OnBegin calling events.EndTurn) are
 // picked up by the surrounding drain loop. BGIO has a bug (#1237) where
-// these are silently dropped — we explicitly fix it.
+// these are silently dropped — we explicitly fix it. Hooks share the
+// caller's action Queue the same way, so a hook can push moves and raise
+// blocks (see hookEnv).
 
 // maxChainedMoves caps Events.RunMove recursion per move. Keeps a
 // misbehaving game from infinite-looping the engine.
 const maxChainedMoves = 32
 
 // hookEnv is the ambient environment engine-invoked game code runs in: the
-// event queue shared with the surrounding drain loop, plus the plugin API
-// table resolved for this Apply.
+// event queue shared with the surrounding drain loop, the action Queue of
+// the surrounding move, plus the plugin API table resolved for this Apply.
 //
-// The two travel together through every transition helper because a hook
-// missing either one is silently, not loudly, broken: no queue means its
-// events are dropped (BGIO #1237), and no plugin table means mc.Random is
-// nil and its randomness quietly isn't random.
+// The three travel together through every transition helper because a
+// hook missing any one is silently, not loudly, broken: no event queue
+// means its events are dropped (BGIO #1237), no action Queue means
+// mc.Queue is nil and a hook that pushes a move or raises a block
+// nil-panics, and no plugin table means mc.Random is nil and its
+// randomness quietly isn't random.
+//
+// The action Queue is the one the surrounding move's own MoveContext
+// holds, so Queue.Push and Queue.Block from a hook behave exactly as they
+// do from the move body: the reducer harvests them after the move's
+// events have drained, after anything the move itself queued, and the
+// cascade drain runs the pushed moves and pauses on the blocks. Entry
+// points that run hooks outside a move (NewMatch, ForceEndTurn) hold a
+// Queue of their own and harvest it the same way (see drainCascade).
+//
+// Two consequences of "hooks run inside the event drain" are worth
+// stating, because they decide where a game should raise a prompt:
+//
+//   - A block raised in Turn.OnEnd does NOT suspend the turn rotation.
+//     Blocks pause the cascade of queued moves, not the event drain, so
+//     the turn still passes and the next turn's OnBegin runs in the same
+//     drain; the block then pauses the cascade afterwards, with the new
+//     turn already under way. A game that needs the ending player's
+//     input before the turn passes should collect it in the move that
+//     ends the turn.
+//   - A block raised in Turn.OnBegin pauses the new turn's cascade until
+//     its addressee answers it, which is the natural shape of a
+//     start-of-turn prompt. Every non-resume move is refused with
+//     ErrBlocked meanwhile, and the addressee may answer out of turn.
 //
 // The API objects are the *same* ones the surrounding move got, which is
 // what makes hook mutations persist: plugin APIs share a state pointer
 // with the persisted plugin data, and Apply flushes that data once through
 // the move's MoveContext. Rebuilding the table per hook would strand
 // mutations from any plugin that doesn't share a pointer.
+//
+// drops is the surrounding move's DropBlocksFor list, shared for the same
+// reason as the queues: a hook's request to abandon stranded prompts
+// would otherwise land on a MoveContext nobody reads.
 type hookEnv struct {
 	events  *Events
+	queue   *Queue
+	drops   *[]string
 	plugins map[string]any
 }
 
-// newHookEnv resolves a fresh plugin API table for state. Only for entry
-// points that run hooks outside a move (match setup, forced turn end);
-// Apply and applyStep construct hookEnv from the table they already hold.
-func newHookEnv(game *Game, state State, events *Events) *hookEnv {
-	return &hookEnv{events: events, plugins: buildPluginAPIs(game, state, "")}
+// newHookEnv resolves a fresh plugin API table for state and gives the
+// hooks fresh event and action queues. Only for entry points that run
+// hooks outside a move (match setup, forced turn end), which must drain
+// both queues themselves; Apply and applyStep construct hookEnv from the
+// queues and table their move already holds.
+func newHookEnv(game *Game, state State) *hookEnv {
+	return &hookEnv{
+		events:  &Events{},
+		queue:   &Queue{},
+		drops:   new([]string),
+		plugins: buildPluginAPIs(game, state, ""),
+	}
 }
 
-// mc builds the MoveContext for a hook that is allowed to queue events.
+// mc builds the MoveContext for a hook that is allowed to queue events,
+// push moves and raise blocks.
 func (e *hookEnv) mc(state State, playerID string) *MoveContext {
 	return (&MoveContext{
-		G: state.G, Ctx: state.Ctx, PlayerID: playerID, Events: e.events,
+		G: state.G, Ctx: state.Ctx, PlayerID: playerID,
+		Events: e.events, Queue: e.queue, dropBlocksFor: e.drops,
 	}).attachPlugins(e.plugins)
 }
 
 // mcNoEvents is mc for the TurnOrder callbacks (Next) and Phase.Next, which
 // BGIO does not let queue transitions — they answer "who/what is next?",
-// they don't drive the rotation. They still get the plugin table: choosing
-// a random next player is a legitimate thing for a turn order to do.
+// they don't drive the rotation. For the same reason they get no action
+// Queue: pushing a move or raising a prompt drives the game, which is not
+// what a "who/what is next?" callback is for. They still get the plugin
+// table: choosing a random next player is a legitimate thing for a turn
+// order to do.
 func (e *hookEnv) mcNoEvents(state State) *MoveContext {
 	return (&MoveContext{G: state.G, Ctx: state.Ctx}).attachPlugins(e.plugins)
 }
 
 // runChainedMove resolves and applies a move queued via Events.RunMove.
 // It re-uses the surrounding events queue so further events from the
-// chained move land in the same drain loop. Errors (unknown move,
-// invalid args) are dropped; that's the price of "fire-and-forget"
-// dispatch from a move body. Use Apply directly when you need errors.
+// chained move land in the same drain loop, and the surrounding action
+// Queue and DropBlocksFor list so moves it pushes, blocks it raises and
+// blocks it drops count as the parent's. Errors (unknown move, invalid
+// args) are dropped; that's the price of "fire-and-forget" dispatch from
+// a move body. Use Apply directly when you need errors.
 func runChainedMove(game *Game, state State, parent *MoveContext, name string, args []any) State {
 	// Resolve from the current scope: phase first, then global. Stage
 	// lookups don't apply here — RunMove is dispatched in the surrounding
@@ -77,8 +124,10 @@ func runChainedMove(game *Game, state State, parent *MoveContext, name string, a
 		Ctx:      state.Ctx,
 		PlayerID: parent.PlayerID,
 		Events:   parent.Events,
+		Queue:    parent.Queue,
 		Context:  parent.Context,
 	}).attachPlugins(parent.Plugins)
+	mc.dropBlocksFor = parent.dropBlocksFor
 	mc.chainedMoves = parent.chainedMoves // share counter
 	nextG, err := move.Move(mc, args...)
 	if err != nil {
@@ -370,9 +419,12 @@ func flushExtraLog(state State, mc *MoveContext) State {
 }
 
 // runGameOnEnd runs Game.OnEnd after the game ends. BGIO disallows events
-// from this hook; we pass the queue anyway and rely on the absence of
-// further calls. (No hook is fired after OnEnd, so queueing here is a
-// no-op in practice.)
+// from this hook; we pass the queues anyway and rely on the absence of
+// further calls. (No hook is fired after OnEnd, so queueing events here
+// is a no-op in practice. Moves it pushes stay in State.Queue, because the
+// cascade drain stops at game over; blocks it raises are harvested into
+// State.Blocks like any other, but no move can answer them once the game
+// is over.)
 func runGameOnEnd(game *Game, state State, env *hookEnv) State {
 	if game.OnEnd == nil {
 		return state
