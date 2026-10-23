@@ -63,13 +63,18 @@ func TestPlayerViewAppliesBlockViewPerViewer(t *testing.T) {
 				Data:     map[string]any{"candidates": []string{"card-7", "card-9"}},
 				Target:   &TargetRequest{Kind: "pick", Candidates: []any{"card-7", "card-9"}},
 			},
+			{
+				Tag:        "assign",
+				PlayerID:   "0",
+				Assignment: &AssignmentRequest{Kind: "assign", Pairs: [][2]any{{"card-7", "slot-1"}}},
+			},
 		},
 	}
 
 	// The addressed seat sees the full payload.
 	own := PlayerView(game, state, "0")
-	if own.Blocks[0].Data == nil || own.Blocks[0].Target == nil {
-		t.Fatalf("addressed seat should see its own block payload; got %+v", own.Blocks[0])
+	if own.Blocks[0].Data == nil || own.Blocks[0].Target == nil || own.Blocks[1].Assignment == nil {
+		t.Fatalf("addressed seat should see its own block payload; got %+v", own.Blocks)
 	}
 
 	// A different seat sees the shell only.
@@ -77,14 +82,23 @@ func TestPlayerViewAppliesBlockViewPerViewer(t *testing.T) {
 	if got := other.Blocks[0]; got.Tag != "pick" || got.PlayerID != "0" {
 		t.Fatalf("ownership shell should survive redaction; got %+v", got)
 	}
+	if got := other.Blocks[1]; got.Tag != "assign" || got.PlayerID != "0" {
+		t.Fatalf("ownership shell should survive redaction; got %+v", got)
+	}
 	if other.Blocks[0].Data != nil || other.Blocks[0].Target != nil {
 		t.Fatalf("block payload leaked to a different seat: %+v", other.Blocks[0])
+	}
+	if other.Blocks[1].Assignment != nil {
+		t.Fatalf("assignment payload leaked to a different seat: %+v", other.Blocks[1].Assignment)
 	}
 
 	// Spectators (playerID "") match no seat either.
 	spec := PlayerView(game, state, "")
 	if spec.Blocks[0].Data != nil || spec.Blocks[0].Target != nil {
 		t.Fatalf("block payload leaked to spectator: %+v", spec.Blocks[0])
+	}
+	if spec.Blocks[1].Assignment != nil {
+		t.Fatalf("assignment payload leaked to spectator: %+v", spec.Blocks[1].Assignment)
 	}
 
 	// Two viewers, same authoritative state, different wire payloads —
@@ -114,17 +128,18 @@ func TestPlayerViewBlockViewDoesNotMutateSource(t *testing.T) {
 func TestHideBlockPayload(t *testing.T) {
 	block := BlockSpec{
 		Tag: "pick", PlayerID: "0", Order: 3,
-		Data:   map[string]any{"secret": true},
-		Target: &TargetRequest{Kind: "pick"},
+		Data:       map[string]any{"secret": true},
+		Target:     &TargetRequest{Kind: "pick"},
+		Assignment: &AssignmentRequest{Kind: "pick"},
 	}
 
 	own := HideBlockPayload(block, "0")
-	if own.Data == nil || own.Target == nil {
+	if own.Data == nil || own.Target == nil || own.Assignment == nil {
 		t.Fatalf("owning viewer should see the payload unchanged: %+v", own)
 	}
 
 	other := HideBlockPayload(block, "1")
-	if other.Data != nil || other.Target != nil {
+	if other.Data != nil || other.Target != nil || other.Assignment != nil {
 		t.Fatalf("non-owning viewer should have payload stripped: %+v", other)
 	}
 	if other.Tag != "pick" || other.PlayerID != "0" || other.Order != 3 {
@@ -132,12 +147,12 @@ func TestHideBlockPayload(t *testing.T) {
 	}
 
 	spectator := HideBlockPayload(block, "")
-	if spectator.Data != nil || spectator.Target != nil {
+	if spectator.Data != nil || spectator.Target != nil || spectator.Assignment != nil {
 		t.Fatalf("spectator should have payload stripped: %+v", spectator)
 	}
 
 	// Source block is untouched — HideBlockPayload takes block by value.
-	if block.Data == nil || block.Target == nil {
+	if block.Data == nil || block.Target == nil || block.Assignment == nil {
 		t.Fatalf("HideBlockPayload mutated its input: %+v", block)
 	}
 }

@@ -37,16 +37,18 @@ type PlayerViewFn func(g G, ctx Ctx, playerID string) G
 // viewerID, and a redacted copy otherwise. See HideBlockPayload for a
 // ready-made implementation of that common case.
 //
-// BlockSpec is passed and returned by value, but Data (any) and Target
-// (*TargetRequest) are reference types — the copy still points at the
-// same map/struct the authoritative State.Blocks entry does, and that
-// entry is reused across every viewer's call for one broadcast. Redact
-// by replacing Data/Target wholesale (as HideBlockPayload does), never
+// BlockSpec is passed and returned by value, but Data (any), Target
+// (*TargetRequest) and Assignment (*AssignmentRequest) are reference
+// types — the copy still points at the same map/struct the
+// authoritative State.Blocks entry does, and that entry is reused
+// across every viewer's call for one broadcast. Redact by replacing
+// Data/Target/Assignment wholesale (as HideBlockPayload does), never
 // by mutating through them (e.g. deleting keys from the Data map or
-// writing into *Target's fields) — that would corrupt the authoritative
-// block for every other viewer and for the resume move itself. If a
-// hook needs to keep part of a nested payload, copy it out first, the
-// way games with a struct-shaped PlayerView clone G before editing it.
+// writing into *Target's or *Assignment's fields) — that would
+// corrupt the authoritative block for every other viewer and for the
+// resume move itself. If a hook needs to keep part of a nested
+// payload, copy it out first, the way games with a struct-shaped
+// PlayerView clone G before editing it.
 type BlockViewFn func(block BlockSpec, viewerID string) BlockSpec
 
 // EndIfFn is checked after every move. Returning a non-nil value ends the
@@ -140,9 +142,10 @@ type Game struct {
 	// redact each pending State.Blocks entry per-seat, the same way
 	// PlayerView redacts G. Hidden-information games (card games,
 	// fog-of-war) surface interactive prompts via Queue.Block /
-	// Queue.RequestTarget, and a block's Data/Target payload can itself
-	// carry hidden information — a candidate list drawn from a hidden
-	// zone, a generated option name, the identity of a face-down source.
+	// Queue.RequestTarget / Queue.RequestAssignment, and a block's
+	// Data/Target/Assignment payload can itself carry hidden
+	// information — a candidate list drawn from a hidden zone, a
+	// generated option name, the identity of a face-down source.
 	// PlayerView already redacts G, plugin data, and the log, but a
 	// pending block's payload otherwise rides to every viewer unredacted.
 	//
