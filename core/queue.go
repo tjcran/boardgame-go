@@ -33,6 +33,9 @@ type BlockSpec struct {
 	Order  int            `json:"order,omitempty"` // reserved; ignored by v1 reducer
 	Data   any            `json:"data,omitempty"`
 	Target *TargetRequest `json:"target,omitempty"`
+	// Assignment is set by Queue.RequestAssignment: a typed pairing
+	// prompt the resume move validates with ValidateAssignment.
+	Assignment *AssignmentRequest `json:"assignment,omitempty"`
 }
 
 // BlockOption configures a block raised with Queue.Block or
@@ -135,6 +138,24 @@ func (q *Queue) RequestTarget(playerID string, req TargetRequest, opts ...BlockO
 		Tag:      req.Kind,
 		PlayerID: playerID,
 		Target:   &r,
+	}, opts))
+}
+
+// RequestAssignment is the pairing sibling of RequestTarget: it
+// pauses the cascade and records an AssignmentRequest the transport /
+// UI / replay can render and validate against. Tag is set to
+// req.Kind, so the resume move's MoveRequest.ResumeTag should match
+// req.Kind.
+//
+// The resume move reads the typed request via
+// mc.ResumingBlock.Assignment and validates the player's pairs with
+// ValidateAssignment. Pass AnsweredBy to name that move.
+func (q *Queue) RequestAssignment(playerID string, req AssignmentRequest, opts ...BlockOption) {
+	r := req
+	q.blocks = append(q.blocks, newBlock(BlockSpec{
+		Tag:        req.Kind,
+		PlayerID:   playerID,
+		Assignment: &r,
 	}, opts))
 }
 
