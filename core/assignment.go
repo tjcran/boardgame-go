@@ -19,6 +19,12 @@ import (
 // membership and counts. Pair sides are any-typed so the
 // same shape covers every game-defined ID type.
 //
+// Pairs is a closed set. Unlike TargetRequest, whose empty Candidates
+// means "open-ended, any value goes," an empty Pairs offers nothing:
+// with AllowEmpty false such a request can never be answered, and the
+// block soft-locks the match. Raise one with no legal pairs only when
+// AllowEmpty is true.
+//
 // MaxPerLeft and MaxPerRight cap how many chosen pairs may share one
 // left or right item; 0 means 1 (a one-to-one pairing). AllowEmpty
 // permits answering with no pairs at all; otherwise at least one is
@@ -29,10 +35,10 @@ import (
 // them.
 type AssignmentRequest struct {
 	Kind        string         `json:"kind"`
-	Pairs       [][2]any       `json:"pairs"`
-	MaxPerLeft  int            `json:"max_per_left,omitempty"`
-	MaxPerRight int            `json:"max_per_right,omitempty"`
-	AllowEmpty  bool           `json:"allow_empty,omitempty"`
+	Pairs       [][2]any       `json:"pairs,omitempty"`
+	MaxPerLeft  int            `json:"maxPerLeft,omitempty"`
+	MaxPerRight int            `json:"maxPerRight,omitempty"`
+	AllowEmpty  bool           `json:"allowEmpty,omitempty"`
 	Source      any            `json:"source,omitempty"`
 	Data        map[string]any `json:"data,omitempty"`
 }

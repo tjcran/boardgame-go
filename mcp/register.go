@@ -144,7 +144,7 @@ func RegisterTools(s *Server, t *Tools) {
 				"credentials": {"type": "string", "description": "The credentials returned by join_match for this seat."},
 				"move":        {"type": "string"},
 				"args":        {"type": "array", "description": "Move arguments. Use exactly what list_legal_moves returned for this move."},
-				"resumeTag":   {"type": "string", "description": "Set to a pending block's tag (its TargetRequest kind) to resume a paused move with this move as the selection."}
+				"resumeTag":   {"type": "string", "description": "Set to a pending block's tag (its TargetRequest or AssignmentRequest kind) to resume a paused move with this move as the answer."}
 			},
 			"required": ["matchID", "playerID", "credentials", "move"],
 			"additionalProperties": false

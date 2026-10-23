@@ -3,7 +3,6 @@ package core
 import (
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 )
 
@@ -86,23 +85,62 @@ func TestQueueRequestAssignment_RaisesNamedBlock(t *testing.T) {
 	}
 }
 
+// TestBlockSpec_AssignmentJSON pins the wire bytes: core's JSON field
+// names are camelCase, and every optional field drops out when unset.
 func TestBlockSpec_AssignmentJSON(t *testing.T) {
-	b := BlockSpec{Tag: "t", PlayerID: "0", Assignment: &AssignmentRequest{
-		Kind: "t", Pairs: [][2]any{{"a", "x"}, {"b", "y"}},
+	full := BlockSpec{Tag: "t", PlayerID: "0", Assignment: &AssignmentRequest{
+		Kind:        "t",
+		Pairs:       [][2]any{{"a", "x"}, {"b", "y"}},
+		MaxPerLeft:  2,
+		MaxPerRight: 3,
+		AllowEmpty:  true,
+		Source:      "s",
+		Data:        map[string]any{"k": "v"},
 	}}
-	raw, err := json.Marshal(b)
+	raw, err := json.Marshal(full)
 	if err != nil {
 		t.Fatal(err)
+	}
+	const wantFull = `{"tag":"t","playerID":"0","assignment":{"kind":"t","pairs":[["a","x"],["b","y"]],` +
+		`"maxPerLeft":2,"maxPerRight":3,"allowEmpty":true,"source":"s","data":{"k":"v"}}}`
+	if string(raw) != wantFull {
+		t.Fatalf("full request bytes:\n got  %s\n want %s", raw, wantFull)
 	}
 	var got BlockSpec
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Assignment == nil || len(got.Assignment.Pairs) != 2 || got.Assignment.Pairs[1][1] != "y" {
-		t.Fatalf("round trip lost pairs: %+v", got.Assignment)
+	if got.Assignment == nil || len(got.Assignment.Pairs) != 2 || got.Assignment.Pairs[1][1] != "y" ||
+		got.Assignment.MaxPerLeft != 2 || got.Assignment.MaxPerRight != 3 || !got.Assignment.AllowEmpty {
+		t.Fatalf("round trip lost fields: %+v", got.Assignment)
 	}
-	plain, _ := json.Marshal(BlockSpec{Tag: "t", PlayerID: "0"})
-	if strings.Contains(string(plain), "assignment") {
-		t.Fatalf("nil Assignment must be omitted: %s", plain)
+
+	bare, err := json.Marshal(BlockSpec{Tag: "t", PlayerID: "0", Assignment: &AssignmentRequest{Kind: "t"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"tag":"t","playerID":"0","assignment":{"kind":"t"}}`; string(bare) != want {
+		t.Fatalf("bare request bytes:\n got  %s\n want %s", bare, want)
+	}
+
+	plain, err := json.Marshal(BlockSpec{Tag: "t", PlayerID: "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"tag":"t","playerID":"0"}`; string(plain) != want {
+		t.Fatalf("nil Assignment must be omitted:\n got  %s\n want %s", plain, want)
+	}
+}
+
+// TestValidateAssignment_NoPairsSoftLocks pins the documented contrast
+// with TargetRequest: empty Pairs is not open-ended, so without
+// AllowEmpty no answer at all is accepted.
+func TestValidateAssignment_NoPairsSoftLocks(t *testing.T) {
+	req := AssignmentRequest{Kind: "assign"}
+	if err := ValidateAssignment(req, nil); !errors.Is(err, ErrAssignmentEmpty) {
+		t.Fatalf("empty answer: want ErrAssignmentEmpty, got %v", err)
+	}
+	if err := ValidateAssignment(req, [][2]any{{"a", "x"}}); !errors.Is(err, ErrAssignmentNotLegal) {
+		t.Fatalf("any pair: want ErrAssignmentNotLegal, got %v", err)
 	}
 }

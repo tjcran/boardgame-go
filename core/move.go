@@ -62,7 +62,9 @@ type MoveContext struct {
 	// Nil for non-resume external moves and for all drain-step moves.
 	//
 	// Use ResumingBlock.Target (when non-nil) plus ValidateSelection to
-	// process the player's chosen targets in the resume handler.
+	// process the player's chosen targets in the resume handler, and
+	// ResumingBlock.Assignment (when non-nil) plus ValidateAssignment to
+	// process the player's chosen pairs.
 	ResumingBlock *BlockSpec
 
 	// dropBlocksFor collects player IDs whose PERSISTED pending blocks
