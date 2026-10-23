@@ -8,9 +8,9 @@ import (
 )
 
 // ExampleCombat walks one declaration round: attacks are declared,
-// the legal blocks are enumerated and offered as an assignment
-// request, the defender's answer is validated, and the unblocked
-// attackers are read back.
+// the legal blocks are offered as an assignment request, the
+// defender's answer is validated and converted back to entity pairs,
+// and the unblocked attackers are read back.
 func ExampleCombat() {
 	var c ccg.Combat
 	err := c.DeclareAttacks([]ccg.Attack{
@@ -31,20 +31,21 @@ func ExampleCombat() {
 
 	// The offered pairs become the request a player answers, usually via
 	// Queue.RequestAssignment from inside a move.
-	req := core.AssignmentRequest{Kind: "blocks", AllowEmpty: true}
-	for _, p := range offered {
-		req.Pairs = append(req.Pairs, [2]any{p[0], p[1]})
-	}
+	req := core.AssignmentRequest{Kind: "blocks", Pairs: ccg.ToAssignmentPairs(offered), AllowEmpty: true}
 
-	// The player's answer: 10 blocks attacker 1.
-	chosen := [][2]any{{ccg.EntityID(10), ccg.EntityID(1)}}
-	if err := core.ValidateAssignment(req, chosen); err != nil {
+	// The resume move's args, one pair per arg: 10 blocks attacker 1. Over
+	// a transport they arrive as []any{float64, float64}; both shapes
+	// validate the same way.
+	args := []any{[]any{float64(10), float64(1)}}
+	chosen, err := core.ValidateAssignment(req, args)
+	if err != nil {
 		fmt.Println("validate:", err)
 		return
 	}
-	var pairs [][2]ccg.EntityID
-	for _, p := range chosen {
-		pairs = append(pairs, [2]ccg.EntityID{p[0].(ccg.EntityID), p[1].(ccg.EntityID)})
+	pairs, err := ccg.EntityPairs(chosen)
+	if err != nil {
+		fmt.Println("convert:", err)
+		return
 	}
 	if err := c.DeclareBlocks(pairs, legal, nil); err != nil {
 		fmt.Println("declare blocks:", err)
