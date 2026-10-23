@@ -20,6 +20,11 @@
 //     supplies step behavior and advances the step when a
 //     PriorityState window closes on an empty effect queue (see
 //     steps.go)
+//   - Combat declaration: Combat records attackers and their targets,
+//     blocker assignments, and which attackers went unblocked, with
+//     legality supplied by game predicates and an optional
+//     whole-assignment hook; damage semantics stay in the game (see
+//     combat.go)
 //
 // Effect vs core.Queue: the engine's core.MoveContext.Queue schedules
 // engine moves across a cascade (FIFO, with Block / resume for
