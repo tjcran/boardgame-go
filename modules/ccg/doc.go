@@ -15,6 +15,11 @@
 //     buffer that the owning move drains via FlushTriggers at its
 //     checkpoints — IDs mint at flush, so replay never depends on
 //     handler registration order (see trigger.go)
+//   - Step sequences: StepSequence tracks named steps, some with a
+//     response window, as serializable bookkeeping only; the game
+//     supplies step behavior and advances the step when a
+//     PriorityState window closes on an empty effect queue (see
+//     steps.go)
 //
 // Effect vs core.Queue: the engine's core.MoveContext.Queue schedules
 // engine moves across a cascade (FIFO, with Block / resume for
