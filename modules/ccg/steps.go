@@ -1,6 +1,9 @@
 package ccg
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // Step sequences: ordered, named steps with optional response windows.
 //
@@ -22,9 +25,10 @@ import "errors"
 //	}
 //
 //	// when the window closes:
-//	if len(g.Pending) == 0 {
+//	if len(g.PendingEffects) == 0 {
 //		next, done, err := seq.Advance()
-//		// done: the sequence is over; otherwise enter `next`
+//		// done: the sequence is over (and inactive: a further
+//		// Advance returns ErrSequenceInactive); otherwise enter `next`
 //	} else {
 //		// effects were put on the queue during the window:
 //		// resolve them, then reopen a window in the SAME step
@@ -40,7 +44,8 @@ var (
 	// ErrSequenceEmpty is returned by Begin when given no steps.
 	ErrSequenceEmpty = errors.New("ccg: step sequence has no steps")
 	// ErrSequenceInactive is returned by Advance when no sequence is
-	// running.
+	// running, including after an Advance reported done, and (wrapped)
+	// when the stored Index is out of range.
 	ErrSequenceInactive = errors.New("ccg: step sequence not active")
 )
 
@@ -90,10 +95,19 @@ func (s *StepSequence) Is(step string) bool {
 }
 
 // Advance moves to the next step. Past the last step it clears the
-// sequence and returns done=true with a zero next.
+// sequence and returns done=true with a zero next; after that the
+// sequence is inactive, so Advance returns ErrSequenceInactive until
+// the next Begin. An out-of-range Index (only reachable by editing or
+// decoding a corrupt sequence) is reported as a wrapped
+// ErrSequenceInactive, the same bound Current applies, rather than a
+// panic.
 func (s *StepSequence) Advance() (next StepDef, done bool, err error) {
 	if !s.Active {
 		return StepDef{}, false, ErrSequenceInactive
+	}
+	if s.Index < 0 || s.Index >= len(s.Steps) {
+		return StepDef{}, false, fmt.Errorf("%w: index %d out of range for %d steps",
+			ErrSequenceInactive, s.Index, len(s.Steps))
 	}
 	if s.Index+1 >= len(s.Steps) {
 		s.Reset()

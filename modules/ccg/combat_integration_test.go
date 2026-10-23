@@ -19,9 +19,13 @@ var errNoAssignment = errors.New("assign: not resuming an assignment block")
 
 // assignmentCombatGame wires the three primitives through the real
 // reducer: "declare" (player 0) records attacks and asks player 1 for
-// blocks via an AssignmentRequest answered by "assign"; player 1 is
+// blocks with Combat.BlockRequest, answered by "assign"; player 1 is
 // confined to an Exclusive stage whose table does not list "assign",
 // so the answer only works because the named block exempts it.
+//
+// "declare" with the arg "lax" raises a request laxer than the round
+// (two blockers per attacker where the Combat allows one), to show
+// DeclareBlocks re-checking what ValidateAssignment let through.
 func assignmentCombatGame(t *testing.T) *core.Game {
 	t.Helper()
 	const attackerA, attackerB, blockerX, blockerY = ccg.EntityID(1), ccg.EntityID(2), ccg.EntityID(3), ccg.EntityID(4)
@@ -33,7 +37,7 @@ func assignmentCombatGame(t *testing.T) *core.Game {
 		MaxPlayers: 2,
 		Setup:      func(_ core.Ctx, _ any) core.G { return &combatG{State: ccg.NewState()} },
 		Moves: map[string]any{
-			"declare": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+			"declare": core.MoveFn(func(mc *core.MoveContext, args ...any) (core.G, error) {
 				g := mc.G.(*combatG)
 				attacks := []ccg.Attack{
 					{Attacker: attackerA, Target: ccg.CombatTarget{Player: "1"}},
@@ -42,8 +46,10 @@ func assignmentCombatGame(t *testing.T) *core.Game {
 				if err := g.Combat.DeclareAttacks(attacks, nil); err != nil {
 					return nil, err
 				}
-				pairs := g.Combat.LegalBlocks([]ccg.EntityID{blockerX, blockerY}, legal)
-				req := core.AssignmentRequest{Kind: "blocks", Pairs: ccg.ToAssignmentPairs(pairs), AllowEmpty: true}
+				req := g.Combat.BlockRequest("blocks", []ccg.EntityID{blockerX, blockerY}, legal)
+				if len(args) > 0 && args[0] == "lax" {
+					req.MaxPerRight = 2
+				}
 				mc.Events.SetActivePlayers(core.ActivePlayersConfig{Others: &stage})
 				mc.Queue.RequestAssignment("1", req, core.AnsweredBy("assign"))
 				return g, nil
@@ -106,10 +112,10 @@ func mustJSON(t *testing.T, v any) string {
 
 func TestCombat_AssignmentAnsweredOutOfTurnInsideExclusiveStage(t *testing.T) {
 	game := assignmentCombatGame(t)
-	start := func(t *testing.T) core.State {
+	start := func(t *testing.T, declareArgs ...any) core.State {
 		t.Helper()
 		s := core.NewMatch(game, 2, nil)
-		s, err := core.Apply(game, s, core.MoveRequest{PlayerID: "0", Move: "declare"})
+		s, err := core.Apply(game, s, core.MoveRequest{PlayerID: "0", Move: "declare", Args: declareArgs})
 		if err != nil {
 			t.Fatalf("declare: %v", err)
 		}
@@ -204,6 +210,19 @@ func TestCombat_AssignmentAnsweredOutOfTurnInsideExclusiveStage(t *testing.T) {
 		req := overWire(t, core.MoveRequest{PlayerID: "1", Move: "assign", ResumeTag: "blocks",
 			Args: []any{ccg.ToAssignmentPairs([][2]ccg.EntityID{{3, 1}})}})
 		refused(t, s, req, core.ErrAssignmentMalformed)
+	})
+
+	t.Run("DeclareBlocks re-checks what a lax request let through", func(t *testing.T) {
+		s := start(t, "lax")
+		if got := s.Blocks[0].Assignment.MaxPerRight; got != 2 {
+			t.Fatalf("lax request MaxPerRight = %d, want 2", got)
+		}
+		req := answer(t, "1", [2]ccg.EntityID{3, 1}, [2]ccg.EntityID{4, 1})
+		chosen, err := core.ValidateAssignment(*s.Blocks[0].Assignment, req.Args)
+		if err != nil || len(chosen) != 2 {
+			t.Fatalf("lax request should accept two blockers: %v, %v", chosen, err)
+		}
+		refused(t, s, req, ccg.ErrTooManyBlockers)
 	})
 
 	t.Run("any other move from the addressee is blocked", func(t *testing.T) {

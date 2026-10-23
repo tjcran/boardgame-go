@@ -26,12 +26,12 @@ func ExampleCombat() {
 	legal := func(blocker, attacker ccg.EntityID) bool {
 		return blocker == 10 || attacker == 2
 	}
-	offered := c.LegalBlocks([]ccg.EntityID{11, 10}, legal)
-	fmt.Println("offered:", offered)
+	fmt.Println("legal:", c.LegalBlocks([]ccg.EntityID{11, 10}, legal))
 
-	// The offered pairs become the request a player answers, usually via
+	// BlockRequest is the prompt a defender answers, usually raised with
 	// Queue.RequestAssignment from inside a move.
-	req := core.AssignmentRequest{Kind: "blocks", Pairs: ccg.ToAssignmentPairs(offered), AllowEmpty: true}
+	req := c.BlockRequest("blocks", []ccg.EntityID{11, 10}, legal)
+	fmt.Println("offered:", req.Pairs, "per blocker:", req.MaxPerLeft, "per attacker:", req.MaxPerRight)
 
 	// The resume move's args, one pair per arg: 10 blocks attacker 1. Over
 	// a transport they arrive as []any{float64, float64}; both shapes
@@ -57,7 +57,8 @@ func ExampleCombat() {
 		fmt.Println("unblocked attacker:", a.Attacker)
 	}
 	// Output:
-	// offered: [[10 1] [10 2] [11 2]]
+	// legal: [[10 1] [10 2] [11 2]]
+	// offered: [[10 1] [10 2] [11 2]] per blocker: 1 per attacker: 1
 	// blockers of 1: [10]
 	// unblocked attacker: 2
 }

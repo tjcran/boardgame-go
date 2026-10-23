@@ -24,10 +24,18 @@
 //     blocker assignments, and which attackers went unblocked, with
 //     legality supplied by game predicates and an optional
 //     whole-assignment hook; damage semantics stay in the game (see
-//     combat.go). LegalBlocks output feeds core.AssignmentRequest.Pairs,
-//     so the defender can answer out of turn through
-//     Queue.RequestAssignment + core.AnsweredBy, and the validated
-//     pairs go to DeclareBlocks (see ExampleCombat)
+//     combat.go). Combat.BlockRequest builds the
+//     core.AssignmentRequest a defender answers; the resume move
+//     validates its args with core.ValidateAssignment and passes the
+//     pairs through EntityPairs into DeclareBlocks (see ExampleCombat).
+//     Raised with Queue.RequestAssignment + core.AnsweredBy, the
+//     request can be answered out of turn, even by a player confined
+//     to an Exclusive stage (see
+//     TestCombat_AssignmentAnsweredOutOfTurnInsideExclusiveStage in
+//     combat_integration_test.go). Caution: Blocks is a map, so for
+//     anything order-dependent range over Combat.Attacks and read each
+//     attacker's blockers with BlockersOf, which keeps declaration
+//     order; never range the Blocks map
 //
 // Effect vs core.Queue: the engine's core.MoveContext.Queue schedules
 // engine moves across a cascade (FIFO, with Block / resume for
