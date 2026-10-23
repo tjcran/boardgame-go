@@ -24,7 +24,10 @@
 //     blocker assignments, and which attackers went unblocked, with
 //     legality supplied by game predicates and an optional
 //     whole-assignment hook; damage semantics stay in the game (see
-//     combat.go)
+//     combat.go). LegalBlocks output feeds core.AssignmentRequest.Pairs,
+//     so the defender can answer out of turn through
+//     Queue.RequestAssignment + core.AnsweredBy, and the validated
+//     pairs go to DeclareBlocks (see ExampleCombat)
 //
 // Effect vs core.Queue: the engine's core.MoveContext.Queue schedules
 // engine moves across a cascade (FIFO, with Block / resume for
