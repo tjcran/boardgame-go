@@ -32,3 +32,33 @@ func TestCloneKeepsNil(t *testing.T) {
 		t.Fatalf("nil containers must stay nil: %+v", c)
 	}
 }
+
+// A clone taken before an Undo must keep the log entry the undo drops:
+// the next move appends to the shortened log, and without the capacity
+// clip it would write into the backing array slot the clone still reads.
+func TestCloneSurvivesUndoThenMove(t *testing.T) {
+	g := multiMoveGame(false, true)
+	s := NewMatch(g, 0, nil)
+	for i := 0; i < 3; i++ {
+		next, err := Apply(g, s, MoveRequest{PlayerID: "0", Move: "inc", Args: []any{i}})
+		if err != nil {
+			t.Fatalf("inc %d: %v", i, err)
+		}
+		s = next
+	}
+	// Give the live log spare capacity so the overwrite is possible
+	// regardless of append's growth pattern.
+	s.Log = append(make([]LogEntry, 0, 16), s.Log...)
+	c := s.Clone()
+
+	u, err := Undo(g, s)
+	if err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if _, err := Apply(g, u, MoveRequest{PlayerID: "0", Move: "inc", Args: []any{"new"}}); err != nil {
+		t.Fatalf("inc after undo: %v", err)
+	}
+	if got := c.Log[2].Args; len(got) != 1 || got[0] != 2 {
+		t.Fatalf("clone's log entry was overwritten after undo: args=%v", got)
+	}
+}

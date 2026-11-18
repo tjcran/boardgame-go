@@ -83,7 +83,7 @@ func (a *AutoPlayer) Run(ctx context.Context) error {
 
 	// Prime with the current state in case the match is already
 	// awaiting the bot.
-	if m, err := a.Manager.State(a.MatchID); err == nil {
+	if m, err := a.Manager.Snapshot(a.MatchID); err == nil {
 		a.Send(m.State)
 	}
 

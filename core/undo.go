@@ -45,7 +45,10 @@ func Undo(game *Game, state State) (State, error) {
 	popped := state.Log[len(state.Log)-1]
 	last.Undone = append(state.Undone, popped)
 	// Truncate the log to drop the undone entry; keep prior history.
-	last.Log = state.Log[:len(state.Log)-1]
+	// Clip the capacity too: the dropped slot is still part of the
+	// input's (and any Clone's) log, and without the clip the next
+	// append would overwrite it in place.
+	last.Log = clip(state.Log[:len(state.Log)-1])
 	// OnUndo intercept: lets the game scrub transient fields that
 	// shouldn't replay on undo (animations, sounds, hint highlights).
 	if game.OnUndo != nil {
@@ -126,8 +129,13 @@ func ownContainers(s State) State {
 // place (see ownContainers) are copied; the slices it only appends to
 // (Log, Undone, TurnSnapshots, Queue, Blocks, Ctx.PlayOrder) are cut to
 // their length, so an append on either side can never write into the
-// other's view. G and plugin data are shared by reference, as everywhere
-// else: moves return new values rather than mutate them.
+// other's view. Where the engine shortens one of those slices (Undo
+// dropping the last log entry) it also drops the spare capacity, so a
+// later append reallocates instead of overwriting an element an older
+// clone still holds. (Redo's shortened Undone never reaches a result:
+// the move it replays clears Undone.) G and plugin data are shared by
+// reference, as everywhere else: moves return new values rather than
+// mutate them.
 func (s State) Clone() State {
 	out := ownContainers(s)
 	out.rawG, out.rawPlugins = nil, nil

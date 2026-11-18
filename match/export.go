@@ -30,8 +30,11 @@ type ExportedMatch struct {
 
 // ExportMatch returns the portable form of an existing match. Bare —
 // no credentials, players list, or transport metadata; just enough to
-// replay.
+// replay. It reads the match under the match lock, so it must not be
+// called from a lifecycle handler.
 func (m *Manager) ExportMatch(matchID string) (*ExportedMatch, error) {
+	unlock := m.lockMatch(matchID)
+	defer unlock()
 	match, err := m.loadMigrated(matchID)
 	if err != nil {
 		return nil, err

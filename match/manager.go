@@ -679,19 +679,63 @@ func (m *Manager) createLocked(gameName string, numPlayers int, setupData any, u
 // State returns the match, migrating it forward if the stored
 // SchemaVersion is older than the registered Game's.
 //
-// State does not take the match lock, and with a caching store
-// (storage.Cached) its result is the store's live *storage.Match, whose
-// State a concurrent move reassigns in place. To read a match that may be
-// in play on another goroutine, use Snapshot.
+// State loads the match under the match lock, because loading can write
+// to it (rehydrating G and plugin data from stored bytes, migrating).
+// But it releases the lock before returning, and with a caching store
+// (storage.Cached) the result is the store's live *storage.Match, whose
+// State and Players a concurrent move or join changes in place. Reading
+// that result is only safe when nothing else can be acting on the match.
+// Because it takes the lock, State must not be called from a lifecycle
+// handler or a Subscriber (see View).
+//
+// Deprecated: to read a match that may be in play on another goroutine,
+// use View (to derive something from it under the lock) or Snapshot (to
+// keep a private copy).
 func (m *Manager) State(matchID string) (*storage.Match, error) {
+	unlock := m.lockMatch(matchID)
+	defer unlock()
 	return m.loadMigrated(matchID)
+}
+
+// View calls fn with the match while holding the match lock, so fn sees
+// no move half-applied and nothing changes the match until fn returns.
+// It returns fn's error, or the error from loading the match (in which
+// case fn is not called).
+//
+// View is the way to derive something from a match that may be in play
+// on another goroutine: a player view, a summary, an encoded frame. G
+// and plugin data are shared with the live match by reference, and a
+// game may change them in place on its next move, so do the derived
+// work, serialization included, inside fn, and keep nothing that points
+// into the match (G, Players, the State's maps and slices) after fn
+// returns. Bytes, and values built fresh from the match's scalars, are
+// safe to keep.
+//
+// fn should treat the match as read-only: View neither persists nor
+// broadcasts anything fn changes. fn must not block (no network or disk
+// writes; a non-blocking send onto a buffered channel is fine), and must
+// not call any Manager method that takes the match lock (State,
+// Snapshot, View, Move, Join, Authenticate, …), which would deadlock.
+// For the same reason View must not be called from a lifecycle handler
+// or a Subscriber, which run while the dispatching call holds the lock;
+// use the event's State and Match there instead.
+func (m *Manager) View(matchID string, fn func(*storage.Match) error) error {
+	unlock := m.lockMatch(matchID)
+	defer unlock()
+	match, err := m.loadMigrated(matchID)
+	if err != nil {
+		return err
+	}
+	return fn(match)
 }
 
 // Snapshot returns a private copy of the match, read under the match
 // lock: it never observes a move half-applied, and later moves don't
 // change it. Players and the State's containers are copied (see
 // core.State.Clone); G, SetupData and player Data are shared by
-// reference and must be treated as read-only.
+// reference and must be treated as read-only. A game whose moves change
+// G in place can still change it under a snapshot's reader; to derive
+// something from such a match (a player view, an encoding), use View.
 //
 // Snapshot takes the match lock, so it must not be called from a
 // lifecycle handler, which runs while the dispatching call still holds
