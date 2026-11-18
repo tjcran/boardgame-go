@@ -22,8 +22,13 @@ const (
 
 // LifecycleEvent is dispatched to handlers registered with
 // Manager.OnLifecycle. PlayerID is set only for events tied to a
-// specific seat (joined/left/moved). State is the post-event state of
-// the match.
+// specific seat (joined/left/moved/moveRejected). State is the
+// post-event state of the match and Match the match itself; both are set
+// for every kind. For LifecycleMatchMoveRejected nothing changed, so
+// State is the state the move was rejected against (its Ctx is the
+// pre-move turn, phase and stage context). Handlers read the match from
+// the event; they cannot re-read it from the Manager (see
+// LifecycleHandler).
 type LifecycleEvent struct {
 	Kind     LifecycleEventKind
 	MatchID  string
@@ -35,8 +40,10 @@ type LifecycleEvent struct {
 	Move string
 	Args []any
 	// PrevState is the pre-move snapshot captured just before
-	// core.ApplyContext ran. Populated only for LifecycleMatchMoved;
-	// zero value for all other event kinds. Equal Setup + equal moves
+	// core.ApplyContext ran (or, for a turn-timer expiry, before the
+	// forced turn end). Populated only for LifecycleMatchMoved; zero
+	// value for all other event kinds (a rejected move's pre-move state
+	// is State). Equal Setup + equal moves
 	// → equal PrevState (replay-safe).
 	PrevState core.State
 	// LogDelta is the slice of log entries appended during this move
@@ -58,9 +65,16 @@ type LifecycleEvent struct {
 }
 
 // LifecycleHandler receives lifecycle events. Handlers run synchronously
-// inside the Manager's call stack — keep them fast. For heavy work,
-// dispatch to your own goroutine. Order across handlers is
-// registration-time.
+// inside the Manager's call stack, while it holds the match's lock
+// (PlayAgain fires the new match's LifecycleMatchCreated while holding
+// the old match's lock). So a handler must not block — for heavy or
+// I/O-bound work, copy what it needs from the event and hand off to
+// your own goroutine — and must not call any Manager method that takes
+// a match lock on that match (State, Snapshot, View, ExportMatch,
+// Authenticate, Move/MoveReq/DispatchServer, Join, Leave, UpdatePlayer,
+// SetConnected, Reset, PlayAgain, …): the lock is not reentrant, so the
+// match would deadlock for good. Everything a handler needs is on the
+// event. Order across handlers is registration-time.
 type LifecycleHandler func(event LifecycleEvent)
 
 // OnLifecycle registers handler for every kind of lifecycle event.

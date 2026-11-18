@@ -289,3 +289,46 @@ func TestLifecycleMoveRejectedDoesNotFireForCredentialFailure(t *testing.T) {
 		t.Errorf("credential failure should not fire Rejected lifecycle event, fired %d times", rejectedCount)
 	}
 }
+
+// A MoveRejected handler runs under the match lock, so it cannot re-read
+// the match; the event carries the (unchanged) pre-move state instead.
+func TestLifecycleMoveRejectedCarriesPreMoveState(t *testing.T) {
+	g := &core.Game{
+		Name: "rejected-ctx", MinPlayers: 2, MaxPlayers: 2,
+		Setup: func(_ core.Ctx, _ any) core.G { return map[string]int{} },
+		Moves: map[string]any{
+			"act": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+				return mc.G, nil
+			}),
+		},
+		Turn: &core.TurnConfig{MinMoves: 1, MaxMoves: 1},
+	}
+	m := NewManager(storage.NewMemory())
+	m.MustRegister(g)
+	id, _ := m.Create("rejected-ctx", CreateOptions{})
+	alice, _ := m.Join(id, "alice", JoinOptions{})
+	bob, _ := m.Join(id, "bob", JoinOptions{})
+	if _, err := m.Move(id, alice.PlayerID, alice.PlayerCredentials, "act", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var seen LifecycleEvent
+	m.OnLifecycleKind(LifecycleMatchMoveRejected, func(ev LifecycleEvent) { seen = ev })
+	// Turn 2 is bob's: alice moving out of turn is rejected.
+	if _, err := m.Move(id, alice.PlayerID, alice.PlayerCredentials, "act", nil); err == nil {
+		t.Fatal("expected out-of-turn rejection")
+	}
+	if seen.Kind != LifecycleMatchMoveRejected {
+		t.Fatalf("no rejection event: %+v", seen)
+	}
+	if seen.State.Ctx.Turn != 2 || seen.State.Ctx.CurrentPlayer != bob.PlayerID {
+		t.Errorf("event Ctx = turn %d player %q, want turn 2 player %q",
+			seen.State.Ctx.Turn, seen.State.Ctx.CurrentPlayer, bob.PlayerID)
+	}
+	if seen.State.StateID != seen.StateID {
+		t.Errorf("State.StateID %d != StateID %d", seen.State.StateID, seen.StateID)
+	}
+	if seen.Match == nil || seen.Match.ID != id {
+		t.Errorf("event Match = %+v, want match %s", seen.Match, id)
+	}
+}

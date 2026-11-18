@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
@@ -28,16 +29,30 @@ import (
 // BGIO has this bug structurally — Node's single event loop serialises
 // every subscriber's write; we get true per-subscriber concurrency for
 // free via goroutines.
+//
+// Frames are encoded to bytes when they are queued, not when they are
+// written. The manager calls Send and SendPatch while it holds the match
+// lock, and G is shared by reference with the live match (a game may
+// change it in place on its next move), so encoding later, on the
+// writer goroutine, would read G concurrently with that move. For the
+// same reason the delta-state baseline (prev) is kept as encoded bytes
+// rather than as a State that shares G with the live match.
 type wsClient struct {
 	conn     *websocket.Conn
 	ctx      context.Context
 	playerID string // "" for spectators
 
-	out  chan map[string]any
-	done chan struct{}
+	// outMu guards closing out against a concurrent enqueue: the manager
+	// can push to a subscriber list it copied just before this client
+	// unsubscribed, so a send can arrive after close.
+	outMu  sync.Mutex
+	closed bool
+	out    chan []byte
+	done   chan struct{}
 
 	prevMu sync.Mutex
-	prev   *core.State
+	prev   []byte // encoded State last sent; nil until the first frame
+	prevID int    // StateID of prev
 }
 
 // wsSendBufferSize is how many pending frames we hold per connection
@@ -52,7 +67,7 @@ func newWSClient(ctx context.Context, conn *websocket.Conn, playerID string) *ws
 		conn:     conn,
 		ctx:      ctx,
 		playerID: playerID,
-		out:      make(chan map[string]any, wsSendBufferSize),
+		out:      make(chan []byte, wsSendBufferSize),
 		done:     make(chan struct{}),
 	}
 	go c.writeLoop()
@@ -65,7 +80,7 @@ func (c *wsClient) writeLoop() {
 	defer close(c.done)
 	for frame := range c.out {
 		wctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
-		err := wsjson.Write(wctx, c.conn, frame)
+		err := c.conn.Write(wctx, websocket.MessageText, frame)
 		cancel()
 		if err != nil {
 			// Tear down — the handleWS read loop will exit when the
@@ -76,17 +91,38 @@ func (c *wsClient) writeLoop() {
 	}
 }
 
-// close shuts down the writer goroutine. Idempotent.
+// close shuts down the writer goroutine. Idempotent; frames queued
+// after close are dropped.
 func (c *wsClient) close() {
-	defer func() { recover() }() // close on already-closed channel is OK
-	close(c.out)
+	c.outMu.Lock()
+	defer c.outMu.Unlock()
+	if !c.closed {
+		c.closed = true
+		close(c.out)
+	}
 }
 
-// enqueue is the non-blocking send onto c.out with drop-oldest semantics
-// when the buffer is full. State pushes are idempotent (only the latest
-// matters), so dropping is correct for them; chat/error frames drop too,
-// but the writer loop's deadline will surface the slow consumer.
+// enqueue encodes frame and queues it; see enqueueBytes. A frame that
+// fails to encode is dropped (the client resyncs on the next state).
 func (c *wsClient) enqueue(frame map[string]any) {
+	b, err := json.Marshal(frame)
+	if err != nil {
+		return
+	}
+	c.enqueueBytes(b)
+}
+
+// enqueueBytes is the non-blocking send onto c.out with drop-oldest
+// semantics when the buffer is full. State pushes are idempotent (only
+// the latest matters), so dropping is correct for them; chat/error
+// frames drop too, but the writer loop's deadline will surface the slow
+// consumer.
+func (c *wsClient) enqueueBytes(frame []byte) {
+	c.outMu.Lock()
+	defer c.outMu.Unlock()
+	if c.closed {
+		return
+	}
 	select {
 	case c.out <- frame:
 		return
@@ -106,11 +142,25 @@ func (c *wsClient) enqueue(frame map[string]any) {
 
 // Send implements match.Subscriber. Mirrors BGIO's `update` frame shape.
 func (c *wsClient) Send(state core.State) {
+	enc, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	c.sendEncoded("update", enc, state.StateID, nil)
+}
+
+// sendEncoded queues a full-state frame (`update` or `sync`) built from
+// an already-encoded State and records it as the delta baseline. extra
+// adds fields to the frame (the sync frame's matchData and matchID).
+func (c *wsClient) sendEncoded(typ string, enc []byte, stateID int, extra map[string]any) {
+	frame := map[string]any{"type": typ, "state": json.RawMessage(enc)}
+	for k, v := range extra {
+		frame[k] = v
+	}
 	c.prevMu.Lock()
-	cp := state
-	c.prev = &cp
+	c.prev, c.prevID = enc, stateID
 	c.prevMu.Unlock()
-	c.enqueue(map[string]any{"type": "update", "state": state})
+	c.enqueue(frame)
 }
 
 // PlayerID identifies which seat this subscriber represents.
@@ -123,35 +173,67 @@ func (c *wsClient) SendChat(msg match.ChatMessage) {
 
 // SendPatch diffs against the connection's last sent state and enqueues
 // a JSON Patch `patch` frame. If we have no prior state cached, falls
-// back to a full state push so clients don't desync.
+// back to a full state push so clients don't desync. The manager calls
+// SendEncoded instead; SendPatch remains for PatchSubscriber callers.
 func (c *wsClient) SendPatch(next core.State) {
+	enc, err := json.Marshal(next)
+	if err != nil {
+		return
+	}
+	c.sendPatchEncoded(enc, next.StateID)
+}
+
+// SendEncoded implements match.EncodedSubscriber: the manager encodes
+// each seat's view once per move and shares the bytes across that
+// seat's connections, which matters because it does so under the match
+// lock. The delta baseline stays per connection.
+func (c *wsClient) SendEncoded(state core.State, encoded []byte, patch bool) {
+	if patch {
+		c.sendPatchEncoded(encoded, state.StateID)
+		return
+	}
+	c.sendEncoded("update", encoded, state.StateID, nil)
+}
+
+// sendPatchEncoded queues a `patch` frame against the connection's last
+// sent state, or a full `update` when there is none (or the diff fails).
+//
+// The diff runs between encodings, not States: a game that changes G in
+// place would otherwise compare the live G against itself and send an
+// empty patch for a change it never transmitted.
+func (c *wsClient) sendPatchEncoded(enc []byte, stateID int) {
 	c.prevMu.Lock()
-	prev := c.prev
+	prev, prevID := c.prev, c.prevID
 	c.prevMu.Unlock()
 	if prev == nil {
-		c.Send(next)
+		c.sendEncoded("update", enc, stateID, nil)
 		return
 	}
-	patch, err := jsondiff.Compare(*prev, next)
+	patch, err := jsondiff.CompareJSON(prev, enc)
 	if err != nil {
-		c.Send(next)
+		c.sendEncoded("update", enc, stateID, nil)
 		return
 	}
 	c.prevMu.Lock()
-	cp := next
-	c.prev = &cp
+	c.prev, c.prevID = enc, stateID
 	c.prevMu.Unlock()
 	c.enqueue(map[string]any{
 		"type":    "patch",
 		"patch":   patch,
-		"prevID":  prev.StateID,
-		"stateID": next.StateID,
+		"prevID":  prevID,
+		"stateID": stateID,
 	})
 }
 
 // SendMatchData enqueues a matchData frame when the seated-player list
 // changes.
 func (c *wsClient) SendMatchData(players []storage.Player) {
+	c.enqueue(map[string]any{"type": "matchData", "matchData": matchDataFrame(players)})
+}
+
+// matchDataFrame is the public per-seat summary sent in sync and
+// matchData frames (no credentials, no player Data).
+func matchDataFrame(players []storage.Player) []map[string]any {
 	out := make([]map[string]any, 0, len(players))
 	for _, p := range players {
 		out = append(out, map[string]any{
@@ -161,7 +243,7 @@ func (c *wsClient) SendMatchData(players []storage.Player) {
 			"isConnected": p.IsConnected,
 		})
 	}
-	c.enqueue(map[string]any{"type": "matchData", "matchData": out})
+	return out
 }
 
 // heartbeat sends WebSocket ping frames at the given interval and tears
@@ -266,12 +348,15 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 	// Spectator gate (BGIO #1007). When playerID is empty and the game
 	// disallows spectators, refuse before any subscribe / sync.
 	if playerID == "" {
-		if m, err := s.Manager.State(matchID); err == nil {
-			if g := s.Manager.Game(m.GameName); g != nil &&
-				g.SpectatorsAllowed != nil && !*g.SpectatorsAllowed {
-				conn.Close(websocket.StatusPolicyViolation, "spectators not allowed")
-				return
-			}
+		var gameName string
+		_ = s.Manager.View(matchID, func(m *storage.Match) error {
+			gameName = m.GameName
+			return nil
+		})
+		if g := s.Manager.Game(gameName); g != nil &&
+			g.SpectatorsAllowed != nil && !*g.SpectatorsAllowed {
+			conn.Close(websocket.StatusPolicyViolation, "spectators not allowed")
+			return
 		}
 	}
 
@@ -285,31 +370,27 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request, gameName, matc
 	defer cancelPing()
 	go heartbeat(pingCtx, conn, 25*time.Second)
 
-	// Push the initial sync frame on connect.
-	if m, err := s.Manager.State(matchID); err == nil {
-		if g := s.Manager.Game(m.GameName); g != nil {
-			view := core.PlayerView(g, m.State, playerID)
-			players := make([]map[string]any, 0, len(m.Players))
-			for _, p := range m.Players {
-				players = append(players, map[string]any{
-					"id":          p.ID,
-					"name":        p.Name,
-					"seat":        p.Seat,
-					"isConnected": p.IsConnected,
-				})
-			}
-			client.prevMu.Lock()
-			cp := view
-			client.prev = &cp
-			client.prevMu.Unlock()
-			client.enqueue(map[string]any{
-				"type":      "sync",
-				"state":     view,
-				"matchData": players,
-				"matchID":   matchID,
-			})
+	// Push the initial sync frame on connect. The view is built and
+	// encoded under the match lock (G is shared with the live match),
+	// and queued there too, so it is ordered before any update a later
+	// move broadcasts. Queueing never blocks; the writer goroutine does
+	// the network write.
+	_ = s.Manager.View(matchID, func(m *storage.Match) error {
+		g := s.Manager.Game(m.GameName)
+		if g == nil {
+			return nil
 		}
-	}
+		view := core.PlayerView(g, m.State, playerID)
+		enc, err := json.Marshal(view)
+		if err != nil {
+			return err
+		}
+		client.sendEncoded("sync", enc, view.StateID, map[string]any{
+			"matchData": matchDataFrame(m.Players),
+			"matchID":   matchID,
+		})
+		return nil
+	})
 
 	_ = s.Manager.SetConnected(matchID, playerID, true)
 	defer s.Manager.SetConnected(matchID, playerID, false)

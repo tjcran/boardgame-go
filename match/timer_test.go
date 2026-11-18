@@ -76,3 +76,32 @@ func TestAutoExpireStaleNoOp(t *testing.T) {
 			mm.State.Ctx.Turn, after.State.Ctx.Turn)
 	}
 }
+
+// A turn expiry announces itself like a move: with the pre-expiry state,
+// so a handler never has to re-read the match (it cannot, under the lock).
+func TestAutoExpireEventCarriesPrevState(t *testing.T) {
+	m := NewManager(storage.NewMemory())
+	g := timeoutGame()
+	g.Turn.TimeBudget = time.Hour // fire it by hand
+	m.MustRegister(g)
+	id, _ := m.Create("timeout", CreateOptions{})
+	_, _ = m.Join(id, "alice", JoinOptions{})
+	_, _ = m.Join(id, "bob", JoinOptions{})
+	before, _ := m.Snapshot(id)
+
+	var seen LifecycleEvent
+	m.OnLifecycleKind(LifecycleMatchMoved, func(ev LifecycleEvent) { seen = ev })
+	if err := m.AutoExpire(id, before.State.Ctx.Turn); err != nil {
+		t.Fatalf("AutoExpire: %v", err)
+	}
+	if seen.Move != "__turn_expired__" {
+		t.Fatalf("no expiry event: %+v", seen)
+	}
+	if seen.PrevState.Ctx.Turn != before.State.Ctx.Turn || seen.State.Ctx.Turn <= before.State.Ctx.Turn {
+		t.Errorf("PrevState turn %d, State turn %d; want %d then later",
+			seen.PrevState.Ctx.Turn, seen.State.Ctx.Turn, before.State.Ctx.Turn)
+	}
+	if len(seen.LogDelta) != len(seen.State.Log)-len(seen.PrevState.Log) {
+		t.Errorf("LogDelta has %d entries, want %d", len(seen.LogDelta), len(seen.State.Log)-len(seen.PrevState.Log))
+	}
+}

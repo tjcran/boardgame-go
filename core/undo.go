@@ -45,7 +45,16 @@ func Undo(game *Game, state State) (State, error) {
 	popped := state.Log[len(state.Log)-1]
 	last.Undone = append(state.Undone, popped)
 	// Truncate the log to drop the undone entry; keep prior history.
-	last.Log = state.Log[:len(state.Log)-1]
+	// Clip the capacity too: the dropped slot is still part of the
+	// input's (and any Clone's) log, and without the clip the next
+	// append would overwrite it in place.
+	last.Log = clip(state.Log[:len(state.Log)-1])
+	// The snapshot's Queue and Blocks can share a backing array with the
+	// state it was taken from (and with states derived from that one, up
+	// to the one being undone), so clip them as well: the next harvest
+	// appends to them.
+	last.Queue = clip(last.Queue)
+	last.Blocks = clip(last.Blocks)
 	// OnUndo intercept: lets the game scrub transient fields that
 	// shouldn't replay on undo (animations, sounds, hint highlights).
 	if game.OnUndo != nil {
@@ -126,8 +135,13 @@ func ownContainers(s State) State {
 // place (see ownContainers) are copied; the slices it only appends to
 // (Log, Undone, TurnSnapshots, Queue, Blocks, Ctx.PlayOrder) are cut to
 // their length, so an append on either side can never write into the
-// other's view. G and plugin data are shared by reference, as everywhere
-// else: moves return new values rather than mutate them.
+// other's view. Where the engine shortens one of those slices (Undo
+// dropping the last log entry) it also drops the spare capacity, so a
+// later append reallocates instead of overwriting an element an older
+// clone still holds. (Redo's shortened Undone never reaches a result:
+// the move it replays clears Undone.) G and plugin data are shared by
+// reference, as everywhere else: moves return new values rather than
+// mutate them.
 func (s State) Clone() State {
 	out := ownContainers(s)
 	out.rawG, out.rawPlugins = nil, nil
@@ -144,12 +158,15 @@ func (s State) Clone() State {
 func clip[T any](s []T) []T { return s[:len(s):len(s)] }
 
 // cloneStateForSnapshot builds a shallow-clone of State suitable for the
-// undo stack. Its containers are its own (ownContainers), so the live
-// state's later in-place writes don't leak into the snapshot, and the
-// log is copied too. G is shared by reference — moves are expected to
-// return new G values rather than mutate in place.
+// undo stack. It is a Clone, so the live state's later in-place writes
+// don't leak into the snapshot and the append-only slices (Queue,
+// Blocks, …) carry no spare capacity: once Undo hands the snapshot back
+// as the live state, the next harvest's append reallocates instead of
+// writing into a slot the undone state (or a Clone of it) still reads.
+// The log is copied too. G is shared by reference — moves are expected
+// to return new G values rather than mutate in place.
 func cloneStateForSnapshot(s State) State {
-	out := ownContainers(s)
+	out := s.Clone()
 	out.Log = append([]LogEntry(nil), s.Log...)
 	out.Undone = append([]LogEntry(nil), s.Undone...)
 	// TurnSnapshots intentionally not copied — they only matter at the

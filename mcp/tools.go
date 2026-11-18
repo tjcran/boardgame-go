@@ -11,6 +11,7 @@ import (
 	"github.com/tjcran/boardgame-go/match"
 	"github.com/tjcran/boardgame-go/mcp/modulebridge"
 	"github.com/tjcran/boardgame-go/mcp/starlarkgame"
+	"github.com/tjcran/boardgame-go/storage"
 )
 
 // Tools is the set of MCP tool handlers backed by a match.Manager.
@@ -146,14 +147,17 @@ func (t *Tools) CreateMatch(ctx context.Context, args CreateMatchArgs) (CreateMa
 			return CreateMatchResult{}, fmt.Errorf("claim ownership: %w", err)
 		}
 	}
-	m, err := t.Manager.State(matchID)
-	if err != nil {
+	var numPlayers int
+	if err := t.Manager.View(matchID, func(m *storage.Match) error {
+		numPlayers = m.State.Ctx.NumPlayers
+		return nil
+	}); err != nil {
 		return CreateMatchResult{}, err
 	}
 	return CreateMatchResult{
 		MatchID:    matchID,
 		Game:       args.Game, // return the public name the caller used
-		NumPlayers: m.State.Ctx.NumPlayers,
+		NumPlayers: numPlayers,
 	}, nil
 }
 
@@ -228,27 +232,37 @@ func (t *Tools) GetState(ctx context.Context, args GetStateArgs) (GetStateResult
 	if err := t.requireOwnership(ctx, args.MatchID); err != nil {
 		return GetStateResult{}, err
 	}
-	m, err := t.Manager.State(args.MatchID)
+	// Build the view under the match lock: G is shared with the live
+	// match. (The returned State still shares G; see View.)
+	var (
+		state    core.State
+		players  []PlayerInfo
+		gameName string
+	)
+	err := t.Manager.View(args.MatchID, func(m *storage.Match) error {
+		gameName = m.GameName
+		game := t.Manager.Game(m.GameName)
+		if game == nil {
+			return fmt.Errorf("game %q is no longer registered", m.GameName)
+		}
+		state = core.PlayerView(game, m.State, args.PlayerID).Clone()
+		players = make([]PlayerInfo, 0, len(m.Players))
+		for _, p := range m.Players {
+			players = append(players, PlayerInfo{
+				PlayerID:    p.ID,
+				Seat:        p.Seat,
+				Name:        p.Name,
+				IsConnected: p.IsConnected,
+			})
+		}
+		return nil
+	})
 	if err != nil {
 		return GetStateResult{}, err
 	}
-	game := t.Manager.Game(m.GameName)
-	if game == nil {
-		return GetStateResult{}, fmt.Errorf("game %q is no longer registered", m.GameName)
-	}
-	state := core.PlayerView(game, m.State, args.PlayerID)
-	players := make([]PlayerInfo, 0, len(m.Players))
-	for _, p := range m.Players {
-		players = append(players, PlayerInfo{
-			PlayerID:    p.ID,
-			Seat:        p.Seat,
-			Name:        p.Name,
-			IsConnected: p.IsConnected,
-		})
-	}
 	return GetStateResult{
-		MatchID:       m.ID,
-		Game:          publicGameName(m.GameName),
+		MatchID:       args.MatchID,
+		Game:          publicGameName(gameName),
 		State:         state,
 		CurrentPlayer: state.Ctx.CurrentPlayer,
 		Phase:         state.Ctx.Phase,
@@ -290,18 +304,22 @@ func (t *Tools) ListLegalMoves(ctx context.Context, args ListLegalMovesArgs) (Li
 	if err := t.requireOwnership(ctx, args.MatchID); err != nil {
 		return ListLegalMovesResult{}, err
 	}
-	m, err := t.Manager.State(args.MatchID)
+	// Enumerate reads G, so it runs under the match lock.
+	var actions []core.EnumerateAction
+	err := t.Manager.View(args.MatchID, func(m *storage.Match) error {
+		game := t.Manager.Game(m.GameName)
+		if game == nil {
+			return fmt.Errorf("game %q is no longer registered", m.GameName)
+		}
+		if game.Enumerate == nil {
+			return fmt.Errorf("game %q does not implement Enumerate; legal-move listing unavailable", m.GameName)
+		}
+		actions = game.Enumerate(m.State.G, m.State.Ctx, args.PlayerID)
+		return nil
+	})
 	if err != nil {
 		return ListLegalMovesResult{}, err
 	}
-	game := t.Manager.Game(m.GameName)
-	if game == nil {
-		return ListLegalMovesResult{}, fmt.Errorf("game %q is no longer registered", m.GameName)
-	}
-	if game.Enumerate == nil {
-		return ListLegalMovesResult{}, fmt.Errorf("game %q does not implement Enumerate; legal-move listing unavailable", m.GameName)
-	}
-	actions := game.Enumerate(m.State.G, m.State.Ctx, args.PlayerID)
 	moves := make([]LegalMove, len(actions))
 	for i, a := range actions {
 		moves[i] = LegalMove{Move: a.Move, Args: a.Args}
@@ -588,12 +606,19 @@ func (t *Tools) MakeMove(ctx context.Context, args MakeMoveArgs) (MakeMoveResult
 	if err != nil {
 		return MakeMoveResult{}, err
 	}
-	// Redact the post-move state to the mover's view. One extra storage
-	// read to get the game name; cheap with local SQLite or memory.
-	if m, err := t.Manager.State(args.MatchID); err == nil {
-		if g := t.Manager.Game(m.GameName); g != nil {
-			state = core.PlayerView(g, state, args.PlayerID)
+	// Redact the post-move state to the mover's view, under the match
+	// lock since state's G is shared with the live match. If the match
+	// or its game is gone, fail rather than return the unredacted state.
+	err = t.Manager.View(args.MatchID, func(m *storage.Match) error {
+		g := t.Manager.Game(m.GameName)
+		if g == nil {
+			return fmt.Errorf("game %q is no longer registered", m.GameName)
 		}
+		state = core.PlayerView(g, state, args.PlayerID).Clone()
+		return nil
+	})
+	if err != nil {
+		return MakeMoveResult{}, err
 	}
 	return MakeMoveResult{
 		MatchID:       args.MatchID,
@@ -643,18 +668,22 @@ func (t *Tools) ModuleOp(ctx context.Context, args ModuleOpArgs) (ModuleOpResult
 		return ModuleOpResult{}, fmt.Errorf("unknown op %q for module %q", args.Op, args.Module)
 	}
 
-	m, err := t.Manager.State(args.MatchID)
-	if err != nil {
-		return ModuleOpResult{}, err
-	}
-	sg, ok := starlarkgame.AsStarlarkG(m.State.G)
-	if !ok {
-		return ModuleOpResult{}, fmt.Errorf("match %s is not a designed game", args.MatchID)
-	}
-	if _, ok := sg.Modules[args.Module]; !ok {
-		return ModuleOpResult{}, fmt.Errorf("match %s did not declare module %q", args.MatchID, args.Module)
-	}
-	res, err := chosen.Call(sg.Modules, args.Args, core.NewRandomFromState(new(uint64)))
+	// The op reads (and may change) the live module state inside G, so
+	// it runs under the match lock, serialised with moves. Such a change
+	// is a design-time poke: it is not persisted or broadcast.
+	var res any
+	err := t.Manager.View(args.MatchID, func(m *storage.Match) error {
+		sg, ok := starlarkgame.AsStarlarkG(m.State.G)
+		if !ok {
+			return fmt.Errorf("match %s is not a designed game", args.MatchID)
+		}
+		if _, ok := sg.Modules[args.Module]; !ok {
+			return fmt.Errorf("match %s did not declare module %q", args.MatchID, args.Module)
+		}
+		var err error
+		res, err = chosen.Call(sg.Modules, args.Args, core.NewRandomFromState(new(uint64)))
+		return err
+	})
 	if err != nil {
 		return ModuleOpResult{}, err
 	}

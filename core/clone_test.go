@@ -32,3 +32,60 @@ func TestCloneKeepsNil(t *testing.T) {
 		t.Fatalf("nil containers must stay nil: %+v", c)
 	}
 }
+
+// A clone taken before an Undo must keep the log entry the undo drops:
+// the next move appends to the shortened log, and without the capacity
+// clip it would write into the backing array slot the clone still reads.
+func TestCloneSurvivesUndoThenMove(t *testing.T) {
+	g := multiMoveGame(false, true)
+	s := NewMatch(g, 0, nil)
+	for i := 0; i < 3; i++ {
+		next, err := Apply(g, s, MoveRequest{PlayerID: "0", Move: "inc", Args: []any{i}})
+		if err != nil {
+			t.Fatalf("inc %d: %v", i, err)
+		}
+		s = next
+	}
+	// Give the live log spare capacity so the overwrite is possible
+	// regardless of append's growth pattern.
+	s.Log = append(make([]LogEntry, 0, 16), s.Log...)
+	c := s.Clone()
+
+	u, err := Undo(g, s)
+	if err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	if _, err := Apply(g, u, MoveRequest{PlayerID: "0", Move: "inc", Args: []any{"new"}}); err != nil {
+		t.Fatalf("inc after undo: %v", err)
+	}
+	if got := c.Log[2].Args; len(got) != 1 || got[0] != 2 {
+		t.Fatalf("clone's log entry was overwritten after undo: args=%v", got)
+	}
+}
+
+// The undo snapshot's Queue can share its backing array with the state
+// being undone. Once Undo makes the snapshot live, the next harvest
+// appends to its Queue, which must not write into the undone state's
+// entries.
+func TestUndoDoesNotLetQueueAppendOverwriteUndoneState(t *testing.T) {
+	g := multiMoveGame(false, true)
+	backing := make([]QueuedAction, 2, 8)
+	backing[0] = QueuedAction{Move: "a"}
+	backing[1] = QueuedAction{Move: "kept"}
+	snap := NewMatch(g, 0, nil)
+	snap.Queue = backing[:1]
+	undone := snap
+	undone.Queue = backing[:2] // the undone state sees slot 1
+	undone.Log = []LogEntry{{Move: "inc", PlayerID: "0"}}
+	undone.TurnSnapshots = []State{snap}
+	held := undone.Clone()
+
+	u, err := Undo(g, undone)
+	if err != nil {
+		t.Fatalf("undo: %v", err)
+	}
+	u.Queue = append(u.Queue, QueuedAction{Move: "new"}) // what harvestQueue does
+	if held.Queue[1].Move != "kept" || undone.Queue[1].Move != "kept" {
+		t.Fatalf("append after undo overwrote the undone state's queue: %+v", held.Queue)
+	}
+}

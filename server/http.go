@@ -6,6 +6,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -207,12 +208,19 @@ func (s *Server) handleListMatches(w http.ResponseWriter, _ *http.Request, gameN
 // ---- get one match --------------------------------------------------------
 
 func (s *Server) handleGetMatch(w http.ResponseWriter, _ *http.Request, _, matchID string) {
-	m, err := s.Manager.State(matchID)
+	// Encode under the match lock: the summary shares Ctx, SetupData and
+	// player Data with the live match.
+	var body []byte
+	err := s.Manager.View(matchID, func(m *storage.Match) error {
+		var err error
+		body, err = json.Marshal(toSummary(m))
+		return err
+	})
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toSummary(m))
+	writeRawJSON(w, http.StatusOK, body)
 }
 
 func toSummary(m *storage.Match) matchSummary {
@@ -392,12 +400,30 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, _, matchID s
 	metrics.MovesApplied.Add(1)
 	// Send the requesting player's view back so a REST-only client also
 	// sees redacted state.
-	if m, err := s.Manager.State(matchID); err == nil {
-		if g := s.Manager.Game(m.GameName); g != nil {
-			state = core.PlayerView(g, state, req.PlayerID)
+	s.writePlayerView(w, matchID, state, req.PlayerID)
+}
+
+// writePlayerView responds with playerID's view of state, a state of
+// matchID returned by a move. The view is built and encoded under the
+// match lock because state's G is shared with the live match, which a
+// later move may change in place; the response is written after the
+// lock is released.
+func (s *Server) writePlayerView(w http.ResponseWriter, matchID string, state core.State, playerID string) {
+	var body []byte
+	err := s.Manager.View(matchID, func(m *storage.Match) error {
+		g := s.Manager.Game(m.GameName)
+		if g == nil {
+			return fmt.Errorf("%w: %s", match.ErrUnknownGame, m.GameName)
 		}
+		var err error
+		body, err = json.Marshal(core.PlayerView(g, state, playerID))
+		return err
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, state)
+	writeRawJSON(w, http.StatusOK, body)
 }
 
 // ---- dry-run move ---------------------------------------------------------
@@ -421,12 +447,7 @@ func (s *Server) handleDryMove(w http.ResponseWriter, r *http.Request, _, matchI
 		writeErr(w, err)
 		return
 	}
-	if m, err := s.Manager.State(matchID); err == nil {
-		if g := s.Manager.Game(m.GameName); g != nil {
-			state = core.PlayerView(g, state, req.PlayerID)
-		}
-	}
-	writeJSON(w, http.StatusOK, state)
+	s.writePlayerView(w, matchID, state, req.PlayerID)
 }
 
 // ---- reset ----------------------------------------------------------------
@@ -457,6 +478,14 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// writeRawJSON writes an already-encoded body, framed like writeJSON
+// (which ends the body with a newline).
+func writeRawJSON(w http.ResponseWriter, status int, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(append(body, '\n'))
 }
 
 // writeErr maps known error categories to HTTP statuses. Unknown errors are
