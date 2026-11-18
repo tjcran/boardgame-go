@@ -121,6 +121,28 @@ func ownContainers(s State) State {
 	return s
 }
 
+// Clone returns a copy of s that a caller can keep and read while the
+// original goes on being advanced. The containers the reducer writes in
+// place (see ownContainers) are copied; the slices it only appends to
+// (Log, Undone, TurnSnapshots, Queue, Blocks, Ctx.PlayOrder) are cut to
+// their length, so an append on either side can never write into the
+// other's view. G and plugin data are shared by reference, as everywhere
+// else: moves return new values rather than mutate them.
+func (s State) Clone() State {
+	out := ownContainers(s)
+	out.rawG, out.rawPlugins = nil, nil
+	out.Log = clip(s.Log)
+	out.Undone = clip(s.Undone)
+	out.TurnSnapshots = clip(s.TurnSnapshots)
+	out.Queue = clip(s.Queue)
+	out.Blocks = clip(s.Blocks)
+	out.Ctx.PlayOrder = clip(s.Ctx.PlayOrder)
+	return out
+}
+
+// clip drops a slice's spare capacity; nil stays nil.
+func clip[T any](s []T) []T { return s[:len(s):len(s)] }
+
 // cloneStateForSnapshot builds a shallow-clone of State suitable for the
 // undo stack. Its containers are its own (ownContainers), so the live
 // state's later in-place writes don't leak into the snapshot, and the
