@@ -676,10 +676,37 @@ func (m *Manager) createLocked(gameName string, numPlayers int, setupData any, u
 	return id, nil
 }
 
-// State returns a snapshot of the match's state, migrating it forward if
-// the stored SchemaVersion is older than the registered Game's.
+// State returns the match, migrating it forward if the stored
+// SchemaVersion is older than the registered Game's.
+//
+// State does not take the match lock, and with a caching store
+// (storage.Cached) its result is the store's live *storage.Match, whose
+// State a concurrent move reassigns in place. To read a match that may be
+// in play on another goroutine, use Snapshot.
 func (m *Manager) State(matchID string) (*storage.Match, error) {
 	return m.loadMigrated(matchID)
+}
+
+// Snapshot returns a private copy of the match, read under the match
+// lock: it never observes a move half-applied, and later moves don't
+// change it. Players and the State's containers are copied (see
+// core.State.Clone); G, SetupData and player Data are shared by
+// reference and must be treated as read-only.
+//
+// Snapshot takes the match lock, so it must not be called from a
+// lifecycle handler, which runs while the dispatching call still holds
+// that lock; use the event's State and Match there instead.
+func (m *Manager) Snapshot(matchID string) (*storage.Match, error) {
+	unlock := m.lockMatch(matchID)
+	defer unlock()
+	match, err := m.loadMigrated(matchID)
+	if err != nil {
+		return nil, err
+	}
+	cp := *match
+	cp.Players = append([]storage.Player(nil), match.Players...)
+	cp.State = match.State.Clone()
+	return &cp, nil
 }
 
 // Authenticate reports whether the supplied credentials match the
