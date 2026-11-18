@@ -173,36 +173,55 @@ func (c *wsClient) SendChat(msg match.ChatMessage) {
 
 // SendPatch diffs against the connection's last sent state and enqueues
 // a JSON Patch `patch` frame. If we have no prior state cached, falls
-// back to a full state push so clients don't desync.
-//
-// The diff runs between encodings, not States: a game that changes G in
-// place would otherwise compare the live G against itself and send an
-// empty patch for a change it never transmitted.
+// back to a full state push so clients don't desync. The manager calls
+// SendEncoded instead; SendPatch remains for PatchSubscriber callers.
 func (c *wsClient) SendPatch(next core.State) {
 	enc, err := json.Marshal(next)
 	if err != nil {
 		return
 	}
+	c.sendPatchEncoded(enc, next.StateID)
+}
+
+// SendEncoded implements match.EncodedSubscriber: the manager encodes
+// each seat's view once per move and shares the bytes across that
+// seat's connections, which matters because it does so under the match
+// lock. The delta baseline stays per connection.
+func (c *wsClient) SendEncoded(state core.State, encoded []byte, patch bool) {
+	if patch {
+		c.sendPatchEncoded(encoded, state.StateID)
+		return
+	}
+	c.sendEncoded("update", encoded, state.StateID, nil)
+}
+
+// sendPatchEncoded queues a `patch` frame against the connection's last
+// sent state, or a full `update` when there is none (or the diff fails).
+//
+// The diff runs between encodings, not States: a game that changes G in
+// place would otherwise compare the live G against itself and send an
+// empty patch for a change it never transmitted.
+func (c *wsClient) sendPatchEncoded(enc []byte, stateID int) {
 	c.prevMu.Lock()
 	prev, prevID := c.prev, c.prevID
 	c.prevMu.Unlock()
 	if prev == nil {
-		c.sendEncoded("update", enc, next.StateID, nil)
+		c.sendEncoded("update", enc, stateID, nil)
 		return
 	}
 	patch, err := jsondiff.CompareJSON(prev, enc)
 	if err != nil {
-		c.sendEncoded("update", enc, next.StateID, nil)
+		c.sendEncoded("update", enc, stateID, nil)
 		return
 	}
 	c.prevMu.Lock()
-	c.prev, c.prevID = enc, next.StateID
+	c.prev, c.prevID = enc, stateID
 	c.prevMu.Unlock()
 	c.enqueue(map[string]any{
 		"type":    "patch",
 		"patch":   patch,
 		"prevID":  prevID,
-		"stateID": next.StateID,
+		"stateID": stateID,
 	})
 }
 

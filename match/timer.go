@@ -95,7 +95,8 @@ func (m *Manager) AutoExpire(matchID string, expectedTurn int) error {
 	if g == nil {
 		return nil
 	}
-	next, err := core.ForceEndTurnE(g, match.State)
+	prev := match.State
+	next, err := core.ForceEndTurnE(g, prev)
 	if err != nil {
 		m.Logger.Warn("match.turn_expire_failed",
 			"match_id", matchID, "turn", expectedTurn, "err", err.Error())
@@ -111,9 +112,20 @@ func (m *Manager) AutoExpire(matchID string, expectedTurn int) error {
 	m.fireLifecycle(LifecycleEvent{
 		Kind: LifecycleMatchMoved, MatchID: matchID,
 		State: next, Match: match,
-		Move: "__turn_expired__",
+		Move:      "__turn_expired__",
+		PrevState: prev,
+		LogDelta:  logDelta(prev, next),
 	})
 	// Schedule the next turn's timer.
 	m.scheduleTurnTimer(matchID, next, g)
 	return nil
+}
+
+// logDelta is next's log past prev's, or nil when next's log is not an
+// extension of prev's length.
+func logDelta(prev, next core.State) []core.LogEntry {
+	if len(next.Log) < len(prev.Log) {
+		return nil
+	}
+	return next.Log[len(prev.Log):]
 }

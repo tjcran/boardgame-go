@@ -386,23 +386,50 @@ func TestDeltaPatchCarriesInPlaceChange(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	conn, _, err := websocket.Dial(ctx, wsURLFor(srv.URL, "inplace", id, ""), nil)
-	if err != nil {
-		t.Fatal(err)
+	dial := func() *websocket.Conn {
+		t.Helper()
+		c, _, err := websocket.Dial(ctx, wsURLFor(srv.URL, "inplace", id, ""), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := drainUntilType(ctx, c, "sync"); err != nil {
+			t.Fatal(err)
+		}
+		return c
 	}
-	defer conn.CloseNow()
-	if _, err := drainUntilType(ctx, conn, "sync"); err != nil {
-		t.Fatal(err)
+	bump := func() {
+		t.Helper()
+		if _, err := m.Move(id, seat.PlayerID, seat.PlayerCredentials, "bump", nil); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := m.Move(id, seat.PlayerID, seat.PlayerCredentials, "bump", nil); err != nil {
-		t.Fatal(err)
+	patchOf := func(c *websocket.Conn) (raw []byte, prevID float64) {
+		t.Helper()
+		frame, err := drainUntilType(ctx, c, "patch")
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ = json.Marshal(frame["patch"])
+		if !bytes.Contains(raw, []byte(`"/G/n"`)) {
+			t.Fatalf("patch does not carry the G change: %s", raw)
+		}
+		p, _ := frame["prevID"].(float64)
+		return raw, p
 	}
-	frame, err := drainUntilType(ctx, conn, "patch")
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := json.Marshal(frame["patch"])
-	if !bytes.Contains(raw, []byte(`"/G/n"`)) {
-		t.Fatalf("patch does not carry the G change: %s", raw)
+
+	// Two spectators share each push's encoding but keep their own
+	// baselines: the first diffs against its earlier patch, the second
+	// (connected later) against its sync frame, both at the same state.
+	first := dial()
+	defer first.CloseNow()
+	bump()
+	_, firstPrev := patchOf(first)
+	second := dial()
+	defer second.CloseNow()
+	bump()
+	_, p1 := patchOf(first)
+	_, p2 := patchOf(second)
+	if p1 != firstPrev+1 || p2 != p1 {
+		t.Fatalf("prevIDs: first %v then %v, second %v", firstPrev, p1, p2)
 	}
 }

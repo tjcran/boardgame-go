@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -48,11 +49,21 @@ type AuthenticateCredentialsFn func(supplied string, p storage.Player) bool
 
 // Subscriber receives state and chat pushes for a single match. The
 // WebSocket transport implements this; tests can implement it directly.
+//
+// Send, SendPatch (see PatchSubscriber), SendMatchData and PlayerID are
+// called while the dispatching call holds the match lock. They must not
+// block, and must not call any Manager method that takes that lock
+// (State, Snapshot, View, ExportMatch, Authenticate, Move/MoveReq/
+// DispatchServer, Join, Leave, UpdatePlayer, SetConnected, Reset,
+// PlayAgain, …): the lock is not reentrant, so the match would deadlock
+// for good. Everything they need is in their arguments. The state they
+// get shares G with the live match, so a subscriber that hands it to
+// another goroutine should encode it (or copy what it needs) first.
 type Subscriber interface {
-	// Send is called with the new state after every successful move. Send
-	// must not block — the manager calls it under the match lock.
+	// Send is called with the new state after every successful move.
 	Send(state core.State)
 	// SendChat is called for every chat message broadcast on the match.
+	// It runs without the match lock.
 	SendChat(msg ChatMessage)
 	// SendMatchData is called when the seated-player list changes (join/
 	// leave/update). The slice mirrors BGIO's matchData shape.
@@ -1048,10 +1059,14 @@ func (m *Manager) dispatchLocked(
 			m.fireLifecycle(LifecycleEvent{
 				Kind: LifecycleMatchMoveRejected, MatchID: matchID,
 				PlayerID: playerID,
-				Move:     req.Move,
-				Args:     req.Args,
-				Err:      err,
-				StateID:  match.State.StateID,
+				// The rejected move left the match untouched, so this
+				// is the pre-move state.
+				State:   match.State,
+				Match:   match,
+				Move:    req.Move,
+				Args:    req.Args,
+				Err:     err,
+				StateID: match.State.StateID,
 			})
 			return core.State{}, err
 		}
@@ -1251,14 +1266,36 @@ func (m *Manager) broadcast(matchID string, state core.State) {
 		return
 	}
 	// Cache per-seat views so concurrent subscribers for the same seat
-	// share one redacted state object.
+	// share one redacted state object, and, for EncodedSubscribers, one
+	// encoding of it: this runs under the match lock, so each seat's view
+	// is encoded at most once per push however many clients watch it.
 	views := map[string]core.State{}
+	encoded := map[string][]byte{}
 	for _, s := range subs {
 		pid := s.PlayerID()
 		v, ok := views[pid]
 		if !ok {
 			v = core.PlayerView(game, state, pid)
 			views[pid] = v
+		}
+		if es, ok := s.(EncodedSubscriber); ok {
+			enc, ok := encoded[pid]
+			if !ok {
+				var err error
+				if enc, err = json.Marshal(v); err != nil {
+					// Leave the slot nil so every subscriber of this
+					// seat falls back to Send, which will fail the same
+					// way and report it its own way.
+					m.Logger.Warn("match.broadcast.encode_failed",
+						"match_id", matchID, "player_id", pid, "err", err.Error())
+					enc = nil
+				}
+				encoded[pid] = enc
+			}
+			if enc != nil {
+				es.SendEncoded(v, enc, game.DeltaState)
+				continue
+			}
 		}
 		// When the game opted into deltaState transport and the subscriber
 		// supports SendPatch, send the diff against whatever the subscriber
@@ -1273,6 +1310,20 @@ func (m *Manager) broadcast(matchID string, state core.State) {
 		}
 		s.Send(v)
 	}
+}
+
+// EncodedSubscriber is implemented by subscribers that send the state
+// on as JSON. The manager calls SendEncoded instead of Send or SendPatch,
+// handing over the view together with its encoding, which is computed
+// once per seat per push and shared by every subscriber of that seat
+// (all spectators share one). encoded is read-only: the same slice goes
+// to other subscribers. patch is Game.DeltaState: when true, the
+// subscriber should send a diff against what it last sent, as
+// PatchSubscriber does. SendEncoded runs under the match lock, with the
+// same rules as Send.
+type EncodedSubscriber interface {
+	Subscriber
+	SendEncoded(state core.State, encoded []byte, patch bool)
 }
 
 // PatchSubscriber is implemented by subscribers that can accept JSON Patch

@@ -49,6 +49,12 @@ func Undo(game *Game, state State) (State, error) {
 	// input's (and any Clone's) log, and without the clip the next
 	// append would overwrite it in place.
 	last.Log = clip(state.Log[:len(state.Log)-1])
+	// The snapshot's Queue and Blocks can share a backing array with the
+	// state it was taken from (and with states derived from that one, up
+	// to the one being undone), so clip them as well: the next harvest
+	// appends to them.
+	last.Queue = clip(last.Queue)
+	last.Blocks = clip(last.Blocks)
 	// OnUndo intercept: lets the game scrub transient fields that
 	// shouldn't replay on undo (animations, sounds, hint highlights).
 	if game.OnUndo != nil {
@@ -152,12 +158,15 @@ func (s State) Clone() State {
 func clip[T any](s []T) []T { return s[:len(s):len(s)] }
 
 // cloneStateForSnapshot builds a shallow-clone of State suitable for the
-// undo stack. Its containers are its own (ownContainers), so the live
-// state's later in-place writes don't leak into the snapshot, and the
-// log is copied too. G is shared by reference — moves are expected to
-// return new G values rather than mutate in place.
+// undo stack. It is a Clone, so the live state's later in-place writes
+// don't leak into the snapshot and the append-only slices (Queue,
+// Blocks, …) carry no spare capacity: once Undo hands the snapshot back
+// as the live state, the next harvest's append reallocates instead of
+// writing into a slot the undone state (or a Clone of it) still reads.
+// The log is copied too. G is shared by reference — moves are expected
+// to return new G values rather than mutate in place.
 func cloneStateForSnapshot(s State) State {
-	out := ownContainers(s)
+	out := s.Clone()
 	out.Log = append([]LogEntry(nil), s.Log...)
 	out.Undone = append([]LogEntry(nil), s.Undone...)
 	// TurnSnapshots intentionally not copied — they only matter at the

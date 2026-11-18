@@ -197,3 +197,87 @@ func TestStateLoadDoesNotRollBackConcurrentMove(t *testing.T) {
 		t.Fatalf("G rolled back: N = %d after two moves (StateID %d)", n, snap.State.StateID)
 	}
 }
+
+// encSub records what the manager pushes to an EncodedSubscriber.
+type encSub struct {
+	pid     string
+	encoded [][]byte
+	patch   []bool
+}
+
+func (s *encSub) Send(core.State)                { panic("Send called on an EncodedSubscriber") }
+func (s *encSub) SendChat(ChatMessage)           {}
+func (s *encSub) SendMatchData([]storage.Player) {}
+func (s *encSub) PlayerID() string               { return s.pid }
+func (s *encSub) SendEncoded(_ core.State, b []byte, patch bool) {
+	s.encoded = append(s.encoded, b)
+	s.patch = append(s.patch, patch)
+}
+
+// plainSub is a Subscriber with no encoding support.
+type plainSub struct{ sent []core.State }
+
+func (s *plainSub) Send(st core.State)             { s.sent = append(s.sent, st) }
+func (s *plainSub) SendChat(ChatMessage)           {}
+func (s *plainSub) SendMatchData([]storage.Player) {}
+func (s *plainSub) PlayerID() string               { return "" }
+
+// Broadcast encodes each seat's view once per move and hands the same
+// bytes to every subscriber of that seat (spectators being one "seat").
+func TestBroadcastEncodesEachSeatOnce(t *testing.T) {
+	for _, delta := range []bool{false, true} {
+		g := &core.Game{
+			Name: "enc", MinPlayers: 2, MaxPlayers: 2, DeltaState: delta,
+			Setup: func(_ core.Ctx, _ any) core.G { return map[string]int{"n": 0} },
+			PlayerView: func(gg core.G, _ core.Ctx, pid string) core.G {
+				return map[string]any{"n": gg.(map[string]int)["n"], "viewer": pid}
+			},
+			Moves: map[string]any{
+				"act": core.MoveFn(func(mc *core.MoveContext, _ ...any) (core.G, error) {
+					return map[string]int{"n": mc.G.(map[string]int)["n"] + 1}, nil
+				}),
+			},
+		}
+		m := NewManager(storage.NewMemory())
+		m.MustRegister(g)
+		id, _ := m.Create("enc", CreateOptions{})
+		alice, _ := m.Join(id, "alice", JoinOptions{})
+		_, _ = m.Join(id, "bob", JoinOptions{})
+
+		a1, a2 := &encSub{pid: alice.PlayerID}, &encSub{pid: alice.PlayerID}
+		s1, s2 := &encSub{}, &encSub{}
+		b1 := &encSub{pid: "1"}
+		plain := &plainSub{}
+		for _, s := range []Subscriber{a1, a2, s1, s2, b1, plain} {
+			defer m.Subscribe(id, s)()
+		}
+		if _, err := m.Move(id, alice.PlayerID, alice.PlayerCredentials, "act", nil); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, s := range []*encSub{a1, a2, s1, s2, b1} {
+			if len(s.encoded) != 1 || s.patch[0] != delta {
+				t.Fatalf("delta=%v: subscriber %q got %d pushes, patch=%v", delta, s.pid, len(s.encoded), s.patch)
+			}
+		}
+		same := func(x, y []byte) bool { return &x[0] == &y[0] }
+		if !same(a1.encoded[0], a2.encoded[0]) || !same(s1.encoded[0], s2.encoded[0]) {
+			t.Errorf("delta=%v: subscribers of one seat got separate encodings", delta)
+		}
+		if same(a1.encoded[0], s1.encoded[0]) || same(a1.encoded[0], b1.encoded[0]) {
+			t.Errorf("delta=%v: different seats share an encoding", delta)
+		}
+		var view struct {
+			G struct {
+				N      int    `json:"n"`
+				Viewer string `json:"viewer"`
+			}
+		}
+		if err := json.Unmarshal(b1.encoded[0], &view); err != nil || view.G.N != 1 || view.G.Viewer != "1" {
+			t.Errorf("delta=%v: seat 1 encoding = %s (err %v)", delta, b1.encoded[0], err)
+		}
+		if len(plain.sent) != 1 {
+			t.Errorf("delta=%v: plain subscriber got %d pushes, want 1", delta, len(plain.sent))
+		}
+	}
+}
